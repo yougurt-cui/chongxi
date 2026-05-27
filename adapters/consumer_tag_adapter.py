@@ -1,0 +1,2 @@
+"""Consumer tag integration adapter."""
+

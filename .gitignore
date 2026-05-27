@@ -1,0 +1,44 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Local environment
+.env
+.venv/
+venv/
+env/
+
+# macOS / IDE
+.DS_Store
+.idea/
+.vscode/
+
+# Secrets / local config
+vendor/csv_mysql_labeling/config/config.yaml
+config.yaml
+*.local.yaml
+*.local.yml
+
+# Runtime artifacts and local data
+vendor/csv_mysql_labeling/data/
+vendor/csv_mysql_labeling/history/
+vendor/process_signal_pipeline/catfood_process_signal_artifacts/
+*.log
+*.sqlite
+*.db
+
+# Large/raw import files
+*.csv
+*.xlsx
+*.xls
+*.png
+*.jpg
+*.jpeg
+*.webp

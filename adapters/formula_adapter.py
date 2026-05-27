@@ -1,0 +1,2 @@
+"""Formula integration adapter."""
+

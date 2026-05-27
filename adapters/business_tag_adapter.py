@@ -1,0 +1,2 @@
+"""Business tag integration adapter."""
+

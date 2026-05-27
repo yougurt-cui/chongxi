@@ -1,0 +1,43 @@
+# Copy this file to config.yaml and fill in local credentials.
+
+mysql:
+  host: "127.0.0.1"
+  port: 3306
+  user: "root"
+  password: "CHANGE_ME"
+  database: "csv_labeling"
+  charset: "utf8mb4"
+
+feature_mysql:
+  database: "protein_feature_platform"
+
+openai:
+  api_key: "CHANGE_ME"
+  base_url: ""
+  model: "gpt-4.1-mini"
+
+ocr:
+  provider: "qwen"
+  qwen_api_key: "CHANGE_ME"
+  qwen_endpoint: "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
+  qwen_base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+  qwen_text_model: "qwen-plus"
+  qwen_ocr_model: "qwen-vl-ocr-latest"
+  qwen_guarantee_model: "qwen-vl-ocr-latest"
+  qwen_timeout_seconds: 90
+  ocr_space_api_key: "helloworld"
+  ocr_space_endpoint: "https://api.ocr.space/parse/image"
+  ocr_space_language: "chs"
+  ocr_space_engine: 2
+  ocr_timeout_seconds: 90
+
+pipeline:
+  source_name: "xiaohongshu"
+  ingest:
+    csv_encoding: "utf-8"
+    chunksize: 2000
+  labeling:
+    batch_size: 10
+    max_rows_per_run: 200
+    temperature: 0
+    concurrency: 1

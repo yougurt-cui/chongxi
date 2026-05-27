@@ -1,0 +1,9 @@
+Flask
+PyMySQL
+SQLAlchemy
+PyYAML
+numpy
+openai
+pandas
+rich
+tenacity
