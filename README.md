@@ -1,5 +1,7 @@
 # Comment Labeler API
 
+宠物数据清洗流程。
+
 Flask API service for cat food comment ingestion, OCR parsing, exception recycling, disease clue extraction, feature score pipelines, and brand process signal standardization.
 
 ## Setup
