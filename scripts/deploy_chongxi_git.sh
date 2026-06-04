@@ -37,7 +37,7 @@ git pull --ff-only origin "$REMOTE_BRANCH"
   vendor/feature_score_pipeline/scripts/brand_normalizer.py
 
 for port in "$APP_PORT" 8501 8502; do
-  pid=$(ss -ltnp | sed -n "s/.*:$port.*pid=\([0-9][0-9]*\).*/\1/p" | head -n 1)
+  pid=$(ss -ltnp | sed -n "s/.*:$port.*pid=\([0-9][0-9]*\).*/\1/p" | head -n 1 || true)
   if [ -n "$pid" ]; then
     kill "$pid" || true
   fi
