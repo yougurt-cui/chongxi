@@ -14,6 +14,7 @@ ssh -i "$SSH_KEY" -o BatchMode=yes "$REMOTE_USER@$REMOTE_HOST" \
 set -euo pipefail
 
 cd "$REMOTE_DIR"
+git config --global --add safe.directory "$REMOTE_DIR"
 
 if [ ! -d .git ]; then
   echo "ERROR: $REMOTE_DIR is not a Git worktree. Run scripts/bootstrap_chongxi_git.sh first." >&2

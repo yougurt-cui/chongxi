@@ -17,6 +17,7 @@ if [ ! -d "$REMOTE_DIR" ]; then
 fi
 
 cd "$REMOTE_DIR"
+git config --global --add safe.directory "$REMOTE_DIR"
 
 backup_dir="/home/admin/projects/chongxi_pre_git_$(date +%Y%m%d_%H%M%S)"
 cp -a "$REMOTE_DIR" "$backup_dir"
