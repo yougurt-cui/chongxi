@@ -39,6 +39,12 @@ else
   git remote add origin "$REMOTE_REPO"
 fi
 
+find . -mindepth 1 -maxdepth 1 \
+  ! -name .git \
+  ! -name .venv \
+  ! -name var \
+  -exec rm -rf {} +
+
 git fetch origin "$REMOTE_BRANCH"
 git checkout -B "$REMOTE_BRANCH" "origin/$REMOTE_BRANCH"
 
