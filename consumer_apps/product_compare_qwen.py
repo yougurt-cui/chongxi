@@ -33,7 +33,7 @@ import streamlit as st
 from sqlalchemy import create_engine, text
 from openai import OpenAI
 
-from app_config import get_feature_mysql_config
+from app_config import get_feature_mysql_config, get_qwen_config
 
 
 # =========================================================
@@ -116,18 +116,23 @@ TABLE_CONFIG = {
 # 3. 通义千问配置
 # =========================================================
 
+_QWEN_RUNTIME_CONFIG = get_qwen_config()
 QWEN_CONFIG = {
-    "model": os.getenv("QWEN_MODEL", "qwen-plus"),
-    "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    "model": _QWEN_RUNTIME_CONFIG["model"],
+    "base_url": _QWEN_RUNTIME_CONFIG["base_url"],
     "temperature": 0.35,
     "max_tokens": 1500,
 }
 
 
 def get_qwen_client() -> OpenAI:
-    api_key = os.getenv("DASHSCOPE_API_KEY")
+    qwen_config = get_qwen_config()
+    api_key = qwen_config["api_key"]
     if not api_key:
-        raise RuntimeError("未检测到环境变量 DASHSCOPE_API_KEY。请先配置阿里云百炼 API Key。")
+        raise RuntimeError("未检测到通义千问 API Key。请配置 config.yaml 或 DASHSCOPE_API_KEY。")
+
+    QWEN_CONFIG["model"] = qwen_config["model"]
+    QWEN_CONFIG["base_url"] = qwen_config["base_url"]
 
     return OpenAI(
         api_key=api_key,
