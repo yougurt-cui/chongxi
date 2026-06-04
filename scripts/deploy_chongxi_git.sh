@@ -29,6 +29,7 @@ git pull --ff-only origin "$REMOTE_BRANCH"
 .venv/bin/python -m py_compile \
   main.py \
   app_config.py \
+  api/consumer_api.py \
   services/orchestrator_service.py \
   services/cat_food_task_service.py \
   services/product_identity_service.py \
@@ -36,7 +37,7 @@ git pull --ff-only origin "$REMOTE_BRANCH"
   vendor/csv_mysql_labeling/src/extract_catfood_brand_relations.py \
   vendor/feature_score_pipeline/scripts/brand_normalizer.py
 
-for port in "$APP_PORT" 8501 8502; do
+for port in "$APP_PORT"; do
   pid=$(ss -ltnp | sed -n "s/.*:$port.*pid=\([0-9][0-9]*\).*/\1/p" | head -n 1 || true)
   if [ -n "$pid" ]; then
     kill "$pid" || true
@@ -47,10 +48,16 @@ sleep 3
 mkdir -p var
 : > var/flask.log
 nohup .venv/bin/python -m flask --app main run --host 0.0.0.0 --port "$APP_PORT" > var/flask.log 2>&1 < /dev/null &
-sleep 5
 
-ss -ltnp | grep -E ":($APP_PORT|8501|8502)"
+for _ in $(seq 1 20); do
+  if curl -fsS -I --max-time 3 "http://127.0.0.1:$APP_PORT/cat-food-compare.html" >/dev/null; then
+    break
+  fi
+  sleep 1
+done
+
+ss -ltnp | grep -E ":($APP_PORT|8501|8502)" || true
 curl -fsS -I --max-time 5 "http://127.0.0.1:$APP_PORT/cat-food-compare.html" | head -n 5
-curl -fsS --max-time 8 "http://127.0.0.1:$APP_PORT/api/cat-food-compare/brands" \
+curl -fsS --retry 5 --retry-delay 1 --max-time 8 "http://127.0.0.1:$APP_PORT/api/cat-food-compare/brands" \
   | .venv/bin/python -c 'import json,sys; data=json.load(sys.stdin); print("brand_count", len(data.get("brands", [])))'
 REMOTE_SCRIPT
