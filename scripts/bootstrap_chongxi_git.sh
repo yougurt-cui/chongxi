@@ -31,6 +31,11 @@ fi
 
 if [ ! -d .git ]; then
   git init
+fi
+
+if git remote get-url origin >/dev/null 2>&1; then
+  git remote set-url origin "$REMOTE_REPO"
+else
   git remote add origin "$REMOTE_REPO"
 fi
 
