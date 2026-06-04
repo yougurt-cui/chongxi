@@ -1,10 +1,9 @@
 """Pipeline API entrypoints."""
 
-from __future__ import annotations
 
 from flask import Blueprint, jsonify, request
 
-from app.services.pipeline_service import ingest_catfood_ingredients
+from services.pipeline_service import ingest_catfood_ingredients
 
 
 pipeline_api = Blueprint("pipeline_api", __name__, url_prefix="/api")

@@ -4,6 +4,7 @@ from __future__ import annotations
 import csv
 import hashlib
 import json
+import os
 import re
 import shutil
 import uuid
@@ -19,7 +20,8 @@ from sqlalchemy.engine import Engine
 console = Console()
 
 DEFAULT_TEXT = "无"
-DEFAULT_ARCHIVE_DIR = Path("/Users/yoghourt/xiaohongshudata/history")
+DATA_ROOT = Path(os.getenv("CHONGXI_DATA_ROOT", "/home/admin/data/chongxi"))
+DEFAULT_ARCHIVE_DIR = DATA_ROOT / "archive" / "xhs"
 
 
 def _safe_text(value: Optional[str]) -> str:

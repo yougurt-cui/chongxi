@@ -1,13 +1,15 @@
 # -*- coding: utf-8 -*-
-from __future__ import annotations
 
 import json
 import re
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Iterable, Optional
+from functools import lru_cache
+from pathlib import Path
+from typing import Any, Iterable, Optional
 
+import yaml
 from rich.console import Console
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
@@ -17,17 +19,65 @@ console = Console()
 TABLE_RE = re.compile(r"^[A-Za-z0-9_]+$")
 
 DEFAULT_CAT_CTX_RE = r"猫|猫粮|幼猫|成猫|布偶|英短|美短|主子|喵|罐头|冻干|泌尿|发腮|黑下巴|软便|泪痕"
-DEFAULT_BRAND_PREFILTER_RE = (
+BASE_BRAND_PREFILTER_RE = (
     r"皇家|K36|BK34|BK36|BS34|F32|阿皇|"
     r"渴望|爱肯拿|安肯拿|弗列加特|麦富迪|蓝氏|鲜朗|鲜郎|"
     r"素力高|福摩|绿福摩|百利|巅峰|冠能|网易严选|法米娜|"
     r"纽翠斯|纽顿|玫斯|自然光环|纯福|领先|顽皮|比瑞吉|"
     r"有鱼|狂野盛宴|帕特|好主人|卫仕|卫士|百丽"
 )
+BRAND_MASTER_PATH = Path(__file__).resolve().parents[1] / "config" / "catfood_brand_master.yaml"
 
 HARD_STOP_CHARS = "。！？!?；;\n"
 
 NEGATION_PREFIX_RE = re.compile(r"(没有|没|无|未|不|并非|不是|不会|别)[^，。！？!?；;\n]{0,2}$")
+
+
+def _clean_text(value: Any) -> str:
+    if value is None:
+        return ""
+    text = str(value).strip()
+    if text.lower() == "nan":
+        return ""
+    return text
+
+
+@lru_cache(maxsize=1)
+def _load_brand_master_aliases() -> tuple[tuple[str, str], ...]:
+    if not BRAND_MASTER_PATH.exists():
+        return tuple()
+    data = yaml.safe_load(BRAND_MASTER_PATH.read_text(encoding="utf-8")) or {}
+    aliases: list[tuple[str, str]] = []
+    seen = set()
+
+    def add(alias: Any, canonical: Any) -> None:
+        alias_text = _clean_text(alias)
+        canonical_text = _clean_text(canonical)
+        if not alias_text or not canonical_text:
+            return
+        key = (alias_text.lower(), canonical_text)
+        if key in seen:
+            return
+        seen.add(key)
+        aliases.append((alias_text, canonical_text))
+
+    for row in data.get("brands") or []:
+        if _clean_text(row.get("status") or "active") != "active":
+            continue
+        canonical = row.get("standard_name")
+        add(canonical, canonical)
+        for alias in row.get("aliases") or []:
+            add(alias, canonical)
+    for row in data.get("alias_mappings") or []:
+        add(row.get("alias"), row.get("standard_name"))
+    return tuple(aliases)
+
+
+def _brand_prefilter_re() -> str:
+    dynamic = [re.escape(alias) for alias, _ in _load_brand_master_aliases() if alias]
+    if not dynamic:
+        return BASE_BRAND_PREFILTER_RE
+    return BASE_BRAND_PREFILTER_RE + "|" + "|".join(dynamic)
 
 
 @dataclass
@@ -99,6 +149,11 @@ def _compile_brand_patterns() -> list[tuple[str, re.Pattern[str], int]]:
         "GO!": [r"(?<![A-Za-z])go!?(?![A-Za-z])"],
         "NOW": [r"(?<![A-Za-z])now(?![A-Za-z])"],
     }
+
+    for alias, canonical in _load_brand_master_aliases():
+        pattern = re.escape(alias)
+        if pattern and pattern not in brand_aliases.setdefault(canonical, []):
+            brand_aliases[canonical].append(pattern)
 
     compiled: list[tuple[str, re.Pattern[str], int]] = []
     for canonical, patterns in brand_aliases.items():
@@ -493,11 +548,12 @@ def run_brand_relation_extraction(
     target_table: str = "catfood_brand_relation_comments",
     state_table: str = "catfood_brand_relation_extract_state",
     cat_ctx_re: str = DEFAULT_CAT_CTX_RE,
-    brand_prefilter_re: str = DEFAULT_BRAND_PREFILTER_RE,
+    brand_prefilter_re: Optional[str] = None,
     batch_size: int = 500,
 ) -> BrandRelationExtractResult:
     target_table = _safe_table(target_table)
     state_table = _safe_table(state_table)
+    brand_prefilter_re = brand_prefilter_re or _brand_prefilter_re()
     ensure_brand_relation_tables(engine, target_table=target_table, state_table=state_table)
 
     state = _get_state(engine, state_table=state_table)

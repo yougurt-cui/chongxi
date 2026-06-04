@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 import shutil
 from pathlib import Path
@@ -13,22 +14,28 @@ from sqlalchemy.engine import Engine
 
 VENDOR_ROOT = Path(__file__).resolve().parents[1] / "vendor" / "csv_mysql_labeling"
 
-from app.vendor.csv_mysql_labeling.scripts import generate_douyin_raw_comments_sql as douyin_loader
-from app.vendor.csv_mysql_labeling.src.db import make_engine
-from app.vendor.csv_mysql_labeling.src.extract_catfood import run_catfood_extraction_incremental
-from app.vendor.csv_mysql_labeling.src.ingest_xhs import DEFAULT_ARCHIVE_DIR, ingest_xhs_csv
-from app.vendor.csv_mysql_labeling.src.settings import load_settings
+try:
+    from app.vendor.csv_mysql_labeling.scripts import generate_douyin_raw_comments_sql as douyin_loader
+    from app.vendor.csv_mysql_labeling.src.db import make_engine
+    from app.vendor.csv_mysql_labeling.src.extract_catfood import run_catfood_extraction_incremental
+    from app.vendor.csv_mysql_labeling.src.ingest_xhs import DEFAULT_ARCHIVE_DIR, ingest_xhs_csv
+    from app.vendor.csv_mysql_labeling.src.settings import load_settings
+except ModuleNotFoundError:
+    from vendor.csv_mysql_labeling.scripts import generate_douyin_raw_comments_sql as douyin_loader
+    from vendor.csv_mysql_labeling.src.db import make_engine
+    from vendor.csv_mysql_labeling.src.extract_catfood import run_catfood_extraction_incremental
+    from vendor.csv_mysql_labeling.src.ingest_xhs import DEFAULT_ARCHIVE_DIR, ingest_xhs_csv
+    from vendor.csv_mysql_labeling.src.settings import load_settings
 
 
-DEFAULT_DOUYIN_DIR = Path(
-    "/Users/yoghourt/anaconda3/envs/media_crawler_env/MediaCrawler-main/data/douyin/csv/prod"
-)
-DEFAULT_XHS_DIR = Path("/Users/yoghourt/xiaohongshudata")
+DATA_ROOT = Path(os.getenv("CHONGXI_DATA_ROOT", "/home/admin/data/chongxi"))
+DEFAULT_DOUYIN_DIR = DATA_ROOT / "douyin_csv"
+DEFAULT_XHS_DIR = DATA_ROOT / "xhs_csv"
 DEFAULT_DOUYIN_TABLE = "douyin_raw_comments"
 DEFAULT_XHS_TABLE = "xiaohongshu_raw_comments"
 DEFAULT_TARGET_TABLE = "catfood_brand_health_candidates"
 DEFAULT_STATE_TABLE = "catfood_brand_health_extract_state"
-DEFAULT_DOUYIN_ARCHIVE_DIR = VENDOR_ROOT / "history"
+DEFAULT_DOUYIN_ARCHIVE_DIR = DATA_ROOT / "archive" / "douyin"
 TABLE_RE = re.compile(r"^[A-Za-z0-9_]+$")
 
 

@@ -1,0 +1,786 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>宠析｜配方线索分析</title>
+  <style>
+    :root {
+      --bg: #f6f8fb;
+      --panel: #ffffff;
+      --panel-soft: #f8fafc;
+      --ink: #0f172a;
+      --muted: #64748b;
+      --line: #e2e8f0;
+      --blue: #2563eb;
+      --blue-soft: #dbeafe;
+      --green: #047857;
+      --green-soft: #ecfdf5;
+      --rose: #be123c;
+      --rose-soft: #fff1f2;
+      --amber: #b45309;
+      --amber-soft: #fffbeb;
+      --shadow: 0 14px 32px rgba(15, 23, 42, 0.07);
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      background: var(--bg);
+      color: var(--ink);
+    }
+
+    button {
+      font: inherit;
+    }
+
+    .shell {
+      width: min(1240px, calc(100% - 32px));
+      margin: 0 auto;
+      padding: 28px 0 40px;
+    }
+
+    .crumb {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--muted);
+      font-size: 13px;
+      margin-bottom: 12px;
+    }
+
+    .page-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-end;
+      gap: 20px;
+      margin-bottom: 22px;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: clamp(28px, 4vw, 40px);
+      line-height: 1.15;
+      letter-spacing: 0;
+    }
+
+    .lead {
+      margin: 10px 0 0;
+      max-width: 760px;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.75;
+    }
+
+    .button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      min-height: 40px;
+      padding: 0 14px;
+      border-radius: 8px;
+      border: 1px solid var(--line);
+      background: #fff;
+      color: #1e293b;
+      cursor: pointer;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+
+    .button:hover {
+      border-color: #cbd5e1;
+      background: #f8fafc;
+    }
+
+    .button.primary {
+      background: var(--blue);
+      border-color: var(--blue);
+      color: #fff;
+    }
+
+    .notice {
+      display: flex;
+      gap: 12px;
+      align-items: flex-start;
+      margin-bottom: 22px;
+      padding: 14px 16px;
+      border: 1px solid #fde68a;
+      background: var(--amber-soft);
+      color: #78350f;
+      border-radius: 8px;
+      font-size: 14px;
+      line-height: 1.7;
+    }
+
+    .info-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 14px;
+      margin-bottom: 22px;
+    }
+
+    .layout {
+      display: grid;
+      grid-template-columns: minmax(0, 1.45fr) minmax(340px, 0.9fr);
+      gap: 22px;
+      align-items: start;
+    }
+
+    .stack {
+      display: grid;
+      gap: 22px;
+    }
+
+    .card {
+      background: var(--panel);
+      border: 1px solid rgba(226, 232, 240, 0.95);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+    }
+
+    .card-body {
+      padding: 22px;
+    }
+
+    .info-card {
+      padding: 16px;
+    }
+
+    .label {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .value {
+      margin-top: 5px;
+      color: var(--ink);
+      font-size: 16px;
+      font-weight: 800;
+    }
+
+    .section-head {
+      display: flex;
+      gap: 12px;
+      align-items: flex-start;
+      margin-bottom: 18px;
+    }
+
+    .section-icon {
+      width: 40px;
+      height: 40px;
+      flex: 0 0 auto;
+      display: grid;
+      place-items: center;
+      border-radius: 8px;
+      background: #f1f5f9;
+      color: #334155;
+      font-size: 19px;
+    }
+
+    h2 {
+      margin: 0;
+      font-size: 18px;
+      letter-spacing: 0;
+    }
+
+    .desc {
+      margin: 5px 0 0;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.65;
+    }
+
+    .table-wrap {
+      overflow-x: auto;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+    }
+
+    table {
+      width: 100%;
+      min-width: 680px;
+      border-collapse: collapse;
+      font-size: 14px;
+    }
+
+    th, td {
+      padding: 13px 14px;
+      text-align: left;
+      vertical-align: top;
+      border-top: 1px solid var(--line);
+    }
+
+    th {
+      border-top: 0;
+      background: #f1f5f9;
+      color: #334155;
+      font-weight: 800;
+    }
+
+    td:first-child {
+      width: 140px;
+      color: #475569;
+      font-weight: 800;
+    }
+
+    .hint {
+      margin-top: 14px;
+      padding: 14px;
+      border-radius: 8px;
+      background: #f1f5f9;
+      color: #475569;
+      font-size: 14px;
+      line-height: 1.75;
+    }
+
+    .ingredient-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 14px;
+    }
+
+    .ingredient-box {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 14px;
+    }
+
+    .ingredient-title {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      margin-bottom: 12px;
+      font-size: 14px;
+      font-weight: 800;
+    }
+
+    .tone-add {
+      border-color: #bbf7d0;
+      background: var(--green-soft);
+      color: #064e3b;
+    }
+
+    .tone-remove {
+      border-color: #fecdd3;
+      background: var(--rose-soft);
+      color: #881337;
+    }
+
+    .tone-common {
+      border-color: var(--line);
+      background: #f8fafc;
+      color: #334155;
+    }
+
+    .pills {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      min-height: 28px;
+      padding: 5px 10px;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.72);
+      color: inherit;
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .path-card {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 16px;
+      background: #fff;
+    }
+
+    .path-top {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 12px;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      min-height: 28px;
+      padding: 4px 10px;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      background: #f8fafc;
+      color: #475569;
+      font-size: 12px;
+      font-weight: 800;
+    }
+
+    .path-compare {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+      gap: 12px;
+      align-items: center;
+      font-size: 14px;
+    }
+
+    .path-value {
+      min-height: 70px;
+      padding: 12px;
+      border-radius: 8px;
+      background: #f8fafc;
+    }
+
+    .path-label {
+      margin-bottom: 6px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .path-detail {
+      margin: 12px 0 0;
+      color: #475569;
+      font-size: 13px;
+      line-height: 1.7;
+    }
+
+    .tag-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 18px;
+    }
+
+    .tag-card {
+      padding: 12px;
+      border-radius: 8px;
+      background: #f8fafc;
+    }
+
+    .tag-card + .tag-card {
+      margin-top: 10px;
+    }
+
+    .tag-card h3 {
+      margin: 0;
+      font-size: 14px;
+    }
+
+    .tag-card p {
+      margin: 5px 0 0;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.6;
+    }
+
+    .tabs {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 4px;
+      padding: 4px;
+      border-radius: 8px;
+      background: #f1f5f9;
+    }
+
+    .tab {
+      min-height: 38px;
+      border: 0;
+      border-radius: 6px;
+      background: transparent;
+      color: #475569;
+      cursor: pointer;
+      font-weight: 800;
+    }
+
+    .tab.active {
+      background: #fff;
+      color: var(--ink);
+      box-shadow: 0 1px 4px rgba(15, 23, 42, 0.08);
+    }
+
+    .summary {
+      max-height: 420px;
+      overflow: auto;
+      margin-top: 16px;
+      padding: 15px;
+      border-radius: 8px;
+      background: #f8fafc;
+      color: #475569;
+      font-size: 14px;
+      line-height: 1.85;
+      white-space: pre-line;
+    }
+
+    .toast {
+      position: fixed;
+      right: 18px;
+      bottom: 18px;
+      display: none;
+      padding: 10px 14px;
+      border-radius: 8px;
+      background: #0f172a;
+      color: #fff;
+      font-size: 13px;
+      box-shadow: var(--shadow);
+      z-index: 10;
+    }
+
+    .toast.show {
+      display: block;
+    }
+
+    @media (max-width: 980px) {
+      .page-head {
+        align-items: stretch;
+        flex-direction: column;
+      }
+
+      .info-grid,
+      .layout,
+      .ingredient-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .path-compare {
+        grid-template-columns: 1fr;
+      }
+
+      .path-arrow {
+        display: none;
+      }
+    }
+
+    @media (max-width: 560px) {
+      .shell {
+        width: min(100% - 20px, 1240px);
+        padding-top: 18px;
+      }
+
+      .card-body {
+        padding: 16px;
+      }
+
+      .notice {
+        padding: 12px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <header>
+      <div class="crumb">⚕ 宠析医院版 / 饮食分析 / 配方线索分析</div>
+      <div class="page-head">
+        <div>
+          <h1>配方线索分析</h1>
+          <p class="lead">基于历史粮与当前粮的配方对比，整理成分变化、原料路径变化和营养压力标签，帮助医生快速识别本次换粮中的饮食变量。</p>
+        </div>
+        <button class="button" data-copy="doctor">▣ 复制医生摘要</button>
+      </div>
+    </header>
+
+    <div class="notice">
+      <strong>!</strong>
+      <span>说明：本页仅展示配方变化和营养压力线索，不构成疾病判断、检查建议或诊疗建议。医生可结合患宠症状、病史、体况和实际喂养情况综合判断。</span>
+    </div>
+
+    <section class="info-grid" id="infoGrid"></section>
+
+    <main class="layout">
+      <div class="stack">
+        <section class="card">
+          <div class="card-body">
+            <div class="section-head">
+              <div class="section-icon">⇄</div>
+              <div>
+                <h2>历史粮与当前粮</h2>
+                <p class="desc">对比患宠换粮前后的主粮信息，识别配方结构变化。</p>
+              </div>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>对比项</th>
+                    <th>历史粮</th>
+                    <th>当前粮</th>
+                  </tr>
+                </thead>
+                <tbody id="compareRows"></tbody>
+              </table>
+            </div>
+            <div class="hint">当前粮相比历史粮，蛋白来源、碳水来源、脂肪来源和纤维支持均发生变化，建议医生将其作为本次换粮后的饮食变量进行查看。</div>
+          </div>
+        </section>
+
+        <section class="card">
+          <div class="card-body">
+            <div class="section-head">
+              <div class="section-icon">+</div>
+              <div>
+                <h2>成分变化</h2>
+                <p class="desc">展示当前粮相比历史粮新增、减少和共同保留的主要成分。</p>
+              </div>
+            </div>
+            <div class="ingredient-grid" id="ingredientGrid"></div>
+            <div class="hint">当前粮新增鱼粉、蛋制品、豌豆、马铃薯和鱼油，减少大米、玉米和甜菜粕。新增成分主要集中在动物蛋白、豆类/薯类碳水和脂肪来源上。</div>
+          </div>
+        </section>
+
+        <section class="card">
+          <div class="card-body">
+            <div class="section-head">
+              <div class="section-icon">→</div>
+              <div>
+                <h2>原料路径变化</h2>
+                <p class="desc">将配料表中的成分归入蛋白、脂肪、碳水、纤维等原料路径，帮助医生理解配方结构变化。</p>
+              </div>
+            </div>
+            <div class="stack" id="pathChanges"></div>
+          </div>
+        </section>
+      </div>
+
+      <aside class="stack">
+        <section class="card">
+          <div class="card-body">
+            <div class="section-head">
+              <div class="section-icon">#</div>
+              <div>
+                <h2>营养压力标签</h2>
+                <p class="desc">根据成分变化和路径变化，生成本次换粮中值得关注的营养压力标签。</p>
+              </div>
+            </div>
+            <div class="tag-list" id="tagList"></div>
+            <div id="tagCards"></div>
+          </div>
+        </section>
+
+        <section class="card">
+          <div class="card-body">
+            <div class="section-head">
+              <div class="section-icon">☰</div>
+              <div>
+                <h2>配方线索摘要</h2>
+                <p class="desc">将配方变化整理为医生和宠主可阅读的摘要文本。</p>
+              </div>
+            </div>
+            <div class="tabs">
+              <button class="tab active" data-tab="doctor">医生版</button>
+              <button class="tab" data-tab="owner">宠主版</button>
+            </div>
+            <div class="summary" id="summaryBox"></div>
+            <button class="button" id="copyActive" style="width: 100%; margin-top: 14px;">复制医生摘要</button>
+          </div>
+        </section>
+      </aside>
+    </main>
+  </div>
+
+  <div class="toast" id="toast">已复制</div>
+
+  <script>
+    const caseInfo = {
+      petName: "奶糖",
+      species: "猫",
+      age: "3岁",
+      sex: "已绝育公猫",
+      weight: "5.8kg",
+      complaint: "软便、黑下巴",
+      analysisTime: "2026-05-30",
+    };
+
+    const oldFood = {
+      name: "A品牌鸡肉配方猫粮",
+      protein: "鸡肉粉",
+      carb: "大米、玉米",
+      fat: "鸡油",
+      fiber: "甜菜粕",
+      prebiotic: "未识别",
+      crudeProtein: "36%",
+      crudeFat: "16%",
+    };
+
+    const newFood = {
+      name: "B品牌鲜肉高蛋白猫粮",
+      protein: "鸡肉粉、鱼粉、蛋制品",
+      carb: "豌豆、马铃薯",
+      fat: "鸡油、鱼油",
+      fiber: "未明确识别",
+      prebiotic: "未识别",
+      crudeProtein: "42%",
+      crudeFat: "20%",
+    };
+
+    const addedIngredients = ["鱼粉", "蛋制品", "豌豆", "马铃薯", "鱼油"];
+    const removedIngredients = ["大米", "玉米", "甜菜粕"];
+    const commonIngredients = ["鸡肉粉", "鸡油", "牛磺酸", "维生素E"];
+
+    const pathChanges = [
+      ["蛋白路径", "鸡肉粉", "鸡肉粉、鱼粉、蛋制品", "复杂度上升", "由鸡肉为主，变为鸡肉 + 鱼粉 + 蛋制品。"],
+      ["脂肪路径", "鸡油", "鸡油、鱼油", "脂肪来源增加", "当前粮新增鱼油，油脂来源更丰富。"],
+      ["碳水路径", "谷物路径：大米、玉米", "豆类/薯类路径：豌豆、马铃薯", "路径变化", "碳水来源由谷物路径转为豆类/薯类路径。"],
+      ["纤维路径", "甜菜粕", "未明确识别", "纤维支持下降", "历史粮含甜菜粕，当前粮未识别到明确成形纤维。"],
+      ["益生元路径", "未明确识别", "未明确识别", "无明显变化", "两款粮均未识别到明确益生元支持。"],
+    ];
+
+    const pressureTags = [
+      ["蛋白来源复杂度上升", "当前粮动物蛋白来源数量高于历史粮。"],
+      ["新增鱼类蛋白暴露", "当前粮新增鱼粉等鱼类蛋白来源。"],
+      ["新增蛋类蛋白暴露", "当前粮新增蛋制品。"],
+      ["脂肪负担上升", "当前粮新增鱼油，且脂肪来源更丰富。"],
+      ["碳水路径变化", "碳水来源由谷物转为豆类/薯类。"],
+      ["豆类/薯类暴露增加", "当前粮新增豌豆、马铃薯。"],
+      ["纤维支持下降", "历史粮含甜菜粕，当前粮未识别到明确纤维支持。"],
+      ["饮食归因难度高", "蛋白、脂肪、碳水、纤维路径同时发生变化。"],
+    ];
+
+    const summaries = {
+      doctor: "当前粮相比历史粮，配方结构发生了较明显变化。\n\n成分层面，当前粮新增鱼粉、蛋制品、豌豆、马铃薯和鱼油，减少大米、玉米和甜菜粕。新增成分主要集中在动物蛋白、豆类/薯类碳水和脂肪来源上。\n\n路径层面，蛋白路径由鸡肉为主变为鸡肉、鱼粉和蛋制品组合，蛋白来源复杂度上升；碳水路径由谷物路径转为豆类/薯类路径；脂肪路径新增鱼油；纤维路径中，历史粮含甜菜粕，当前粮未识别到明确成形纤维支持。\n\n系统识别到的营养压力标签包括：蛋白来源复杂度上升、新增鱼类蛋白暴露、新增蛋类蛋白暴露、脂肪负担上升、碳水路径变化、豆类/薯类暴露增加、纤维支持下降和饮食归因难度高。\n\n以上内容仅整理配方变化和营养压力线索，不代表疾病判断。医生可结合患宠症状、病史、体况和实际喂养情况综合判断。",
+      owner: "本次分析主要是看新粮和旧粮之间发生了哪些变化。\n\n从配方上看，新粮相比旧粮新增了鱼粉、蛋制品、豌豆、马铃薯和鱼油，蛋白、碳水和油脂来源都有变化。由于变化点比较多，如果猫咪是在换粮后出现软便、黑下巴或其他表现，医生会把这些饮食变化作为判断参考。\n\n这并不代表一定是某一种成分导致问题，而是说明这次换粮带来的饮食变量较多。后续需要结合猫咪的症状、喂食量、零食情况和观察结果一起判断。",
+    };
+
+    let activeSummary = "doctor";
+
+    function escapeHtml(value) {
+      return String(value).replace(/[&<>"']/g, (char) => ({
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        '"': "&quot;",
+        "'": "&#039;",
+      }[char]));
+    }
+
+    function render() {
+      document.getElementById("infoGrid").innerHTML = [
+        ["患宠", `${caseInfo.petName} / ${caseInfo.species}`],
+        ["基础信息", `${caseInfo.age} / ${caseInfo.sex}`],
+        ["当前体重", caseInfo.weight],
+        ["本次主诉", caseInfo.complaint],
+      ].map(([label, value]) => `
+        <div class="card info-card">
+          <div class="label">${escapeHtml(label)}</div>
+          <div class="value">${escapeHtml(value)}</div>
+        </div>
+      `).join("");
+
+      document.getElementById("compareRows").innerHTML = [
+        ["产品名称", oldFood.name, newFood.name],
+        ["主要蛋白来源", oldFood.protein, newFood.protein],
+        ["主要碳水来源", oldFood.carb, newFood.carb],
+        ["主要脂肪来源", oldFood.fat, newFood.fat],
+        ["纤维来源", oldFood.fiber, newFood.fiber],
+        ["益生元", oldFood.prebiotic, newFood.prebiotic],
+        ["粗蛋白", oldFood.crudeProtein, newFood.crudeProtein],
+        ["粗脂肪", oldFood.crudeFat, newFood.crudeFat],
+      ].map(([label, oldValue, newValue]) => `
+        <tr>
+          <td>${escapeHtml(label)}</td>
+          <td>${escapeHtml(oldValue)}</td>
+          <td>${escapeHtml(newValue)}</td>
+        </tr>
+      `).join("");
+
+      const ingredientGroups = [
+        ["新增成分", addedIngredients, "tone-add", "+"],
+        ["减少/缺失成分", removedIngredients, "tone-remove", "−"],
+        ["共同成分", commonIngredients, "tone-common", "✓"],
+      ];
+      document.getElementById("ingredientGrid").innerHTML = ingredientGroups.map(([title, items, tone, icon]) => `
+        <div class="ingredient-box ${tone}">
+          <div class="ingredient-title"><span>${icon}</span>${escapeHtml(title)}</div>
+          <div class="pills">${items.map((item) => `<span class="pill">${escapeHtml(item)}</span>`).join("")}</div>
+        </div>
+      `).join("");
+
+      document.getElementById("pathChanges").innerHTML = pathChanges.map(([path, oldValue, newValue, result, detail]) => `
+        <article class="path-card">
+          <div class="path-top">
+            <strong>${escapeHtml(path)}</strong>
+            <span class="badge">${escapeHtml(result)}</span>
+          </div>
+          <div class="path-compare">
+            <div class="path-value">
+              <div class="path-label">历史粮</div>
+              <div>${escapeHtml(oldValue)}</div>
+            </div>
+            <div class="path-arrow">→</div>
+            <div class="path-value">
+              <div class="path-label">当前粮</div>
+              <div>${escapeHtml(newValue)}</div>
+            </div>
+          </div>
+          <p class="path-detail">${escapeHtml(detail)}</p>
+        </article>
+      `).join("");
+
+      document.getElementById("tagList").innerHTML = pressureTags.map(([label]) => `<span class="badge">${escapeHtml(label)}</span>`).join("");
+      document.getElementById("tagCards").innerHTML = pressureTags.map(([label, desc]) => `
+        <article class="tag-card">
+          <h3>${escapeHtml(label)}</h3>
+          <p>${escapeHtml(desc)}</p>
+        </article>
+      `).join("");
+
+      updateSummary();
+    }
+
+    function updateSummary() {
+      document.getElementById("summaryBox").textContent = summaries[activeSummary];
+      document.querySelectorAll(".tab").forEach((tab) => {
+        tab.classList.toggle("active", tab.dataset.tab === activeSummary);
+      });
+      document.getElementById("copyActive").textContent = activeSummary === "doctor" ? "复制医生摘要" : "复制宠主解释";
+    }
+
+    async function copyText(text) {
+      try {
+        await navigator.clipboard.writeText(text);
+        showToast("已复制");
+      } catch (error) {
+        const textArea = document.createElement("textarea");
+        textArea.value = text;
+        document.body.appendChild(textArea);
+        textArea.select();
+        document.execCommand("copy");
+        textArea.remove();
+        showToast("已复制");
+      }
+    }
+
+    function showToast(message) {
+      const toast = document.getElementById("toast");
+      toast.textContent = message;
+      toast.classList.add("show");
+      window.clearTimeout(showToast.timer);
+      showToast.timer = window.setTimeout(() => toast.classList.remove("show"), 1600);
+    }
+
+    document.addEventListener("click", (event) => {
+      const tab = event.target.closest("[data-tab]");
+      if (tab) {
+        activeSummary = tab.dataset.tab;
+        updateSummary();
+      }
+
+      const copyButton = event.target.closest("[data-copy]");
+      if (copyButton) {
+        copyText(summaries[copyButton.dataset.copy]);
+      }
+
+      if (event.target.closest("#copyActive")) {
+        copyText(summaries[activeSummary]);
+      }
+    });
+
+    render();
+  </script>
+</body>
+</html>

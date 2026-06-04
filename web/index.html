@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>宠析｜工作台首页</title>
+  <style>
+    :root {
+      --bg: #f5f7fb;
+      --panel: #ffffff;
+      --panel-soft: #f8fafc;
+      --primary: #2454a6;
+      --primary-light: #e7eefc;
+      --accent: #29a37a;
+      --ink: #1f2937;
+      --muted: #6b7280;
+      --line: #e5e7eb;
+      --shadow: 0 14px 32px rgba(24, 39, 75, 0.07);
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      background:
+        linear-gradient(135deg, rgba(36, 84, 166, 0.08), rgba(41, 163, 122, 0.08)),
+        var(--bg);
+      color: var(--ink);
+    }
+
+    a {
+      color: inherit;
+      text-decoration: none;
+    }
+
+    .shell {
+      width: min(1180px, calc(100% - 48px));
+      margin: 0 auto;
+      padding: 34px 0 44px;
+    }
+
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 18px;
+      margin-bottom: 34px;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .brand-icon {
+      width: 44px;
+      height: 44px;
+      border-radius: 8px;
+      background: linear-gradient(135deg, #4e7ff1, #2bbf95);
+      display: grid;
+      place-items: center;
+      color: #fff;
+      font-size: 20px;
+      font-weight: 800;
+      box-shadow: 0 12px 24px rgba(38, 96, 205, 0.22);
+    }
+
+    .brand h1 {
+      margin: 0;
+      font-size: 20px;
+      color: #102236;
+    }
+
+    .brand p {
+      margin: 4px 0 0;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .status {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 9px 12px;
+      border-radius: 8px;
+      background: #fff;
+      border: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 700;
+      box-shadow: var(--shadow);
+    }
+
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--accent);
+    }
+
+    .hero {
+      background: var(--panel);
+      border: 1px solid rgba(229, 231, 235, 0.9);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+      padding: 32px;
+      margin-bottom: 22px;
+    }
+
+    .eyebrow {
+      display: inline-flex;
+      padding: 7px 10px;
+      border-radius: 8px;
+      background: var(--primary-light);
+      color: var(--primary);
+      font-size: 12px;
+      font-weight: 800;
+      margin-bottom: 16px;
+    }
+
+    .hero h2 {
+      margin: 0;
+      font-size: clamp(34px, 5vw, 56px);
+      line-height: 1.1;
+      letter-spacing: 0;
+      color: #102236;
+      max-width: 760px;
+    }
+
+    .hero p {
+      margin: 18px 0 0;
+      max-width: 760px;
+      color: var(--muted);
+      font-size: 16px;
+      line-height: 1.75;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 18px;
+    }
+
+    .entry {
+      min-height: 260px;
+      background: var(--panel);
+      border: 1px solid rgba(229, 231, 235, 0.9);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+      padding: 22px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      transition: transform 0.16s ease, box-shadow 0.16s ease, border-color 0.16s ease;
+    }
+
+    .entry:hover {
+      transform: translateY(-3px);
+      border-color: rgba(36, 84, 166, 0.28);
+      box-shadow: 0 18px 38px rgba(24, 39, 75, 0.1);
+    }
+
+    .entry-top {
+      display: flex;
+      justify-content: space-between;
+      gap: 14px;
+      margin-bottom: 16px;
+    }
+
+    .entry-icon {
+      width: 44px;
+      height: 44px;
+      border-radius: 8px;
+      background: var(--primary-light);
+      color: var(--primary);
+      display: grid;
+      place-items: center;
+      font-weight: 900;
+      flex: 0 0 auto;
+    }
+
+    .entry h3 {
+      margin: 0 0 9px;
+      font-size: 18px;
+    }
+
+    .entry p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.65;
+    }
+
+    .entry-meta {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-top: 18px;
+    }
+
+    .chip {
+      padding: 6px 9px;
+      border-radius: 8px;
+      background: var(--panel-soft);
+      color: #4b5563;
+      border: 1px solid var(--line);
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .entry-action {
+      display: inline-flex;
+      justify-content: center;
+      align-items: center;
+      margin-top: 22px;
+      min-height: 40px;
+      border-radius: 8px;
+      background: linear-gradient(135deg, var(--primary), #2f6fd6);
+      color: #fff;
+      font-size: 14px;
+      font-weight: 800;
+    }
+
+    .footer {
+      margin-top: 20px;
+      color: var(--muted);
+      font-size: 12px;
+      text-align: center;
+    }
+
+    @media (max-width: 1100px) {
+      .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+
+    @media (max-width: 680px) {
+      .shell {
+        width: min(100% - 32px, 1180px);
+        padding-top: 22px;
+      }
+
+      .topbar {
+        align-items: flex-start;
+        flex-direction: column;
+      }
+
+      .hero {
+        padding: 24px;
+      }
+
+      .grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-icon">宠</div>
+        <div>
+          <h1>宠析工作台</h1>
+          <p>Chongxi product, data and business consoles</p>
+        </div>
+      </div>
+      <div class="status"><span class="status-dot"></span>本地入口 127.0.0.1:8000</div>
+    </header>
+
+    <section class="hero">
+      <div class="eyebrow">统一入口</div>
+      <h2>宠析平台首页</h2>
+      <p>集中进入官网、数据生产线、C 端产品入口和 B 端业务入口。各模块保持独立运行，首页只负责统一导航和工作台分流。</p>
+    </section>
+
+    <section class="grid">
+      <a class="entry" href="/official-site.html">
+        <div>
+          <div class="entry-top">
+            <div>
+              <h3>宠析官网</h3>
+              <p>展示宠析品牌、产品能力和宠物食品数据洞察定位。</p>
+            </div>
+            <div class="entry-icon">官</div>
+          </div>
+          <div class="entry-meta">
+            <span class="chip">官网页面</span>
+            <span class="chip">official-site.html</span>
+          </div>
+        </div>
+        <span class="entry-action">进入官网</span>
+      </a>
+
+      <a class="entry" href="/pipeline-review.html">
+        <div>
+          <div class="entry-top">
+            <div>
+              <h3>宠析数据生产线</h3>
+              <p>进入采集、入库、清洗、C/B 标签体系和业务风险模型控制台。</p>
+            </div>
+            <div class="entry-icon">数</div>
+          </div>
+          <div class="entry-meta">
+            <span class="chip">人工确认</span>
+            <span class="chip">生产线</span>
+          </div>
+        </div>
+        <span class="entry-action">进入生产线</span>
+      </a>
+
+      <a class="entry" href="/consumer-portal.html">
+        <div>
+          <div class="entry-top">
+            <div>
+              <h3>宠析 C 端入口</h3>
+              <p>进入 C 端功能选择页，再访问产品查询、风险解释和换粮相关页面。</p>
+            </div>
+            <div class="entry-icon">C</div>
+          </div>
+          <div class="entry-meta">
+            <span class="chip">8501 / 8502</span>
+            <span class="chip">C端</span>
+          </div>
+        </div>
+        <span class="entry-action">选择 C 端功能</span>
+      </a>
+
+      <a class="entry" href="/formula-clue-analysis.html">
+        <div>
+          <div class="entry-top">
+            <div>
+              <h3>配方线索分析</h3>
+              <p>查看历史粮与当前粮的配方差异、原料路径变化和营养压力标签。</p>
+            </div>
+            <div class="entry-icon">析</div>
+          </div>
+          <div class="entry-meta">
+            <span class="chip">医院版</span>
+            <span class="chip">饮食分析</span>
+          </div>
+        </div>
+        <span class="entry-action">进入分析页</span>
+      </a>
+
+      <a class="entry" href="#">
+        <div>
+          <div class="entry-top">
+            <div>
+              <h3>宠析 B 端入口</h3>
+              <p>面向品牌、研发和工厂的业务分析、标签归因和决策入口。</p>
+            </div>
+            <div class="entry-icon">B</div>
+          </div>
+          <div class="entry-meta">
+            <span class="chip">暂未接入</span>
+            <span class="chip">B端</span>
+          </div>
+        </div>
+        <span class="entry-action">暂未接入</span>
+      </a>
+    </section>
+
+    <div class="footer">宠析工作台 · 多模块统一入口</div>
+  </main>
+</body>
+</html>

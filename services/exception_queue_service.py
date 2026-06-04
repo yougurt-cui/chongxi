@@ -1,10 +1,9 @@
 """Service layer for exception recovery queue APIs."""
 
-from __future__ import annotations
 
 from typing import Any, Dict
 
-from app.adapters.exception_queue_adapter import (
+from adapters.exception_queue_adapter import (
     DEFAULT_EXCEPTION_QUEUE_TABLE,
     check_exception_gate,
     list_exceptions,

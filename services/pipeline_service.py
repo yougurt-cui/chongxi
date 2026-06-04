@@ -5,22 +5,45 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
-from app.adapters.catfood_ingredient_adapter import (
-    DEFAULT_GUARANTEE_HISTORY_DIR,
-    DEFAULT_GUARANTEE_TABLE,
-    DEFAULT_IMAGE_GLOB,
-    DEFAULT_INGREDIENT_HISTORY_DIR,
-    DEFAULT_OCR_TABLE,
-    DEFAULT_PARSED_TABLE,
-    DEFAULT_PRODUCT_INFO_TABLE,
-    import_ingredient_images,
-    load_default_db_config,
-    parse_guarantee_values,
-    parse_ingredient_ocr,
-)
+try:
+    from app.adapters.catfood_ingredient_adapter import (
+        DEFAULT_GUARANTEE_HISTORY_DIR,
+        DEFAULT_GUARANTEE_TABLE,
+        DEFAULT_IMAGE_DIR,
+        DEFAULT_IMAGE_GLOB,
+        DEFAULT_INGREDIENT_HISTORY_DIR,
+        DEFAULT_OCR_TABLE,
+        DEFAULT_PARSED_TABLE,
+        DEFAULT_PRODUCT_INFO_TABLE,
+        import_ingredient_images,
+        load_default_db_config,
+        parse_guarantee_values,
+        parse_ingredient_ocr,
+    )
+    from app.vendor.csv_mysql_labeling.src.settings import load_settings
+except ModuleNotFoundError:
+    from adapters.catfood_ingredient_adapter import (
+        DEFAULT_GUARANTEE_HISTORY_DIR,
+        DEFAULT_GUARANTEE_TABLE,
+        DEFAULT_IMAGE_DIR,
+        DEFAULT_IMAGE_GLOB,
+        DEFAULT_INGREDIENT_HISTORY_DIR,
+        DEFAULT_OCR_TABLE,
+        DEFAULT_PARSED_TABLE,
+        DEFAULT_PRODUCT_INFO_TABLE,
+        import_ingredient_images,
+        load_default_db_config,
+        parse_guarantee_values,
+        parse_ingredient_ocr,
+    )
+    from vendor.csv_mysql_labeling.src.settings import load_settings
 
 
 DEFAULT_STEPS = ["ocr_import", "parse_ocr_json", "parse_guarantee"]
+
+
+def _configured_pipeline_paths() -> Dict[str, Any]:
+    return dict((load_settings().pipeline or {}).get("paths") or {})
 
 
 def _normalize_steps(steps: Optional[Iterable[str]]) -> List[str]:
@@ -37,11 +60,18 @@ def _normalize_steps(steps: Optional[Iterable[str]]) -> List[str]:
 def ingest_catfood_ingredients(payload: Dict[str, Any]) -> Dict[str, Any]:
     """Run catfood ingredient image OCR, structured parsing, and guarantee parsing."""
     payload = dict(payload or {})
+    configured_paths = _configured_pipeline_paths()
     db_config = dict(payload.get("db") or load_default_db_config())
     steps = _normalize_steps(payload.get("steps"))
 
     image_dir_value = payload.get("image_dir")
-    image_dir = Path(str(image_dir_value)).expanduser() if image_dir_value else None
+    image_dir = (
+        Path(str(image_dir_value)).expanduser()
+        if image_dir_value
+        else Path(str(configured_paths["image_dir"])).expanduser()
+        if configured_paths.get("image_dir")
+        else DEFAULT_IMAGE_DIR
+    )
     image_glob = str(payload.get("image_glob") or DEFAULT_IMAGE_GLOB)
     ocr_table = str(payload.get("ocr_table") or DEFAULT_OCR_TABLE)
     parsed_table = str(payload.get("parsed_table") or DEFAULT_PARSED_TABLE)
@@ -54,10 +84,18 @@ def ingest_catfood_ingredients(payload: Dict[str, Any]) -> Dict[str, Any]:
     sleep_seconds = float(payload.get("sleep_seconds", 1.5))
 
     ingredient_history_dir = Path(
-        str(payload.get("ingredient_history_dir") or DEFAULT_INGREDIENT_HISTORY_DIR)
+        str(
+            payload.get("ingredient_history_dir")
+            or configured_paths.get("ingredient_history_dir")
+            or DEFAULT_INGREDIENT_HISTORY_DIR
+        )
     ).expanduser()
     guarantee_history_dir = Path(
-        str(payload.get("guarantee_history_dir") or DEFAULT_GUARANTEE_HISTORY_DIR)
+        str(
+            payload.get("guarantee_history_dir")
+            or configured_paths.get("guarantee_history_dir")
+            or DEFAULT_GUARANTEE_HISTORY_DIR
+        )
     ).expanduser()
 
     result: Dict[str, Any] = {
@@ -73,8 +111,6 @@ def ingest_catfood_ingredients(payload: Dict[str, Any]) -> Dict[str, Any]:
     }
 
     if "ocr_import" in steps:
-        if image_dir is None:
-            raise ValueError("image_dir is required when steps includes ocr_import")
         result["results"]["ocr_import"] = import_ingredient_images(
             image_dir=image_dir,
             db_config=db_config,
@@ -107,4 +143,3 @@ def ingest_catfood_ingredients(payload: Dict[str, Any]) -> Dict[str, Any]:
         )
 
     return result
-

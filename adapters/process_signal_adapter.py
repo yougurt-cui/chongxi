@@ -1,6 +1,5 @@
 """Adapter for writing standardized brand process signals."""
 
-from __future__ import annotations
 
 import uuid
 from typing import Any, Dict, List, Optional, Sequence
@@ -8,8 +7,8 @@ from typing import Any, Dict, List, Optional, Sequence
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
-from app.vendor.csv_mysql_labeling.src.db import make_engine
-from app.vendor.csv_mysql_labeling.src.settings import load_settings
+from vendor.csv_mysql_labeling.src.db import make_engine
+from vendor.csv_mysql_labeling.src.settings import load_settings
 
 
 DEFAULT_PROCESS_SIGNAL_TABLE = "catfood_brand_process_signal_standardized"

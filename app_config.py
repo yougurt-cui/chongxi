@@ -1,11 +1,11 @@
 """Centralized runtime configuration for the Flask app."""
 
-from __future__ import annotations
 
 import os
+from pathlib import Path
 from typing import Any, Dict
 
-from app.vendor.csv_mysql_labeling.src.settings import load_settings
+from vendor.csv_mysql_labeling.src.settings import load_settings
 
 
 def _env_first(name: str, value: Any) -> Any:
@@ -76,3 +76,19 @@ def get_qwen_config(payload: Dict[str, Any] | None = None) -> Dict[str, str]:
         "base_url": normalize_openai_base_url(str(base_url or "")),
         "model": str(model or "qwen-plus").strip(),
     }
+
+
+def get_pipeline_paths() -> Dict[str, Any]:
+    settings = load_settings()
+    return dict((settings.pipeline or {}).get("paths") or {})
+
+
+def get_cat_food_upload_root(default: Path | str) -> Path:
+    value = (
+        os.getenv("CAT_FOOD_UPLOAD_ROOT")
+        or os.getenv("CATFOOD_UPLOAD_ROOT")
+        or get_pipeline_paths().get("cat_food_upload_dir")
+        or get_pipeline_paths().get("upload_image_dir")
+        or default
+    )
+    return Path(str(value)).expanduser()

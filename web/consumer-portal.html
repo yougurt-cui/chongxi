@@ -1,0 +1,313 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>宠析｜C端入口</title>
+  <style>
+    :root {
+      --bg: #f5f7fb;
+      --panel: #ffffff;
+      --panel-soft: #f8fafc;
+      --primary: #2454a6;
+      --primary-light: #e7eefc;
+      --accent: #29a37a;
+      --ink: #1f2937;
+      --muted: #6b7280;
+      --line: #e5e7eb;
+      --shadow: 0 14px 32px rgba(24, 39, 75, 0.07);
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      background:
+        linear-gradient(135deg, rgba(36, 84, 166, 0.08), rgba(41, 163, 122, 0.08)),
+        var(--bg);
+      color: var(--ink);
+    }
+
+    a { color: inherit; text-decoration: none; }
+
+    .shell {
+      width: min(980px, calc(100% - 48px));
+      margin: 0 auto;
+      padding: 34px 0 44px;
+    }
+
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 18px;
+      margin-bottom: 34px;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .brand-icon {
+      width: 44px;
+      height: 44px;
+      border-radius: 8px;
+      background: linear-gradient(135deg, #4e7ff1, #2bbf95);
+      display: grid;
+      place-items: center;
+      color: #fff;
+      font-size: 20px;
+      font-weight: 800;
+      box-shadow: 0 12px 24px rgba(38, 96, 205, 0.22);
+    }
+
+    .brand h1 {
+      margin: 0;
+      font-size: 20px;
+      color: #102236;
+    }
+
+    .brand p {
+      margin: 4px 0 0;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .back {
+      display: inline-flex;
+      align-items: center;
+      min-height: 38px;
+      padding: 0 13px;
+      border-radius: 8px;
+      background: #fff;
+      border: 1px solid var(--line);
+      color: var(--primary);
+      font-size: 14px;
+      font-weight: 800;
+      box-shadow: var(--shadow);
+    }
+
+    .hero {
+      background: var(--panel);
+      border: 1px solid rgba(229, 231, 235, 0.9);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+      padding: 30px;
+      margin-bottom: 20px;
+    }
+
+    .eyebrow {
+      display: inline-flex;
+      padding: 7px 10px;
+      border-radius: 8px;
+      background: var(--primary-light);
+      color: var(--primary);
+      font-size: 12px;
+      font-weight: 800;
+      margin-bottom: 16px;
+    }
+
+    .hero h2 {
+      margin: 0;
+      font-size: clamp(32px, 5vw, 50px);
+      line-height: 1.1;
+      color: #102236;
+    }
+
+    .hero p {
+      margin: 16px 0 0;
+      max-width: 720px;
+      color: var(--muted);
+      font-size: 16px;
+      line-height: 1.72;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 18px;
+    }
+
+    .entry {
+      min-height: 250px;
+      background: var(--panel);
+      border: 1px solid rgba(229, 231, 235, 0.9);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+      padding: 22px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      transition: transform 0.16s ease, box-shadow 0.16s ease, border-color 0.16s ease;
+    }
+
+    .entry:hover {
+      transform: translateY(-3px);
+      border-color: rgba(36, 84, 166, 0.28);
+      box-shadow: 0 18px 38px rgba(24, 39, 75, 0.1);
+    }
+
+    .entry-top {
+      display: flex;
+      justify-content: space-between;
+      gap: 14px;
+      margin-bottom: 16px;
+    }
+
+    .entry-icon {
+      width: 44px;
+      height: 44px;
+      border-radius: 8px;
+      background: var(--primary-light);
+      color: var(--primary);
+      display: grid;
+      place-items: center;
+      font-weight: 900;
+      flex: 0 0 auto;
+    }
+
+    .entry h3 {
+      margin: 0 0 9px;
+      font-size: 18px;
+    }
+
+    .entry p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.65;
+    }
+
+    .entry-meta {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-top: 18px;
+    }
+
+    .chip {
+      padding: 6px 9px;
+      border-radius: 8px;
+      background: var(--panel-soft);
+      color: #4b5563;
+      border: 1px solid var(--line);
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .entry-action {
+      display: inline-flex;
+      justify-content: center;
+      align-items: center;
+      margin-top: 22px;
+      min-height: 40px;
+      border-radius: 8px;
+      background: linear-gradient(135deg, var(--primary), #2f6fd6);
+      color: #fff;
+      font-size: 14px;
+      font-weight: 800;
+    }
+
+    .footer {
+      margin-top: 20px;
+      color: var(--muted);
+      font-size: 12px;
+      text-align: center;
+    }
+
+    @media (max-width: 720px) {
+      .shell {
+        width: min(100% - 32px, 980px);
+        padding-top: 22px;
+      }
+
+      .topbar {
+        align-items: flex-start;
+        flex-direction: column;
+      }
+
+      .hero { padding: 24px; }
+      .grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-icon">C</div>
+        <div>
+          <h1>宠析 C 端入口</h1>
+          <p>Consumer product and recommendation experiences</p>
+        </div>
+      </div>
+      <a class="back" href="/official-site.html">返回工作台</a>
+    </header>
+
+    <section class="hero">
+      <div class="eyebrow">C端功能选择</div>
+      <h2>选择要进入的 C 端页面</h2>
+      <p>三个 C 端页面保持独立运行。当前页面只负责分流，点击后会进入对应功能。</p>
+    </section>
+
+    <section class="grid">
+      <a class="entry" href="/consumer/recommendation-engine">
+        <div>
+          <div class="entry-top">
+            <div>
+              <h3>C 端功能一</h3>
+              <p>猫咪体质推荐引擎，根据主问题和体质信号推荐产品。</p>
+            </div>
+            <div class="entry-icon">01</div>
+          </div>
+          <div class="entry-meta">
+            <span class="chip">内置服务 /consumer/recommendation-engine</span>
+            <span class="chip">C端</span>
+          </div>
+        </div>
+        <span class="entry-action">进入功能一</span>
+      </a>
+
+      <a class="entry" href="/consumer/product-compare">
+        <div>
+          <div class="entry-top">
+            <div>
+              <h3>C 端功能二</h3>
+              <p>访问产品查询、风险解释和换粮相关的 C 端页面。</p>
+            </div>
+            <div class="entry-icon">02</div>
+          </div>
+          <div class="entry-meta">
+            <span class="chip">内置服务 /consumer/product-compare</span>
+            <span class="chip">C端</span>
+          </div>
+        </div>
+        <span class="entry-action">进入功能二</span>
+      </a>
+
+      <a class="entry" href="/cat-food-compare.html">
+        <div>
+          <div class="entry-top">
+            <div>
+              <h3>C 端功能三</h3>
+              <p>猫粮对比分析页面，支持两款产品横向对比、风险解释和换粮建议。</p>
+            </div>
+            <div class="entry-icon">03</div>
+          </div>
+          <div class="entry-meta">
+            <span class="chip">内置页面 /cat-food-compare.html</span>
+            <span class="chip">React / 5173 移植</span>
+          </div>
+        </div>
+        <span class="entry-action">进入功能三</span>
+      </a>
+    </section>
+
+    <div class="footer">宠析 C 端入口 · 三个功能页面统一分流</div>
+  </main>
+</body>
+</html>

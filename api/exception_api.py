@@ -1,10 +1,9 @@
 """Exception recovery queue API entrypoints."""
 
-from __future__ import annotations
 
 from flask import Blueprint, jsonify, request
 
-from app.services.exception_queue_service import (
+from services.exception_queue_service import (
     change_exception_status,
     claim_exception,
     exception_run_gate,

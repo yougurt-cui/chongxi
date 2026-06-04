@@ -24,7 +24,10 @@ ocr:
   qwen_text_model: "qwen-plus"
   qwen_ocr_model: "qwen-vl-ocr-latest"
   qwen_guarantee_model: "qwen-vl-ocr-latest"
-  qwen_timeout_seconds: 90
+  qwen_timeout_seconds: 300
+  qwen_max_attempts: 3
+  qwen_max_image_edge: 1600
+  qwen_max_image_bytes: 2500000
   ocr_space_api_key: "helloworld"
   ocr_space_endpoint: "https://api.ocr.space/parse/image"
   ocr_space_language: "chs"

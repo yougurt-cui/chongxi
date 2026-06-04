@@ -1,18 +1,17 @@
 """Service layer for brand process signal pipelines."""
 
-from __future__ import annotations
 
 import argparse
 import os
 from typing import Any, Dict, List
 
-from app.app_config import get_mysql_config, get_qwen_config
-from app.adapters.process_signal_adapter import (
+from app_config import get_mysql_config, get_qwen_config
+from adapters.process_signal_adapter import (
     DEFAULT_PROCESS_SIGNAL_TABLE,
     insert_process_signals,
 )
-from app.vendor.process_signal_pipeline import filter_catfood_process_signals as candidate_pipeline
-from app.vendor.process_signal_pipeline import standardize_catfood_process_signals_qwen as standard_pipeline
+from vendor.process_signal_pipeline import filter_catfood_process_signals as candidate_pipeline
+from vendor.process_signal_pipeline import standardize_catfood_process_signals_qwen as standard_pipeline
 
 
 DEFAULT_PROCESS_SIGNAL_CANDIDATE_TABLE = "catfood_process_signal_candidates"

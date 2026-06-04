@@ -1,10 +1,9 @@
 """Process signal API entrypoints."""
 
-from __future__ import annotations
 
 from flask import Blueprint, jsonify, request
 
-from app.services.process_signal_service import run_process_signal_pipeline, write_process_signals
+from services.process_signal_service import run_process_signal_pipeline, write_process_signals
 
 
 process_signal_api = Blueprint("process_signal_api", __name__, url_prefix="/api")

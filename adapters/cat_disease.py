@@ -31,16 +31,17 @@ import json
 import time
 import hashlib
 from datetime import datetime
+from threading import Lock
 from typing import List, Dict, Any, Optional
 
 import pandas as pd
 from sqlalchemy import create_engine, text
 from openai import OpenAI
 
-from app import app_config as runtime_config
-from app.adapters.comment_data_adapter import load_default_db_config, load_settings
+import app_config as runtime_config
+from adapters.comment_data_adapter import load_default_db_config, load_settings
 
-from app.vendor.csv_mysql_labeling.src.extract_catfood_brand_relations import (
+from vendor.csv_mysql_labeling.src.extract_catfood_brand_relations import (
     _find_brand_mentions,
     _ordered_unique_brands,
 )
@@ -71,6 +72,10 @@ DISEASE_REVIEW_TABLE = "cat_disease_clue_candidates"
 
 GROUP_CONCAT_MAX_LEN = 1024 * 1024
 DEFAULT_MAX_COMMENT_CHARS = 500
+DEFAULT_LLM_TIMEOUT_SECONDS = int(os.getenv("DISEASE_STRUCTURE_LLM_TIMEOUT_SECONDS", "45"))
+MAX_LLM_CALLS_PER_MINUTE = int(os.getenv("DISEASE_STRUCTURE_MAX_LLM_CALLS_PER_MINUTE", "30"))
+_llm_rate_lock = Lock()
+_last_llm_call_at = 0.0
 
 
 # =========================================================
@@ -552,8 +557,22 @@ def get_llm_client() -> OpenAI:
 
     return OpenAI(
         api_key=qwen_config["api_key"],
-        base_url=qwen_config["base_url"]
+        base_url=qwen_config["base_url"],
+        timeout=DEFAULT_LLM_TIMEOUT_SECONDS,
     )
+
+
+def wait_for_llm_slot() -> None:
+    if MAX_LLM_CALLS_PER_MINUTE <= 0:
+        return
+    min_interval = 60.0 / float(MAX_LLM_CALLS_PER_MINUTE)
+    global _last_llm_call_at
+    with _llm_rate_lock:
+        now = time.monotonic()
+        sleep_for = _last_llm_call_at + min_interval - now
+        if sleep_for > 0:
+            time.sleep(sleep_for)
+        _last_llm_call_at = time.monotonic()
 
 
 # =========================================================
@@ -690,6 +709,7 @@ def call_llm_for_annotation(
 
     for attempt in range(max_retries):
         try:
+            wait_for_llm_slot()
             response = client.chat.completions.create(
                 model=model_name,
                 messages=[
@@ -876,73 +896,83 @@ def create_disease_review_table(engine, target_table: str = DISEASE_REVIEW_TABLE
     """
     with engine.begin() as conn:
         conn.execute(text(sql))
-        cols = {
-            row[0]
-            for row in conn.execute(
-                text(
-                    """
-                    SELECT COLUMN_NAME
-                    FROM information_schema.columns
-                    WHERE table_schema = DATABASE()
-                      AND table_name = :table_name
-                    """
-                ),
-                {"table_name": target_table},
-            ).fetchall()
-        }
+        column_rows = conn.execute(
+            text(
+                """
+                SELECT COLUMN_NAME, DATA_TYPE, IS_NULLABLE, COLUMN_DEFAULT
+                FROM information_schema.columns
+                WHERE table_schema = DATABASE()
+                  AND table_name = :table_name
+                """
+            ),
+            {"table_name": target_table},
+        ).mappings().fetchall()
+        cols = {row["COLUMN_NAME"] for row in column_rows}
         if "search_keyword" not in cols:
             conn.execute(text(f"ALTER TABLE `{target_table}` ADD COLUMN search_keyword TEXT NULL AFTER brand_name"))
         if "mentioned_brands" not in cols:
             conn.execute(text(f"ALTER TABLE `{target_table}` ADD COLUMN mentioned_brands TEXT NULL AFTER search_keyword"))
-        conn.execute(text(f"ALTER TABLE `{target_table}` MODIFY COLUMN search_keyword TEXT NULL"))
-        conn.execute(
-            text(
-                f"""
-                UPDATE `{target_table}`
-                SET brand_name = ''
-                WHERE brand_name IS NULL
-                """
+        col_meta = {row["COLUMN_NAME"]: row for row in column_rows}
+        search_keyword = col_meta.get("search_keyword")
+        if search_keyword and (
+            str(search_keyword["DATA_TYPE"]).lower() != "text"
+            or str(search_keyword["IS_NULLABLE"]).upper() != "YES"
+        ):
+            conn.execute(text(f"ALTER TABLE `{target_table}` MODIFY COLUMN search_keyword TEXT NULL"))
+
+        brand_name = col_meta.get("brand_name")
+        if brand_name and (
+            str(brand_name["IS_NULLABLE"]).upper() != "NO"
+            or (brand_name["COLUMN_DEFAULT"] not in ("", "''"))
+        ):
+            conn.execute(
+                text(
+                    f"""
+                    UPDATE `{target_table}`
+                    SET brand_name = ''
+                    WHERE brand_name IS NULL
+                    """
+                )
             )
-        )
-        conn.execute(text(f"ALTER TABLE `{target_table}` MODIFY COLUMN brand_name VARCHAR(100) NOT NULL DEFAULT ''"))
+            conn.execute(text(f"ALTER TABLE `{target_table}` MODIFY COLUMN brand_name VARCHAR(100) NOT NULL DEFAULT ''"))
 
         index_rows = conn.execute(text(f"SHOW INDEX FROM `{target_table}`")).fetchall()
         index_names = {row[2] for row in index_rows}
         if "uk_candidate_symptom" in index_names:
             conn.execute(text(f"ALTER TABLE `{target_table}` DROP INDEX uk_candidate_symptom"))
             index_names.remove("uk_candidate_symptom")
-        conn.execute(
-            text(
-                f"""
-                DELETE t
-                FROM `{target_table}` t
-                JOIN (
-                    SELECT
-                        comment_hash,
-                        brand_name,
-                        symptom_category,
-                        symptom_name,
-                        effect_direction,
-                        MIN(id) AS keep_id
-                    FROM `{target_table}`
-                    GROUP BY
-                        comment_hash,
-                        brand_name,
-                        symptom_category,
-                        symptom_name,
-                        effect_direction
-                    HAVING COUNT(*) > 1
-                ) d
-                  ON t.comment_hash = d.comment_hash
-                 AND t.brand_name = d.brand_name
-                 AND t.symptom_category = d.symptom_category
-                 AND t.symptom_name = d.symptom_name
-                 AND t.effect_direction = d.effect_direction
-                 AND t.id <> d.keep_id
-                """
-            )
-        )
         if "uk_comment_brand_symptom" not in index_names:
+            conn.execute(
+                text(
+                    f"""
+                    DELETE t
+                    FROM `{target_table}` t
+                    JOIN (
+                        SELECT
+                            comment_hash,
+                            brand_name,
+                            symptom_category,
+                            symptom_name,
+                            effect_direction,
+                            MIN(id) AS keep_id
+                        FROM `{target_table}`
+                        GROUP BY
+                            comment_hash,
+                            brand_name,
+                            symptom_category,
+                            symptom_name,
+                            effect_direction
+                        HAVING COUNT(*) > 1
+                    ) d
+                      ON t.comment_hash = d.comment_hash
+                     AND t.brand_name = d.brand_name
+                     AND t.symptom_category = d.symptom_category
+                     AND t.symptom_name = d.symptom_name
+                     AND t.effect_direction = d.effect_direction
+                     AND t.id <> d.keep_id
+                    """
+                )
+            )
             conn.execute(
                 text(
                     f"""
@@ -1137,6 +1167,8 @@ def structure_cat_disease_clues(
                 "target_table": target_table,
                 "max_comment_chars": int(max_comment_chars),
                 "candidate_rows": 0,
+                "source_start_id": None,
+                "source_end_id": None,
                 "processed_rows": 0,
                 "event_rows": 0,
                 "inserted_or_updated_rows": 0,
@@ -1144,6 +1176,8 @@ def structure_cat_disease_clues(
             }
 
         df["review_text"] = df["review_text"].fillna("").astype(str)
+        source_start_id = int(df["source_candidate_id"].min())
+        source_end_id = int(df["source_candidate_id"].max())
         candidate_df = df[df["review_text"].apply(is_candidate_review)].copy()
         if candidate_df.empty:
             return {
@@ -1152,6 +1186,8 @@ def structure_cat_disease_clues(
                 "target_table": target_table,
                 "max_comment_chars": int(max_comment_chars),
                 "candidate_rows": int(len(df)),
+                "source_start_id": source_start_id,
+                "source_end_id": source_end_id,
                 "keyword_candidate_rows": 0,
                 "processed_rows": 0,
                 "event_rows": 0,
@@ -1253,6 +1289,8 @@ def structure_cat_disease_clues(
             "target_table": target_table,
             "max_comment_chars": int(max_comment_chars),
             "candidate_rows": int(len(df)),
+            "source_start_id": source_start_id,
+            "source_end_id": source_end_id,
             "keyword_candidate_rows": int(len(candidate_df)),
             "processed_rows": processed_count,
             "event_rows": event_count,

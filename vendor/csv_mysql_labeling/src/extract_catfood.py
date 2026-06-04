@@ -1,11 +1,10 @@
 # -*- coding: utf-8 -*-
-from __future__ import annotations
 
 import re
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Dict, Optional
+from typing import Dict, Optional, Set
 
 from rich.console import Console
 from sqlalchemy import text
@@ -108,7 +107,7 @@ def ensure_extract_tables(
     _ensure_target_indexes(engine=engine, target_table=target_table)
 
 
-def _fetch_table_columns(engine: Engine, table_name: str) -> set[str]:
+def _fetch_table_columns(engine: Engine, table_name: str) -> Set[str]:
     with engine.begin() as conn:
         rows = conn.execute(
             text(

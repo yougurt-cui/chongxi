@@ -1,6 +1,5 @@
 """Feature engineering adapter for the legacy feature-score pipeline."""
 
-from __future__ import annotations
 
 import os
 import subprocess
@@ -14,11 +13,12 @@ from urllib.error import HTTPError, URLError
 
 from sqlalchemy import create_engine, text
 
-from app.app_config import get_feature_mysql_config
+from app_config import get_feature_mysql_config
 
 
 FEATURE_PROJECT_ROOT = Path(__file__).resolve().parents[1] / "vendor" / "feature_score_pipeline"
 FEATURE_PIPELINE = FEATURE_PROJECT_ROOT / "pipeline.py"
+CSV_LABELING_PROJECT = Path(__file__).resolve().parents[1] / "vendor" / "csv_mysql_labeling"
 
 DEFAULT_FEATURE_DB = get_feature_mysql_config()
 
@@ -66,6 +66,8 @@ def _pipeline_env(db_config: Dict[str, Any]) -> Dict[str, str]:
             "MYSQL_PASSWORD": str(db_config.get("password") or ""),
             "MYSQL_DATABASE": str(db_config["database"]),
             "MYSQL_CHARSET": str(db_config["charset"]),
+            "CSV_LABELING_PROJECT": str(CSV_LABELING_PROJECT),
+            "CSV_LABELING_PYTHON": sys.executable,
         }
     )
     return env

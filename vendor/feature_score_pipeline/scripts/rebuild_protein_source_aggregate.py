@@ -23,7 +23,7 @@ SPLIT_SOURCE_RE = re.compile(r"[、,，/|]+")
 CSV_LABELING_PROJECT = Path(
     os.getenv(
         "CSV_LABELING_PROJECT",
-        "/Users/yoghourt/anaconda3/envs/comment_labeler_env/csv_mysql_labeling_project",
+        "/home/admin/projects/chongxi/vendor/csv_mysql_labeling",
     )
 )
 
@@ -437,9 +437,7 @@ def _load_labeling_helpers():
             _resolve_openai_cfg,
         )
     except Exception as exc:  # pragma: no cover - depends on sibling project imports
-        raise RuntimeError(
-            "failed to import protein label helpers from csv_mysql_labeling_project"
-        ) from exc
+        return _fallback_labeling_helpers(exc)
 
     return {
         "build_product_key": _build_product_key,
@@ -448,6 +446,98 @@ def _load_labeling_helpers():
         "classify_ingredient_composition": _classify_ingredient_composition,
         "composition_cache_key": _composition_cache_key,
         "resolve_openai_cfg": _resolve_openai_cfg,
+    }
+
+
+def _fallback_labeling_helpers(import_error: Exception) -> dict[str, Any]:
+    def build_product_key(brand: Any, product_name: Any, source_id: Any) -> str:
+        return build_corrected_product_key(_clean_text(brand), _clean_text(product_name)) or f"source:{source_id}"
+
+    def composition_cache_key(ingredient_composition: Any) -> str:
+        return re.sub(r"\s+", "", str(ingredient_composition or "")).lower()
+
+    def resolve_openai_cfg(_: Any = None) -> dict[str, Any]:
+        return {"fallback_reason": str(import_error)}
+
+    def classify_ingredient_composition(ingredient_composition: str, _: dict[str, Any]) -> dict[str, Any]:
+        text_value = str(ingredient_composition or "")
+        animal_tokens: list[str] = []
+        detail_tokens: list[str] = []
+        plant_tokens: list[str] = []
+        for token in re.split(r"[、,，;；\n]+", text_value):
+            cleaned = token.strip(" \t\r\n。.")
+            if not cleaned:
+                continue
+            source = _normalize_source_token(cleaned)
+            if source and source not in animal_tokens:
+                animal_tokens.append(source)
+            if source and cleaned not in detail_tokens:
+                detail_tokens.append(cleaned)
+            if any(marker in cleaned for marker in ("豌豆", "大豆", "玉米蛋白", "小麦蛋白", "马铃薯蛋白")):
+                plant_tokens.append(cleaned)
+        primary = animal_tokens[0] if animal_tokens else None
+        secondary = animal_tokens[1] if len(animal_tokens) > 1 else None
+        return {
+            "animal_sources": "、".join(animal_tokens) or None,
+            "protein_source_details": "、".join(detail_tokens) or None,
+            "primary_meat_source_species": primary,
+            "secondary_meat_source_species": secondary,
+            "primary_meat_source_type": "鲜肉" if primary and "鲜" in text_value else None,
+            "secondary_meat_source_type": None,
+            "protein_source_origin": "ingredient_rule_fallback",
+            "plant_protein_labels": "、".join(plant_tokens) or None,
+        }
+
+    def build_protein_detail_rows(
+        row: dict[str, Any],
+        ingredient_composition: str,
+        classified: dict[str, Any],
+        batch_id: str,
+    ) -> list[dict[str, Any]]:
+        details = _split_source_tokens(classified.get("protein_source_details"))
+        return [
+            {
+                "source_id": row.get("source_id"),
+                "ingredient_name": detail,
+                "batch_id": batch_id,
+            }
+            for detail in details
+        ]
+
+    def build_protein_label_row(
+        *,
+        row: dict[str, Any],
+        ingredient_composition: str,
+        classified: dict[str, Any],
+        batch_id: str,
+        protein_feature_items: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        return {
+            "source_id": row.get("source_id"),
+            "image_name": row.get("image_name"),
+            "image_path": row.get("image_path"),
+            "brand": row.get("brand"),
+            "product_name": row.get("product_name"),
+            "product_key": build_product_key(row.get("brand"), row.get("product_name"), row.get("source_id")),
+            "ingredient_composition": ingredient_composition,
+            "animal_sources": classified.get("animal_sources"),
+            "protein_source_details": classified.get("protein_source_details"),
+            "primary_meat_source_species": classified.get("primary_meat_source_species"),
+            "secondary_meat_source_species": classified.get("secondary_meat_source_species"),
+            "primary_meat_source_type": classified.get("primary_meat_source_type"),
+            "secondary_meat_source_type": classified.get("secondary_meat_source_type"),
+            "protein_source_origin": classified.get("protein_source_origin"),
+            "plant_protein_labels": classified.get("plant_protein_labels"),
+            "batch_id": batch_id,
+        }
+
+    return {
+        "build_product_key": build_product_key,
+        "build_protein_detail_rows": build_protein_detail_rows,
+        "build_protein_label_row": build_protein_label_row,
+        "classify_ingredient_composition": classify_ingredient_composition,
+        "composition_cache_key": composition_cache_key,
+        "resolve_openai_cfg": resolve_openai_cfg,
     }
 
 

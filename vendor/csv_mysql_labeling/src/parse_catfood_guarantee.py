@@ -6,6 +6,8 @@ import mimetypes
 import os
 import re
 import shutil
+import tempfile
+import time
 import uuid
 from dataclasses import dataclass
 from decimal import Decimal, ROUND_HALF_UP
@@ -24,8 +26,13 @@ TABLE_RE = re.compile(r"^[A-Za-z0-9_]+$")
 DEFAULT_BASIS = "干物质"
 DEFAULT_MODEL = "qwen-vl-ocr-latest"
 DEFAULT_ENDPOINT = "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
-DEFAULT_INGREDIENT_HISTORY_DIR = Path("/Users/yoghourt/猫咪健康问题CTQ/history_猫粮成分图")
-DEFAULT_PROCESSED_HISTORY_DIR = Path("/Users/yoghourt/猫咪健康问题CTQ/history_猫粮成分图/猫粮保证值分析")
+DEFAULT_QWEN_TIMEOUT_SECONDS = 300
+DEFAULT_QWEN_MAX_IMAGE_EDGE = 1600
+DEFAULT_QWEN_MAX_IMAGE_BYTES = 2_500_000
+DEFAULT_QWEN_MAX_ATTEMPTS = 3
+DATA_ROOT = Path(os.getenv("CHONGXI_DATA_ROOT", "/home/admin/data/chongxi"))
+DEFAULT_INGREDIENT_HISTORY_DIR = DATA_ROOT / "archive" / "ingredient_images"
+DEFAULT_PROCESSED_HISTORY_DIR = DATA_ROOT / "archive" / "guarantee_images"
 DEFAULT_FAILURE_TABLE = "product_guarantee_parse_failures"
 DECIMAL_2 = Decimal("0.01")
 NULLISH_MARKERS = {"null", "none", "nil", "n/a", "na", "无", "空", "未写", "未提供", "未注明", "未标注"}
@@ -1006,7 +1013,22 @@ def _resolve_qwen_cfg(
     timeout_seconds = float(
         ocr_cfg.get("qwen_timeout_seconds")
         or os.getenv("QWEN_TIMEOUT_SECONDS")
-        or 90
+        or DEFAULT_QWEN_TIMEOUT_SECONDS
+    )
+    max_image_edge = int(
+        ocr_cfg.get("qwen_max_image_edge")
+        or os.getenv("QWEN_MAX_IMAGE_EDGE")
+        or DEFAULT_QWEN_MAX_IMAGE_EDGE
+    )
+    max_image_bytes = int(
+        ocr_cfg.get("qwen_max_image_bytes")
+        or os.getenv("QWEN_MAX_IMAGE_BYTES")
+        or DEFAULT_QWEN_MAX_IMAGE_BYTES
+    )
+    max_attempts = int(
+        ocr_cfg.get("qwen_max_attempts")
+        or os.getenv("QWEN_MAX_ATTEMPTS")
+        or DEFAULT_QWEN_MAX_ATTEMPTS
     )
 
     if not api_key:
@@ -1028,13 +1050,49 @@ def _resolve_qwen_cfg(
         "endpoint": endpoint,
         "model": model or DEFAULT_MODEL,
         "timeout_seconds": max(10.0, timeout_seconds),
+        "max_image_edge": max(600, max_image_edge),
+        "max_image_bytes": max(500_000, max_image_bytes),
+        "max_attempts": max(1, max_attempts),
     }
 
 
-def _to_data_url(image_path: Path) -> str:
+def _to_data_url(
+    image_path: Path,
+    *,
+    max_edge: int = DEFAULT_QWEN_MAX_IMAGE_EDGE,
+    max_bytes: int = DEFAULT_QWEN_MAX_IMAGE_BYTES,
+) -> str:
     raw = image_path.read_bytes()
     mime, _ = mimetypes.guess_type(str(image_path))
     mime = mime or "image/jpeg"
+    if len(raw) > max_bytes or mime.lower() not in {"image/jpeg", "image/png", "image/webp"}:
+        try:
+            from PIL import Image, ImageOps
+
+            with Image.open(image_path) as img:
+                img = ImageOps.exif_transpose(img)
+                if img.mode not in {"RGB", "L"}:
+                    img = img.convert("RGB")
+                width, height = img.size
+                edge = max(width, height)
+                if edge > max_edge:
+                    ratio = max_edge / float(edge)
+                    size = (max(1, int(width * ratio)), max(1, int(height * ratio)))
+                    img = img.resize(size, Image.Resampling.LANCZOS)
+
+                quality = 88
+                while True:
+                    with tempfile.NamedTemporaryFile(suffix=".jpg") as tmp:
+                        img.save(tmp.name, format="JPEG", quality=quality, optimize=True)
+                        tmp.seek(0)
+                        encoded_raw = tmp.read()
+                    if len(encoded_raw) <= max_bytes or quality <= 60:
+                        break
+                    quality -= 8
+            raw = encoded_raw
+            mime = "image/jpeg"
+        except Exception:
+            pass
     b64 = base64.b64encode(raw).decode("ascii")
     return f"data:{mime};base64,{b64}"
 
@@ -1099,6 +1157,11 @@ def _parse_qwen_guarantee_response(raw_text: str, qwen_cfg: Dict[str, Any]) -> D
 
 
 def _call_qwen_guarantee_ocr(image_path: Path, qwen_cfg: Dict[str, Any]) -> Dict[str, Any]:
+    data_url = _to_data_url(
+        image_path,
+        max_edge=int(qwen_cfg.get("max_image_edge") or DEFAULT_QWEN_MAX_IMAGE_EDGE),
+        max_bytes=int(qwen_cfg.get("max_image_bytes") or DEFAULT_QWEN_MAX_IMAGE_BYTES),
+    )
     payload = {
         "model": qwen_cfg["model"],
         "temperature": 0,
@@ -1119,7 +1182,7 @@ def _call_qwen_guarantee_ocr(image_path: Path, qwen_cfg: Dict[str, Any]) -> Dict
                     },
                     {
                         "type": "image_url",
-                        "image_url": {"url": _to_data_url(image_path)},
+                        "image_url": {"url": data_url},
                     },
                 ],
             },
@@ -1131,25 +1194,38 @@ def _call_qwen_guarantee_ocr(image_path: Path, qwen_cfg: Dict[str, Any]) -> Dict
             },
         },
     }
-    req = Request(
-        qwen_cfg["endpoint"],
-        data=safe_json_dumps(payload).encode("utf-8"),
-        headers={
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {qwen_cfg['api_key']}",
-            "User-Agent": "csv-mysql-labeling/qwen-guarantee",
-        },
-        method="POST",
-    )
+    req_body = safe_json_dumps(payload).encode("utf-8")
     start = now_ms()
-    try:
-        with urlopen(req, timeout=float(qwen_cfg["timeout_seconds"])) as resp:
-            raw_text = resp.read().decode("utf-8", errors="ignore")
-    except HTTPError as exc:
-        detail = exc.read().decode("utf-8", errors="ignore")
-        raise RuntimeError(f"Qwen HTTP {exc.code}: {detail or exc.reason}") from exc
-    except URLError as exc:
-        raise RuntimeError(f"Qwen network error: {exc}") from exc
+    max_attempts = int(qwen_cfg.get("max_attempts") or DEFAULT_QWEN_MAX_ATTEMPTS)
+    last_exc: Optional[BaseException] = None
+    raw_text = ""
+    for attempt in range(1, max_attempts + 1):
+        req = Request(
+            qwen_cfg["endpoint"],
+            data=req_body,
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {qwen_cfg['api_key']}",
+                "User-Agent": "csv-mysql-labeling/qwen-guarantee",
+            },
+            method="POST",
+        )
+        try:
+            with urlopen(req, timeout=float(qwen_cfg["timeout_seconds"])) as resp:
+                raw_text = resp.read().decode("utf-8", errors="ignore")
+            break
+        except HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="ignore")
+            if exc.code < 500 or attempt >= max_attempts:
+                raise RuntimeError(f"Qwen HTTP {exc.code}: {detail or exc.reason}") from exc
+            last_exc = exc
+        except (URLError, TimeoutError, OSError) as exc:
+            if attempt >= max_attempts:
+                raise RuntimeError(f"Qwen network error: {exc}") from exc
+            last_exc = exc
+        time.sleep(min(8, 2 ** (attempt - 1)))
+    else:
+        raise RuntimeError(f"Qwen network error: {last_exc}")
 
     parsed = _parse_qwen_guarantee_response(raw_text, qwen_cfg)
     return {
@@ -1828,12 +1904,80 @@ def _sync_parsed_image_fields(
             JOIN `{source_table}` s
               ON s.id = p.source_id
             SET
-              p.image_path = COALESCE(p.image_path, s.image_path),
-              p.image_name = COALESCE(p.image_name, s.image_name),
-              p.file_sha256 = COALESCE(p.file_sha256, s.file_sha256)
-            WHERE p.image_path IS NULL
-               OR p.image_name IS NULL
-               OR p.file_sha256 IS NULL
+              p.image_path = s.image_path,
+              p.image_name = s.image_name,
+              p.file_sha256 = s.file_sha256
+            WHERE COALESCE(p.image_path, '') <> COALESCE(s.image_path, '')
+               OR COALESCE(p.image_name, '') <> COALESCE(s.image_name, '')
+               OR COALESCE(p.file_sha256, '') <> COALESCE(s.file_sha256, '')
+            """
+        )
+    )
+
+
+def _sync_guarantee_identity_fields(
+    conn: Any,
+    source_table: str,
+    parsed_table: str,
+    info_table: str,
+    guarantee_table: str,
+    failure_table: str,
+) -> None:
+    identity_select = f"""
+        SELECT
+          s.id AS source_id,
+          p.id AS parsed_row_id,
+          s.image_name AS image_name,
+          s.file_sha256 AS file_sha256
+        FROM `{source_table}` s
+        LEFT JOIN `{parsed_table}` p
+          ON p.source_id = s.id
+    """
+    conn.execute(
+        text(
+            f"""
+            UPDATE `{info_table}` i
+            JOIN ({identity_select}) x
+              ON x.source_id = i.source_id
+            SET
+              i.parsed_row_id = x.parsed_row_id,
+              i.image_name = x.image_name,
+              i.file_sha256 = x.file_sha256
+            WHERE COALESCE(i.parsed_row_id, 0) <> COALESCE(x.parsed_row_id, 0)
+               OR COALESCE(i.image_name, '') <> COALESCE(x.image_name, '')
+               OR COALESCE(i.file_sha256, '') <> COALESCE(x.file_sha256, '')
+            """
+        )
+    )
+    conn.execute(
+        text(
+            f"""
+            UPDATE `{guarantee_table}` g
+            JOIN ({identity_select}) x
+              ON x.source_id = g.source_id
+            SET
+              g.parsed_row_id = x.parsed_row_id,
+              g.image_name = x.image_name,
+              g.file_sha256 = x.file_sha256
+            WHERE COALESCE(g.parsed_row_id, 0) <> COALESCE(x.parsed_row_id, 0)
+               OR COALESCE(g.image_name, '') <> COALESCE(x.image_name, '')
+               OR COALESCE(g.file_sha256, '') <> COALESCE(x.file_sha256, '')
+            """
+        )
+    )
+    conn.execute(
+        text(
+            f"""
+            UPDATE `{failure_table}` f
+            JOIN ({identity_select}) x
+              ON x.source_id = f.source_id
+            SET
+              f.parsed_row_id = x.parsed_row_id,
+              f.image_name = x.image_name,
+              f.file_sha256 = x.file_sha256
+            WHERE COALESCE(f.parsed_row_id, 0) <> COALESCE(x.parsed_row_id, 0)
+               OR COALESCE(f.image_name, '') <> COALESCE(x.image_name, '')
+               OR COALESCE(f.file_sha256, '') <> COALESCE(x.file_sha256, '')
             """
         )
     )
@@ -1870,6 +2014,14 @@ def parse_catfood_guarantee_values(
             conn=conn,
             source_table=source_table,
             parsed_table=parsed_table,
+        )
+        _sync_guarantee_identity_fields(
+            conn=conn,
+            source_table=source_table,
+            parsed_table=parsed_table,
+            info_table=info_table,
+            guarantee_table=guarantee_table,
+            failure_table=failure_table,
         )
 
     lim = max(1, int(limit))
@@ -2004,19 +2156,18 @@ def parse_catfood_guarantee_values(
         )
         try:
             used_text_fallback = False
-            try:
-                image_path = _resolve_image_path(row_data)
-            except FileNotFoundError:
-                ocr_text = _row_ocr_text(row_data)
-                if not ocr_text:
-                    raise
-                image_hint = _first_non_empty(
-                    row_data.get("source_image_path"),
-                    row_data.get("parsed_image_path"),
-                    row_data.get("image_name"),
-                    f"/tmp/product_guarantee_{source_id}.png",
-                )
-                image_path = Path(image_hint)
+            ocr_text = _row_ocr_text(row_data)
+            if ocr_text:
+                try:
+                    image_path = _resolve_image_path(row_data)
+                except FileNotFoundError:
+                    image_hint = _first_non_empty(
+                        row_data.get("source_image_path"),
+                        row_data.get("parsed_image_path"),
+                        row_data.get("image_name"),
+                        f"/tmp/product_guarantee_{source_id}.png",
+                    )
+                    image_path = Path(image_hint)
                 qwen_res = {
                     "latency_ms": 0,
                     "model_name": "ocr_text_local_rule",
@@ -2025,6 +2176,10 @@ def parse_catfood_guarantee_values(
                 final_image_path = image_path
                 used_text_fallback = True
             else:
+                try:
+                    image_path = _resolve_image_path(row_data)
+                except FileNotFoundError:
+                    raise
                 qwen_res = _call_qwen_guarantee_ocr(image_path=image_path, qwen_cfg=qwen_cfg)
                 final_image_path = image_path
                 if processed_root:

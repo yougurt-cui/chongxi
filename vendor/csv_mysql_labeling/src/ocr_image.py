@@ -1,3 +1,4 @@
+
 from __future__ import annotations
 
 import base64
@@ -27,6 +28,10 @@ from .utils import now_ms, safe_json_dumps, safe_json_loads
 OCR_PROMPT_VERSION = "v1"
 DEFAULT_QWEN_OCR_MODEL = "qwen-vl-ocr-latest"
 DEFAULT_QWEN_ENDPOINT = "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
+DEFAULT_QWEN_TIMEOUT_SECONDS = 300
+DEFAULT_QWEN_MAX_IMAGE_EDGE = 1600
+DEFAULT_QWEN_MAX_IMAGE_BYTES = 2_500_000
+DEFAULT_QWEN_MAX_ATTEMPTS = 3
 
 
 def _normalize_provider(ocr_cfg: Dict[str, Any]) -> str:
@@ -87,7 +92,22 @@ def _resolve_qwen_ocr_cfg(
         ocr_cfg.get("qwen_timeout_seconds")
         or ocr_cfg.get("ocr_timeout_seconds")
         or os.getenv("QWEN_TIMEOUT_SECONDS")
-        or 90
+        or DEFAULT_QWEN_TIMEOUT_SECONDS
+    )
+    max_image_edge = int(
+        ocr_cfg.get("qwen_max_image_edge")
+        or os.getenv("QWEN_MAX_IMAGE_EDGE")
+        or DEFAULT_QWEN_MAX_IMAGE_EDGE
+    )
+    max_image_bytes = int(
+        ocr_cfg.get("qwen_max_image_bytes")
+        or os.getenv("QWEN_MAX_IMAGE_BYTES")
+        or DEFAULT_QWEN_MAX_IMAGE_BYTES
+    )
+    max_attempts = int(
+        ocr_cfg.get("qwen_max_attempts")
+        or os.getenv("QWEN_MAX_ATTEMPTS")
+        or DEFAULT_QWEN_MAX_ATTEMPTS
     )
 
     if not api_key:
@@ -109,6 +129,9 @@ def _resolve_qwen_ocr_cfg(
         "endpoint": endpoint,
         "model": model or DEFAULT_QWEN_OCR_MODEL,
         "timeout_seconds": max(10.0, timeout_seconds),
+        "max_image_edge": max(600, max_image_edge),
+        "max_image_bytes": max(500_000, max_image_bytes),
+        "max_attempts": max(1, max_attempts),
     }
 
 
@@ -152,6 +175,53 @@ def _to_data_url(image_path: Path) -> tuple[str, str]:
 
 def _file_sha256(image_path: Path) -> str:
     return hashlib.sha256(image_path.read_bytes()).hexdigest()
+
+
+def _encode_image_for_qwen(
+    image_path: Path,
+    *,
+    max_edge: int = DEFAULT_QWEN_MAX_IMAGE_EDGE,
+    max_bytes: int = DEFAULT_QWEN_MAX_IMAGE_BYTES,
+) -> tuple[str, str]:
+    """Return a compact data URL for Qwen OCR while preserving the original file hash."""
+    raw = image_path.read_bytes()
+    original_sha256 = hashlib.sha256(raw).hexdigest()
+    mime, _ = mimetypes.guess_type(str(image_path))
+    mime = mime or "image/jpeg"
+
+    if len(raw) <= max_bytes and mime.lower() in {"image/jpeg", "image/png", "image/webp"}:
+        b64 = base64.b64encode(raw).decode("ascii")
+        return f"data:{mime};base64,{b64}", original_sha256
+
+    try:
+        from PIL import Image, ImageOps
+    except Exception:
+        b64 = base64.b64encode(raw).decode("ascii")
+        return f"data:{mime};base64,{b64}", original_sha256
+
+    with Image.open(image_path) as img:
+        img = ImageOps.exif_transpose(img)
+        if img.mode not in {"RGB", "L"}:
+            img = img.convert("RGB")
+        width, height = img.size
+        edge = max(width, height)
+        if edge > max_edge:
+            ratio = max_edge / float(edge)
+            size = (max(1, int(width * ratio)), max(1, int(height * ratio)))
+            img = img.resize(size, Image.Resampling.LANCZOS)
+
+        quality = 88
+        while True:
+            with tempfile.NamedTemporaryFile(suffix=".jpg") as tmp:
+                img.save(tmp.name, format="JPEG", quality=quality, optimize=True)
+                tmp.seek(0)
+                encoded_raw = tmp.read()
+            if len(encoded_raw) <= max_bytes or quality <= 60:
+                break
+            quality -= 8
+
+    b64 = base64.b64encode(encoded_raw).decode("ascii")
+    return f"data:image/jpeg;base64,{b64}", original_sha256
 
 
 def _safe_table_name(name: str) -> str:
@@ -269,7 +339,11 @@ def _call_qwen_ocr(
     image_path: Path,
     qwen_cfg: Dict[str, Any],
 ) -> Dict[str, Any]:
-    data_url, _ = _to_data_url(image_path)
+    data_url, _ = _encode_image_for_qwen(
+        image_path,
+        max_edge=int(qwen_cfg.get("max_image_edge") or DEFAULT_QWEN_MAX_IMAGE_EDGE),
+        max_bytes=int(qwen_cfg.get("max_image_bytes") or DEFAULT_QWEN_MAX_IMAGE_BYTES),
+    )
     payload = {
         "model": qwen_cfg["model"],
         "temperature": 0,
@@ -287,25 +361,38 @@ def _call_qwen_ocr(
             },
         ],
     }
-    req = Request(
-        qwen_cfg["endpoint"],
-        data=safe_json_dumps(payload).encode("utf-8"),
-        headers={
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {qwen_cfg['api_key']}",
-            "User-Agent": "csv-mysql-labeling/qwen-ocr",
-        },
-        method="POST",
-    )
+    req_body = safe_json_dumps(payload).encode("utf-8")
     start = now_ms()
-    try:
-        with urlopen(req, timeout=float(qwen_cfg["timeout_seconds"])) as resp:
-            raw_text = resp.read().decode("utf-8", errors="ignore")
-    except HTTPError as exc:
-        detail = exc.read().decode("utf-8", errors="ignore")
-        raise RuntimeError(f"Qwen OCR HTTP {exc.code}: {detail or exc.reason}") from exc
-    except URLError as exc:
-        raise RuntimeError(f"Qwen OCR network error: {exc}") from exc
+    max_attempts = int(qwen_cfg.get("max_attempts") or DEFAULT_QWEN_MAX_ATTEMPTS)
+    last_exc: Optional[BaseException] = None
+    raw_text = ""
+    for attempt in range(1, max_attempts + 1):
+        req = Request(
+            qwen_cfg["endpoint"],
+            data=req_body,
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {qwen_cfg['api_key']}",
+                "User-Agent": "csv-mysql-labeling/qwen-ocr",
+            },
+            method="POST",
+        )
+        try:
+            with urlopen(req, timeout=float(qwen_cfg["timeout_seconds"])) as resp:
+                raw_text = resp.read().decode("utf-8", errors="ignore")
+            break
+        except HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="ignore")
+            if exc.code < 500 or attempt >= max_attempts:
+                raise RuntimeError(f"Qwen OCR HTTP {exc.code}: {detail or exc.reason}") from exc
+            last_exc = exc
+        except (URLError, TimeoutError, OSError) as exc:
+            if attempt >= max_attempts:
+                raise RuntimeError(f"Qwen OCR network error: {exc}") from exc
+            last_exc = exc
+        time.sleep(min(8, 2 ** (attempt - 1)))
+    else:
+        raise RuntimeError(f"Qwen OCR network error: {last_exc}")
 
     obj = safe_json_loads(raw_text)
     if not isinstance(obj, dict):

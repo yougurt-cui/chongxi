@@ -1,12 +1,13 @@
-from __future__ import annotations
 
 import json
 import re
 import uuid
+from functools import lru_cache
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+import yaml
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
@@ -129,17 +130,19 @@ IMAGE_NAME_BRAND_ALIAS_GROUPS: Sequence[Tuple[str, Sequence[str]]] = (
     ("鲜朗", ("鲜朗", "鲜郎")),
     ("卫仕", ("卫仕", "卫士")),
     ("宽福", ("宽福", "爱初KUANFU", "KUANFU", "爱初宽福")),
-    ("go", ("go", "go!")),
+    ("GO!", ("go", "go!")),
 )
 IMAGE_NAME_EXTRA_BRANDS = (
     "百利",
     "霸弗",
+    "好主人",
     "金故",
     "普瑞纳",
     "宽福",
     "猫乐适",
     "宠搭",
 )
+BRAND_MASTER_PATH = Path(__file__).resolve().parents[1] / "config" / "catfood_brand_master.yaml"
 IMAGE_NAME_GENERIC_PRODUCT_NAMES = {
     "猫粮",
     "配料表",
@@ -271,6 +274,32 @@ def ensure_parsed_table(engine: Engine, table_name: str = "catfood_ingredient_oc
             conn.execute(text(f"ALTER TABLE `{table_name}` ADD INDEX idx_brand (brand)"))
 
 
+def sync_parsed_source_identity(
+    engine: Engine,
+    source_table: str = "catfood_ingredient_ocr_results",
+    target_table: str = "catfood_ingredient_ocr_parsed",
+) -> int:
+    source_table = _safe_table(source_table)
+    target_table = _safe_table(target_table)
+    ensure_parsed_table(engine, target_table)
+    update_sql = f"""
+    UPDATE `{target_table}` t
+    JOIN `{source_table}` s
+      ON s.id = t.source_id
+    SET
+      t.image_path = s.image_path,
+      t.image_name = s.image_name,
+      t.file_sha256 = s.file_sha256
+    WHERE
+      COALESCE(t.image_path, '') <> COALESCE(s.image_path, '')
+      OR COALESCE(t.image_name, '') <> COALESCE(s.image_name, '')
+      OR COALESCE(t.file_sha256, '') <> COALESCE(s.file_sha256, '')
+    """
+    with engine.begin() as conn:
+        result = conn.execute(text(update_sql))
+    return int(result.rowcount or 0)
+
+
 def _normalize(s: str) -> str:
     out = (s or "").strip()
     out = out.replace("：", ":")
@@ -337,6 +366,8 @@ def _strip_image_sequence_suffix(stem: str) -> str:
 
 
 def _looks_like_camera_filename(stem: Optional[str]) -> bool:
+    if re.search(r"[\u4e00-\u9fff]", str(stem or "")):
+        return False
     compact = re.sub(r"[^0-9A-Za-z]+", "", str(stem or ""))
     if not compact:
         return False
@@ -348,6 +379,39 @@ def _image_name_group_key(image_name: Optional[str]) -> Optional[str]:
     if not stem or _looks_like_camera_filename(stem):
         return None
     return _normalize_brand_key(stem) or None
+
+
+@lru_cache(maxsize=1)
+def _load_brand_master_aliases() -> Tuple[Tuple[str, str], ...]:
+    if not BRAND_MASTER_PATH.exists():
+        return tuple()
+    data = yaml.safe_load(BRAND_MASTER_PATH.read_text(encoding="utf-8")) or {}
+    aliases: List[Tuple[str, str]] = []
+    seen = set()
+
+    def add(alias: Any, canonical: Any) -> None:
+        alias_text = _normalize_product_text(alias)
+        canonical_text = _normalize_product_text(canonical)
+        if not alias_text or not canonical_text:
+            return
+        key = (_normalize_brand_key(alias_text), _normalize_brand_key(canonical_text))
+        if key in seen:
+            return
+        seen.add(key)
+        aliases.append((alias_text, canonical_text))
+
+    for row in data.get("brands") or []:
+        if _normalize_product_text(row.get("status") or "active") != "active":
+            continue
+        canonical = row.get("standard_name")
+        add(canonical, canonical)
+        for alias in row.get("aliases") or []:
+            add(alias, canonical)
+
+    for row in data.get("alias_mappings") or []:
+        add(row.get("alias"), row.get("standard_name"))
+
+    return tuple(aliases)
 
 
 def _build_image_name_brand_candidates(known_brands: Sequence[str]) -> List[Tuple[str, str, str]]:
@@ -372,6 +436,9 @@ def _build_image_name_brand_candidates(known_brands: Sequence[str]) -> List[Tupl
         for alias in (default_canonical, *aliases):
             add(alias, canonical)
         add(canonical, canonical)
+
+    for alias, canonical in _load_brand_master_aliases():
+        add(alias, canonical)
 
     for brand in sorted(normalized_brands, key=lambda value: (len(_normalize_brand_key(value)), len(value)), reverse=True):
         add(brand, brand)
@@ -1299,6 +1366,7 @@ def parse_catfood_ingredient_ocr_json(
     source_table = _safe_table(source_table)
     target_table = _safe_table(target_table)
     ensure_parsed_table(engine, target_table)
+    sync_parsed_source_identity(engine, source_table=source_table, target_table=target_table)
 
     lim = max(1, int(limit))
     if incremental_only:

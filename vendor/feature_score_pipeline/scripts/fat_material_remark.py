@@ -53,6 +53,19 @@ def normalize_nullable_text(value):
     return value or None
 
 
+def mysql_safe_value(value):
+    if value is None:
+        return None
+    try:
+        if pd.isna(value):
+            return None
+    except TypeError:
+        pass
+    if isinstance(value, float) and (value != value or value in (float("inf"), float("-inf"))):
+        return None
+    return value
+
+
 def build_product_key(row):
     brand = normalize_nullable_text(row.get("brand"))
     product_name = normalize_nullable_text(row.get("product_name"))
@@ -546,7 +559,7 @@ def upsert_results(conn, df_result):
     """
 
     data = [
-        (
+        tuple(mysql_safe_value(value) for value in (
             row["id"],
             row["source_row_id"],
             row["source_id"],
@@ -576,7 +589,7 @@ def upsert_results(conn, df_result):
             row["guarantee_crude_fat_raw_text"],
             row["needs_review"],
             row["review_reason"],
-        )
+        ))
         for _, row in df_result.iterrows()
     ]
 

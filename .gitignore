@@ -14,6 +14,7 @@ htmlcov/
 .venv/
 venv/
 env/
+node_modules/
 
 # macOS / IDE
 .DS_Store
@@ -32,9 +33,14 @@ vendor/csv_mysql_labeling/history/
 vendor/process_signal_pipeline/catfood_process_signal_artifacts/
 *.log
 *.sqlite
+*.sqlite3
 *.db
+var/
 
 # Large/raw import files
+=0.10.0
+Python-*.tgz
+get-pip.py
 *.csv
 *.xlsx
 *.xls

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import fnmatch
+import os
 import re
 import shutil
 import time
@@ -10,11 +11,18 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 
-from app.vendor.csv_mysql_labeling.src.db import make_engine
-from app.vendor.csv_mysql_labeling.src.ocr_image import run_ocr_image, update_ocr_image_record_path
-from app.vendor.csv_mysql_labeling.src.parse_catfood_guarantee import parse_catfood_guarantee_values
-from app.vendor.csv_mysql_labeling.src.parse_catfood_ocr import parse_catfood_ingredient_ocr_json
-from app.vendor.csv_mysql_labeling.src.settings import load_settings
+try:
+    from app.vendor.csv_mysql_labeling.src.db import make_engine
+    from app.vendor.csv_mysql_labeling.src.ocr_image import run_ocr_image, update_ocr_image_record_path
+    from app.vendor.csv_mysql_labeling.src.parse_catfood_guarantee import parse_catfood_guarantee_values
+    from app.vendor.csv_mysql_labeling.src.parse_catfood_ocr import parse_catfood_ingredient_ocr_json
+    from app.vendor.csv_mysql_labeling.src.settings import load_settings
+except ModuleNotFoundError:
+    from vendor.csv_mysql_labeling.src.db import make_engine
+    from vendor.csv_mysql_labeling.src.ocr_image import run_ocr_image, update_ocr_image_record_path
+    from vendor.csv_mysql_labeling.src.parse_catfood_guarantee import parse_catfood_guarantee_values
+    from vendor.csv_mysql_labeling.src.parse_catfood_ocr import parse_catfood_ingredient_ocr_json
+    from vendor.csv_mysql_labeling.src.settings import load_settings
 
 
 DEFAULT_IMAGE_GLOB = "*.jpg,*.jpeg,*.png,*.bmp,*.webp,*.heic,*.heif,*.tif,*.tiff,*.jfif"
@@ -22,8 +30,10 @@ DEFAULT_OCR_TABLE = "catfood_ingredient_ocr_results"
 DEFAULT_PARSED_TABLE = "catfood_ingredient_ocr_parsed"
 DEFAULT_PRODUCT_INFO_TABLE = "product_info"
 DEFAULT_GUARANTEE_TABLE = "product_guarantee"
-DEFAULT_INGREDIENT_HISTORY_DIR = Path("/Users/yoghourt/猫咪健康问题CTQ/history_猫粮成分图")
-DEFAULT_GUARANTEE_HISTORY_DIR = Path("/Users/yoghourt/猫咪健康问题CTQ/history_猫粮成分图/猫粮保证值分析")
+DATA_ROOT = Path(os.getenv("CHONGXI_DATA_ROOT", "/home/admin/data/chongxi"))
+DEFAULT_IMAGE_DIR = DATA_ROOT / "images"
+DEFAULT_INGREDIENT_HISTORY_DIR = DATA_ROOT / "archive" / "ingredient_images"
+DEFAULT_GUARANTEE_HISTORY_DIR = DATA_ROOT / "archive" / "guarantee_images"
 
 
 def load_default_db_config() -> Dict[str, Any]:

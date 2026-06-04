@@ -27,13 +27,13 @@ APP_DIR = PROJECT_ROOT / "apps"
 CSV_LABELING_PROJECT = Path(
     os.getenv(
         "CSV_LABELING_PROJECT",
-        "/Users/yoghourt/anaconda3/envs/comment_labeler_env/csv_mysql_labeling_project",
+        "/home/admin/projects/chongxi/vendor/csv_mysql_labeling",
     )
 )
 CSV_LABELING_PYTHON = Path(
     os.getenv(
         "CSV_LABELING_PYTHON",
-        "/Users/yoghourt/anaconda3/envs/comment_labeler_env/bin/python",
+        "/home/admin/projects/chongxi/.venv/bin/python",
     )
 )
 

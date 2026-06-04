@@ -7,7 +7,6 @@ Outputs:
 
 The SQL uses INSERT IGNORE with a unique hash so it is idempotent.
 """
-from __future__ import annotations
 
 import argparse
 import csv
