@@ -2,7 +2,10 @@
 
 
 from concurrent.futures import ThreadPoolExecutor
+from decimal import Decimal
+from hashlib import md5
 from datetime import datetime
+from datetime import date
 from threading import Lock
 from uuid import uuid4
 
@@ -17,6 +20,7 @@ from services.consumer_analysis_service import (
     engineer_consumer_features,
     structure_consumer_disease_clues,
 )
+from vendor.feature_score_pipeline.scripts.brand_normalizer import canonicalize_brand, infer_brand_from_text, normalize_text
 
 
 consumer_api = Blueprint("consumer_api", __name__, url_prefix="/api/consumer")
@@ -30,6 +34,9 @@ MAX_DISEASE_STRUCTURE_BATCH_SIZE = 20
 DEFAULT_DISEASE_STRUCTURE_MAX_ERRORS = 100
 MAX_DISEASE_STRUCTURE_RETRIES = 1
 DISEASE_STRUCTURE_CURSOR_TABLE = "cat_disease_structure_cursor"
+DISEASE_REVIEW_SOURCE_DB = "csv_labeling"
+DISEASE_REVIEW_SOURCE_TABLE = "cat_disease_clue_candidates"
+DISEASE_REVIEW_TARGET_TABLE = "cat_disease_clues"
 _disease_structure_executor = ThreadPoolExecutor(max_workers=1)
 _disease_structure_jobs = {}
 _disease_structure_jobs_lock = Lock()
@@ -144,6 +151,124 @@ def _mysql_url(db_config: dict) -> str:
 def _get_engine(db_payload: dict | None = None):
     db_config = app_config.get_mysql_config(payload_db=db_payload)
     return create_engine(_mysql_url(db_config), pool_pre_ping=True, future=True)
+
+
+def _get_csv_engine(db_payload: dict | None = None):
+    db_config = app_config.get_mysql_config(database=DISEASE_REVIEW_SOURCE_DB, payload_db=db_payload)
+    return create_engine(_mysql_url(db_config), pool_pre_ping=True, future=True)
+
+
+def _get_feature_engine(db_payload: dict | None = None):
+    db_config = app_config.get_feature_mysql_config(payload_db=db_payload)
+    return create_engine(_mysql_url(db_config), pool_pre_ping=True, future=True)
+
+
+def _json_value(value):
+    if isinstance(value, Decimal):
+        return float(value)
+    if isinstance(value, (datetime, date)):
+        return value.isoformat(sep=" ") if isinstance(value, datetime) else value.isoformat()
+    return value
+
+
+def _clean_field(value, max_length: int | None = None) -> str:
+    text_value = str(value or "").strip()
+    if max_length is not None:
+        return text_value[:max_length]
+    return text_value
+
+
+def _disease_case_id(values: dict) -> str:
+    raw = "|".join(
+        [
+            _clean_field(values.get("comment_hash")),
+            _clean_field(values.get("brand")),
+            _clean_field(values.get("comment_text")),
+            _clean_field(values.get("primary_symptom")),
+            _clean_field(values.get("secondary_symptom")),
+            _clean_field(values.get("direct")),
+        ]
+    )
+    return md5(raw.encode("utf-8")).hexdigest()
+
+
+def _standardize_disease_brand(candidate: dict, override: str | None = None) -> str:
+    brand_text = _clean_field(override if override is not None else candidate.get("brand_name"))
+    if brand_text:
+        parts = [part.strip() for part in brand_text.replace("，", ",").replace("、", ",").split(",") if part.strip()]
+        canonical_parts = []
+        seen = set()
+        for part in parts or [brand_text]:
+            canonical = canonicalize_brand(part)
+            key = canonical.lower()
+            if canonical and key not in seen:
+                seen.add(key)
+                canonical_parts.append(canonical)
+        if canonical_parts:
+            return ",".join(canonical_parts)
+    inferred = infer_brand_from_text(
+        candidate.get("search_keyword"),
+        candidate.get("mentioned_brands"),
+        candidate.get("review_text"),
+    )
+    return inferred or brand_text
+
+
+def _candidate_to_clue_values(candidate: dict, payload: dict | None = None) -> dict:
+    payload = dict(payload or {})
+    brand = _standardize_disease_brand(candidate, payload.get("brand") if "brand" in payload else None)
+    values = {
+        "comment_hash": candidate.get("comment_hash"),
+        "brand": _clean_field(brand, 32),
+        "comment_text": _clean_field(payload.get("comment_text", candidate.get("review_text"))),
+        "primary_symptom": _clean_field(payload.get("primary_symptom", candidate.get("symptom_category")), 64),
+        "secondary_symptom": _clean_field(payload.get("secondary_symptom", candidate.get("symptom_name")), 64),
+        "direct": _clean_field(payload.get("direct", candidate.get("effect_direction")), 16),
+        "event_date_raw": _clean_field(payload.get("event_date_raw", candidate.get("review_date_raw")), 16) or None,
+        "event_date": payload.get("event_date", candidate.get("review_date")),
+    }
+    if isinstance(values["event_date"], str):
+        values["event_date"] = values["event_date"].strip() or None
+    values["case_id"] = _disease_case_id(values)
+    return values
+
+
+def _serialize_disease_candidate(row: dict, target_case_ids: set[str] | None = None) -> dict:
+    item = {key: _json_value(value) for key, value in row.items()}
+    clue_values = _candidate_to_clue_values(row)
+    item["raw_brand_name"] = item.get("brand_name")
+    item["brand_name"] = clue_values["brand"]
+    item["target_case_id"] = clue_values["case_id"]
+    item["target_exists"] = clue_values["case_id"] in (target_case_ids or set())
+    return item
+
+
+def _ensure_disease_clues_table(engine) -> None:
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                f"""
+                CREATE TABLE IF NOT EXISTS `{DISEASE_REVIEW_TARGET_TABLE}` (
+                    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+                    case_id VARCHAR(32) NOT NULL,
+                    brand VARCHAR(32) NOT NULL,
+                    comment_text TEXT NOT NULL,
+                    primary_symptom VARCHAR(64) NOT NULL,
+                    secondary_symptom VARCHAR(64) NOT NULL,
+                    direct VARCHAR(16) NOT NULL,
+                    event_date_raw VARCHAR(16),
+                    event_date DATE,
+                    imported_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE KEY uk_case_id (case_id),
+                    KEY idx_brand (brand),
+                    KEY idx_primary_symptom (primary_symptom),
+                    KEY idx_secondary_symptom (secondary_symptom),
+                    KEY idx_direct (direct),
+                    KEY idx_event_date (event_date)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                """
+            )
+        )
 
 
 def _ensure_disease_cursor_table(engine) -> None:
@@ -431,6 +556,342 @@ def consumer_disease_structure():
     _disease_structure_executor.submit(_run_disease_structure_job, job_id, payload)
     with _disease_structure_jobs_lock:
         return jsonify(_serialize_disease_structure_job(job_id, _disease_structure_jobs[job_id])), 202
+
+
+@consumer_api.get("/disease/reviews")
+def consumer_disease_reviews():
+    status = (request.args.get("status") or "PENDING").strip().upper()
+    if status not in {"PENDING", "APPROVED", "REJECTED", "ALL"}:
+        return jsonify({"ok": False, "error": "unsupported status"}), 400
+    limit = _clamp_int(request.args.get("limit"), 100, 1, 500)
+    offset = _clamp_int(request.args.get("offset"), 0, 0, 1_000_000_000)
+    brand = _clean_field(request.args.get("brand"))
+    symptom = _clean_field(request.args.get("symptom"))
+    min_confidence = request.args.get("min_confidence")
+    max_confidence = request.args.get("max_confidence")
+    source_engine = _get_csv_engine()
+    target_engine = _get_feature_engine()
+    try:
+        _ensure_disease_clues_table(target_engine)
+        filters = []
+        params = {"limit": limit, "offset": offset}
+        if status != "ALL":
+            filters.append("review_status = :status")
+            params["status"] = status
+        if symptom:
+            filters.append("(symptom_category LIKE :symptom OR symptom_name LIKE :symptom)")
+            params["symptom"] = f"%{symptom}%"
+        if min_confidence not in (None, ""):
+            filters.append("confidence >= :min_confidence")
+            params["min_confidence"] = float(min_confidence)
+        if max_confidence not in (None, ""):
+            filters.append("confidence <= :max_confidence")
+            params["max_confidence"] = float(max_confidence)
+        where_sql = f"WHERE {' AND '.join(filters)}" if filters else ""
+        with source_engine.connect() as conn:
+            if brand:
+                raw_rows = conn.execute(
+                    text(
+                        f"""
+                        SELECT *
+                        FROM `{DISEASE_REVIEW_SOURCE_TABLE}`
+                        {where_sql}
+                        ORDER BY id ASC
+                        """
+                    ),
+                    params,
+                ).mappings().fetchall()
+                brand_key = normalize_text(canonicalize_brand(brand))
+                matched_rows = [
+                    row
+                    for row in raw_rows
+                    if brand_key and brand_key in normalize_text(_standardize_disease_brand(dict(row)))
+                ]
+                total = len(matched_rows)
+                rows = matched_rows[offset : offset + limit]
+            else:
+                total = conn.execute(
+                    text(
+                        f"""
+                        SELECT COUNT(*)
+                        FROM `{DISEASE_REVIEW_SOURCE_TABLE}`
+                        {where_sql}
+                        """
+                    ),
+                    params,
+                ).scalar()
+                rows = conn.execute(
+                    text(
+                        f"""
+                        SELECT *
+                        FROM `{DISEASE_REVIEW_SOURCE_TABLE}`
+                        {where_sql}
+                        ORDER BY id ASC
+                        LIMIT :limit OFFSET :offset
+                        """
+                    ),
+                    params,
+                ).mappings().fetchall()
+            status_rows = conn.execute(
+                text(
+                    f"""
+                    SELECT review_status, COUNT(*) AS cnt
+                    FROM `{DISEASE_REVIEW_SOURCE_TABLE}`
+                    GROUP BY review_status
+                    """
+                )
+            ).mappings().fetchall()
+
+        target_case_ids = {_candidate_to_clue_values(dict(row))["case_id"] for row in rows}
+        existing_case_ids: set[str] = set()
+        if target_case_ids:
+            placeholders = ", ".join(f":case_id_{idx}" for idx, _ in enumerate(target_case_ids))
+            case_params = {f"case_id_{idx}": case_id for idx, case_id in enumerate(target_case_ids)}
+            with target_engine.connect() as conn:
+                existing_case_ids = {
+                    item[0]
+                    for item in conn.execute(
+                        text(
+                            f"""
+                            SELECT case_id
+                            FROM `{DISEASE_REVIEW_TARGET_TABLE}`
+                            WHERE case_id IN ({placeholders})
+                            """
+                        ),
+                        case_params,
+                    ).fetchall()
+                }
+
+        return jsonify(
+            {
+                "ok": True,
+                "items": [_serialize_disease_candidate(dict(row), existing_case_ids) for row in rows],
+                "status_counts": {row["review_status"]: int(row["cnt"]) for row in status_rows},
+                "total": int(total or 0),
+                "limit": limit,
+                "offset": offset,
+            }
+        )
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    finally:
+        source_engine.dispose()
+        target_engine.dispose()
+
+
+@consumer_api.get("/disease/reviews/options")
+def consumer_disease_review_options():
+    source_engine = _get_csv_engine()
+    try:
+        with source_engine.connect() as conn:
+            raw_brands = [
+                row[0]
+                for row in conn.execute(
+                    text(
+                        f"""
+                        SELECT DISTINCT brand_name
+                        FROM `{DISEASE_REVIEW_SOURCE_TABLE}`
+                        WHERE brand_name IS NOT NULL AND TRIM(brand_name) <> ''
+                        ORDER BY brand_name ASC
+                        LIMIT 500
+                        """
+                    )
+                ).fetchall()
+            ]
+            brands = sorted(
+                {
+                    canonicalize_brand(part.strip())
+                    for value in raw_brands
+                    for part in str(value or "").replace("，", ",").replace("、", ",").split(",")
+                    if part.strip()
+                }
+            )
+            categories = [
+                row[0]
+                for row in conn.execute(
+                    text(
+                        f"""
+                        SELECT DISTINCT symptom_category
+                        FROM `{DISEASE_REVIEW_SOURCE_TABLE}`
+                        WHERE symptom_category IS NOT NULL AND TRIM(symptom_category) <> ''
+                        ORDER BY symptom_category ASC
+                        LIMIT 200
+                        """
+                    )
+                ).fetchall()
+            ]
+            symptoms = [
+                row[0]
+                for row in conn.execute(
+                    text(
+                        f"""
+                        SELECT DISTINCT symptom_name
+                        FROM `{DISEASE_REVIEW_SOURCE_TABLE}`
+                        WHERE symptom_name IS NOT NULL AND TRIM(symptom_name) <> ''
+                        ORDER BY symptom_name ASC
+                        LIMIT 500
+                        """
+                    )
+                ).fetchall()
+            ]
+            pairs = conn.execute(
+                text(
+                    f"""
+                    SELECT DISTINCT symptom_category, symptom_name
+                    FROM `{DISEASE_REVIEW_SOURCE_TABLE}`
+                    WHERE symptom_category IS NOT NULL
+                      AND TRIM(symptom_category) <> ''
+                      AND symptom_name IS NOT NULL
+                      AND TRIM(symptom_name) <> ''
+                    ORDER BY symptom_category ASC, symptom_name ASC
+                    """
+                )
+            ).fetchall()
+        symptom_map: dict[str, list[str]] = {}
+        for category, symptom_name in pairs:
+            symptom_map.setdefault(str(category), [])
+            if symptom_name not in symptom_map[str(category)]:
+                symptom_map[str(category)].append(str(symptom_name))
+        return jsonify(
+            {
+                "ok": True,
+                "brands": brands,
+                "categories": categories,
+                "symptoms": symptoms,
+                "symptom_map": symptom_map,
+            }
+        )
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    finally:
+        source_engine.dispose()
+
+
+@consumer_api.post("/disease/reviews/<int:candidate_id>/approve")
+def consumer_disease_review_approve(candidate_id: int):
+    payload = request.get_json(silent=True) or {}
+    source_engine = _get_csv_engine(payload.get("db"))
+    target_engine = _get_feature_engine(payload.get("db"))
+    try:
+        _ensure_disease_clues_table(target_engine)
+        with source_engine.connect() as conn:
+            candidate = conn.execute(
+                text(
+                    f"""
+                    SELECT *
+                    FROM `{DISEASE_REVIEW_SOURCE_TABLE}`
+                    WHERE id = :candidate_id
+                    """
+                ),
+                {"candidate_id": candidate_id},
+            ).mappings().first()
+        if not candidate:
+            return jsonify({"ok": False, "error": f"candidate not found: {candidate_id}"}), 404
+
+        candidate_dict = dict(candidate)
+        clue_values = _candidate_to_clue_values(candidate_dict, payload)
+        required_fields = ["brand", "comment_text", "primary_symptom", "secondary_symptom", "direct"]
+        missing = [field for field in required_fields if not clue_values.get(field)]
+        if missing:
+            return jsonify({"ok": False, "error": f"missing required fields: {', '.join(missing)}"}), 400
+
+        with target_engine.begin() as conn:
+            result = conn.execute(
+                text(
+                    f"""
+                    INSERT INTO `{DISEASE_REVIEW_TARGET_TABLE}` (
+                        case_id,
+                        brand,
+                        comment_text,
+                        primary_symptom,
+                        secondary_symptom,
+                        direct,
+                        event_date_raw,
+                        event_date
+                    )
+                    VALUES (
+                        :case_id,
+                        :brand,
+                        :comment_text,
+                        :primary_symptom,
+                        :secondary_symptom,
+                        :direct,
+                        :event_date_raw,
+                        :event_date
+                    )
+                    ON DUPLICATE KEY UPDATE
+                        brand = VALUES(brand),
+                        comment_text = VALUES(comment_text),
+                        primary_symptom = VALUES(primary_symptom),
+                        secondary_symptom = VALUES(secondary_symptom),
+                        direct = VALUES(direct),
+                        event_date_raw = VALUES(event_date_raw),
+                        event_date = VALUES(event_date)
+                    """
+                ),
+                clue_values,
+            )
+
+        reviewer_note = _clean_field(payload.get("reviewer_note") or payload.get("note"))
+        reviewer = _clean_field(payload.get("reviewer"))
+        note_parts = [part for part in [reviewer, reviewer_note] if part]
+        note = "｜".join(note_parts) or "pipeline-review-page approved"
+        with source_engine.begin() as conn:
+            conn.execute(
+                text(
+                    f"""
+                    UPDATE `{DISEASE_REVIEW_SOURCE_TABLE}`
+                    SET review_status = 'APPROVED',
+                        reviewer_note = :reviewer_note,
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE id = :candidate_id
+                    """
+                ),
+                {"candidate_id": candidate_id, "reviewer_note": note},
+            )
+
+        return jsonify(
+            {
+                "ok": True,
+                "candidate_id": candidate_id,
+                "case_id": clue_values["case_id"],
+                "target_table": f"protein_feature_platform.{DISEASE_REVIEW_TARGET_TABLE}",
+                "affected_rows": int(result.rowcount or 0),
+            }
+        )
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    finally:
+        source_engine.dispose()
+        target_engine.dispose()
+
+
+@consumer_api.post("/disease/reviews/<int:candidate_id>/reject")
+def consumer_disease_review_reject(candidate_id: int):
+    payload = request.get_json(silent=True) or {}
+    note = _clean_field(payload.get("reviewer_note") or payload.get("note") or "pipeline-review-page rejected")
+    source_engine = _get_csv_engine(payload.get("db"))
+    try:
+        with source_engine.begin() as conn:
+            result = conn.execute(
+                text(
+                    f"""
+                    UPDATE `{DISEASE_REVIEW_SOURCE_TABLE}`
+                    SET review_status = 'REJECTED',
+                        reviewer_note = :reviewer_note,
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE id = :candidate_id
+                    """
+                ),
+                {"candidate_id": candidate_id, "reviewer_note": note},
+            )
+        if not result.rowcount:
+            return jsonify({"ok": False, "error": f"candidate not found: {candidate_id}"}), 404
+        return jsonify({"ok": True, "candidate_id": candidate_id, "status": "REJECTED"})
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    finally:
+        source_engine.dispose()
 
 
 @consumer_api.post("/materials/scores/calculate")

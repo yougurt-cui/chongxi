@@ -27,7 +27,7 @@
       color: var(--ink);
     }
     a { color: inherit; text-decoration: none; }
-    button, textarea, input { font: inherit; }
+    button, textarea, input, select { font: inherit; }
     .shell {
       width: min(1180px, calc(100% - 40px));
       margin: 0 auto;
@@ -279,7 +279,7 @@
       gap: 10px;
       margin-top: 14px;
     }
-    textarea, input {
+    textarea, input, select {
       width: 100%;
       border: 1px solid var(--line);
       border-radius: 8px;
@@ -288,11 +288,43 @@
       background: #fff;
       color: var(--ink);
     }
+    input[type="checkbox"] {
+      width: auto;
+      min-width: 16px;
+      height: 16px;
+      padding: 0;
+    }
     .cell-input {
-      min-width: 160px;
+      min-width: 112px;
       min-height: 34px;
       padding: 7px 9px;
       font-size: 13px;
+    }
+    .compact-table {
+      min-width: 1260px;
+      table-layout: fixed;
+    }
+    .compact-table th,
+    .compact-table td {
+      padding: 9px 8px;
+    }
+    .select-col { width: 46px; }
+    .candidate-col { width: 74px; }
+    .brand-col { width: 126px; }
+    .symptom-col { width: 132px; }
+    .direct-col { width: 96px; }
+    .evidence-col { width: 430px; }
+    .action-col { width: 270px; }
+    .compact-table .row-actions { min-width: 248px; }
+    .compact-table .cell-input {
+      min-width: 0;
+      width: 100%;
+    }
+    .compact-table .payload-cell {
+      max-width: 430px;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+      line-height: 1.55;
     }
     .section[hidden] { display: none; }
     textarea { min-height: 172px; resize: vertical; line-height: 1.55; }
@@ -301,6 +333,34 @@
       flex-wrap: wrap;
       gap: 9px;
       margin-top: 12px;
+    }
+    .filters {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(120px, 1fr));
+      gap: 10px;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+      padding: 14px;
+      margin-bottom: 18px;
+      align-items: end;
+    }
+    .field-label {
+      display: block;
+      margin-bottom: 6px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 800;
+    }
+    .pager {
+      display: flex;
+      justify-content: flex-end;
+      align-items: center;
+      gap: 8px;
+      padding: 12px;
+      border-top: 1px solid var(--line);
+      background: var(--panel-soft);
     }
     .empty {
       text-align: center;
@@ -320,6 +380,7 @@
     .toast.error { background: #fff1f2; color: #be123c; border: 1px solid #fecdd3; }
     @media (max-width: 820px) {
       .topbar, .toolbar, .tabs { flex-direction: column; align-items: stretch; }
+      .filters { grid-template-columns: 1fr; }
     }
   </style>
 </head>
@@ -345,6 +406,7 @@
     <section class="tabs" aria-label="人工确认菜单">
       <button id="nodeTab" class="tab active" type="button" data-tab="node">node节点调度</button>
       <button id="identityTab" class="tab" type="button" data-tab="identity">brand身份认证</button>
+      <button id="diseaseTab" class="tab" type="button" data-tab="disease">病症数据确认</button>
     </section>
 
     <div id="toast" class="toast"></div>
@@ -411,6 +473,73 @@
       </section>
     </section>
 
+    <section id="diseaseSection" class="section" hidden>
+      <section class="toolbar">
+        <div>
+          <div class="title">待确认病症数据</div>
+          <div id="diseaseSummary" class="muted">等待加载...</div>
+        </div>
+        <div class="row-actions">
+          <button id="diseaseBulkApprove" class="button" type="button">批量确认</button>
+          <button id="diseaseBulkReject" class="button danger" type="button">批量驳回</button>
+          <button id="diseaseRefresh" class="button secondary" type="button">刷新病症候选</button>
+        </div>
+      </section>
+
+      <section class="filters" aria-label="病症数据筛选">
+        <label>
+          <span class="field-label">品牌</span>
+          <input id="diseaseBrandFilter" list="diseaseBrandOptions" placeholder="输入品牌关键词" />
+        </label>
+        <label>
+          <span class="field-label">病症</span>
+          <input id="diseaseSymptomFilter" list="diseaseSymptomOptions" placeholder="分类或病症名称" />
+        </label>
+        <label>
+          <span class="field-label">最低置信度</span>
+          <input id="diseaseMinConfidenceFilter" type="number" min="0" max="1" step="0.01" placeholder="如 0.8" />
+        </label>
+        <label>
+          <span class="field-label">最高置信度</span>
+          <input id="diseaseMaxConfidenceFilter" type="number" min="0" max="1" step="0.01" placeholder="如 1.0" />
+        </label>
+        <div class="row-actions">
+          <button id="diseaseApplyFilter" class="button" type="button">筛选</button>
+          <button id="diseaseResetFilter" class="button secondary" type="button">重置</button>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="table-wrap">
+          <table class="compact-table">
+            <thead>
+              <tr>
+                <th class="select-col"><input id="diseaseSelectAll" type="checkbox" aria-label="全选当前页" /></th>
+                <th class="candidate-col">ID</th>
+                <th class="brand-col">品牌</th>
+                <th class="symptom-col">病症分类</th>
+                <th class="symptom-col">病症名称</th>
+                <th class="direct-col">方向</th>
+                <th class="evidence-col">证据</th>
+                <th class="action-col">操作</th>
+              </tr>
+            </thead>
+            <tbody id="diseaseRows"></tbody>
+          </table>
+        </div>
+        <div id="diseaseEmpty" class="empty" style="display:none;">暂无待确认病症数据。</div>
+        <div class="pager">
+          <button id="diseasePrevPage" class="small-button secondary" type="button">上一页</button>
+          <span id="diseasePageInfo" class="muted">第 1 页</span>
+          <button id="diseaseNextPage" class="small-button secondary" type="button">下一页</button>
+        </div>
+      </section>
+    </section>
+
+    <datalist id="diseaseBrandOptions"></datalist>
+    <datalist id="diseaseCategoryOptions"></datalist>
+    <datalist id="diseaseSymptomOptions"></datalist>
+
     <dialog id="ocrDialog">
       <form method="dialog" class="modal">
         <div class="modal-head">
@@ -457,14 +586,37 @@
     const outputJsonEl = document.getElementById("outputJson");
     const nodeTab = document.getElementById("nodeTab");
     const identityTab = document.getElementById("identityTab");
+    const diseaseTab = document.getElementById("diseaseTab");
     const nodeSection = document.getElementById("nodeSection");
     const identitySection = document.getElementById("identitySection");
+    const diseaseSection = document.getElementById("diseaseSection");
     const identityRowsEl = document.getElementById("identityRows");
     const identityEmptyEl = document.getElementById("identityEmpty");
     const identitySummaryEl = document.getElementById("identitySummary");
     const identityRefreshBtn = document.getElementById("identityRefresh");
+    const diseaseRowsEl = document.getElementById("diseaseRows");
+    const diseaseEmptyEl = document.getElementById("diseaseEmpty");
+    const diseaseSummaryEl = document.getElementById("diseaseSummary");
+    const diseaseRefreshBtn = document.getElementById("diseaseRefresh");
+    const diseaseBulkApproveBtn = document.getElementById("diseaseBulkApprove");
+    const diseaseBulkRejectBtn = document.getElementById("diseaseBulkReject");
+    const diseaseSelectAll = document.getElementById("diseaseSelectAll");
+    const diseaseBrandFilter = document.getElementById("diseaseBrandFilter");
+    const diseaseSymptomFilter = document.getElementById("diseaseSymptomFilter");
+    const diseaseMinConfidenceFilter = document.getElementById("diseaseMinConfidenceFilter");
+    const diseaseMaxConfidenceFilter = document.getElementById("diseaseMaxConfidenceFilter");
+    const diseaseApplyFilter = document.getElementById("diseaseApplyFilter");
+    const diseaseResetFilter = document.getElementById("diseaseResetFilter");
+    const diseasePrevPage = document.getElementById("diseasePrevPage");
+    const diseaseNextPage = document.getElementById("diseaseNextPage");
+    const diseasePageInfo = document.getElementById("diseasePageInfo");
     let activeOcrItem = null;
     let activeTab = "node";
+    const diseasePageSize = 100;
+    let diseaseOffset = 0;
+    let diseaseTotal = 0;
+    let diseaseOptions = { brands: [], categories: [], symptoms: [], symptomMap: {} };
+    let diseaseFilterTimer = null;
 
     function showToast(message, type = "ok") {
       toastEl.textContent = message;
@@ -667,11 +819,158 @@
       });
     }
 
+    function statusCountsText(statusCounts) {
+      const pending = statusCounts?.PENDING ?? 0;
+      const approved = statusCounts?.APPROVED ?? 0;
+      const rejected = statusCounts?.REJECTED ?? 0;
+      return `待确认 ${pending} 条｜已确认 ${approved} 条｜已驳回 ${rejected} 条`;
+    }
+
+    function datalistOptions(values) {
+      return values.map((value) => `<option value="${escapeHtml(value)}"></option>`).join("");
+    }
+
+    function symptomsForCategory(category) {
+      return diseaseOptions.symptomMap?.[category] || diseaseOptions.symptoms || [];
+    }
+
+    function updateDiseaseSymptomOptions(category) {
+      document.getElementById("diseaseSymptomOptions").innerHTML = datalistOptions(symptomsForCategory(category));
+    }
+
+    function selectedDiseaseRows() {
+      return [...diseaseRowsEl.querySelectorAll("tr")]
+        .filter((row) => row.querySelector('[data-field="selected"]')?.checked);
+    }
+
+    function rowDiseasePayload(row) {
+      return {
+        id: Number(row.dataset.id),
+        brand: row.querySelector('[data-field="brand"]').value.trim(),
+        primary_symptom: row.querySelector('[data-field="primary_symptom"]').value.trim(),
+        secondary_symptom: row.querySelector('[data-field="secondary_symptom"]').value.trim(),
+        direct: row.querySelector('[data-field="direct"]').value.trim(),
+      };
+    }
+
+    function validateDiseasePayload(payload) {
+      return payload.brand && payload.primary_symptom && payload.secondary_symptom && payload.direct;
+    }
+
+    function renderDiseaseItems(items, statusCounts = {}, total = 0, offset = 0, limit = diseasePageSize) {
+      diseaseTotal = total;
+      const pageStart = total ? offset + 1 : 0;
+      const pageEnd = Math.min(offset + items.length, total);
+      diseaseSummaryEl.textContent = `${statusCountsText(statusCounts)}｜筛选结果 ${total} 条｜当前 ${pageStart}-${pageEnd}`;
+      diseaseRowsEl.innerHTML = "";
+      diseaseEmptyEl.style.display = items.length ? "none" : "block";
+      const currentPage = Math.floor(offset / limit) + 1;
+      const totalPages = Math.max(1, Math.ceil(total / limit));
+      diseasePageInfo.textContent = `第 ${currentPage} / ${totalPages} 页`;
+      diseasePrevPage.disabled = offset <= 0;
+      diseaseNextPage.disabled = offset + limit >= total;
+      if (!items.length) {
+        return;
+      }
+
+      items.forEach((item) => {
+        const row = document.createElement("tr");
+        row.dataset.id = String(item.id);
+        row.innerHTML = `
+          <td><input data-field="selected" type="checkbox" aria-label="选择病症候选 ${escapeHtml(item.id)}" /></td>
+          <td>
+            <div class="task-id">${escapeHtml(item.id)}</div>
+          </td>
+          <td>
+            <input class="cell-input" data-field="brand" list="diseaseBrandOptions" value="${escapeHtml(item.brand_name || "")}" placeholder="未识别" />
+          </td>
+          <td>
+            <input class="cell-input" data-field="primary_symptom" list="diseaseCategoryOptions" value="${escapeHtml(item.symptom_category || "")}" placeholder="一级病症" />
+          </td>
+          <td>
+            <input class="cell-input" data-field="secondary_symptom" list="diseaseSymptomOptions" value="${escapeHtml(item.symptom_name || "")}" placeholder="二级病症" />
+          </td>
+          <td>
+            <select class="cell-input" data-field="direct">
+              ${["加重", "改善", "不确定"].map((value) => `<option value="${value}" ${String(item.effect_direction || "") === value ? "selected" : ""}>${value}</option>`).join("")}
+            </select>
+          </td>
+          <td class="payload-cell">
+            <div>${escapeHtml(compactText(item.evidence_text || item.review_text, 150))}</div>
+            <div class="muted" style="margin-top:8px;">置信度：${escapeHtml(item.confidence ?? "-")}</div>
+          </td>
+          <td>
+            <div class="row-actions">
+              <button class="small-button" data-action="approve-disease" type="button">确认入库</button>
+              <button class="small-button danger" data-action="reject-disease" type="button">驳回</button>
+            </div>
+          </td>
+        `;
+
+        row.querySelector('[data-field="primary_symptom"]').addEventListener("input", (event) => {
+          const symptomInput = row.querySelector('[data-field="secondary_symptom"]');
+          const availableSymptoms = symptomsForCategory(event.target.value);
+          updateDiseaseSymptomOptions(event.target.value);
+          if (symptomInput.value && availableSymptoms.length && !availableSymptoms.includes(symptomInput.value)) {
+            symptomInput.value = "";
+          }
+        });
+        row.querySelector('[data-field="secondary_symptom"]').addEventListener("focus", () => {
+          updateDiseaseSymptomOptions(row.querySelector('[data-field="primary_symptom"]').value.trim());
+        });
+
+        row.querySelector('[data-action="approve-disease"]').addEventListener("click", async () => {
+          const payload = rowDiseasePayload(row);
+          if (!validateDiseasePayload(payload)) {
+            showToast("品牌、病症分类、病症名称和方向都需要填写", "error");
+            return;
+          }
+          if (!window.confirm(`确认写入目标表：${payload.brand}｜${payload.primary_symptom}｜${payload.secondary_symptom}｜${payload.direct}？`)) {
+            return;
+          }
+          await runAction(async () => {
+            const result = await api(`/api/consumer/disease/reviews/${item.id}/approve`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                brand: payload.brand,
+                primary_symptom: payload.primary_symptom,
+                secondary_symptom: payload.secondary_symptom,
+                direct: payload.direct,
+                reviewer: "pipeline-review-page",
+                reviewer_note: "病症数据确认页面确认入库",
+              }),
+            });
+            showToast(`已确认入库：${result.case_id}`);
+          });
+        });
+
+        row.querySelector('[data-action="reject-disease"]').addEventListener("click", async () => {
+          if (!window.confirm("确认驳回这条病症候选？")) {
+            return;
+          }
+          await runAction(async () => {
+            await api(`/api/consumer/disease/reviews/${item.id}/reject`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ reviewer_note: "病症数据确认页面驳回" }),
+            });
+            showToast("病症候选已驳回");
+          });
+        });
+
+        diseaseRowsEl.appendChild(row);
+      });
+      diseaseSelectAll.checked = false;
+    }
+
     async function runAction(fn) {
       try {
         await fn();
         if (activeTab === "identity") {
           await loadIdentityItems();
+        } else if (activeTab === "disease") {
+          await loadDiseaseItems();
         } else {
           await loadItems();
         }
@@ -712,14 +1011,142 @@
       }
     }
 
+    function diseaseQueryParams() {
+      const params = new URLSearchParams({
+        status: "PENDING",
+        limit: String(diseasePageSize),
+        offset: String(diseaseOffset),
+      });
+      const brand = diseaseBrandFilter.value.trim();
+      const symptom = diseaseSymptomFilter.value.trim();
+      const minConfidence = diseaseMinConfidenceFilter.value.trim();
+      const maxConfidence = diseaseMaxConfidenceFilter.value.trim();
+      if (brand) params.set("brand", brand);
+      if (symptom) params.set("symptom", symptom);
+      if (minConfidence) params.set("min_confidence", minConfidence);
+      if (maxConfidence) params.set("max_confidence", maxConfidence);
+      return params;
+    }
+
+    async function loadDiseaseItems() {
+      diseaseRefreshBtn.disabled = true;
+      diseaseSummaryEl.textContent = "正在加载...";
+      try {
+        const data = await api(`/api/consumer/disease/reviews?${diseaseQueryParams().toString()}`);
+        renderDiseaseItems(data.items || [], data.status_counts || {}, data.total || 0, data.offset || 0, data.limit || diseasePageSize);
+      } catch (error) {
+        diseaseSummaryEl.textContent = "加载失败";
+        diseaseRowsEl.innerHTML = "";
+        diseaseEmptyEl.style.display = "block";
+        diseaseEmptyEl.textContent = error instanceof Error ? error.message : "加载失败";
+      } finally {
+        diseaseRefreshBtn.disabled = false;
+      }
+    }
+
+    async function loadDiseaseOptions() {
+      try {
+        const data = await api("/api/consumer/disease/reviews/options");
+        diseaseOptions = {
+          brands: data.brands || [],
+          categories: data.categories || [],
+          symptoms: data.symptoms || [],
+          symptomMap: data.symptom_map || {},
+        };
+        document.getElementById("diseaseBrandOptions").innerHTML = datalistOptions(diseaseOptions.brands);
+        document.getElementById("diseaseCategoryOptions").innerHTML = datalistOptions(diseaseOptions.categories);
+        updateDiseaseSymptomOptions(diseaseSymptomFilter.value.trim());
+      } catch (error) {
+        showToast(error instanceof Error ? error.message : "病症下拉选项加载失败", "error");
+      }
+    }
+
+    async function bulkApproveDisease() {
+      const rows = selectedDiseaseRows();
+      if (!rows.length) {
+        showToast("请先勾选要确认的数据", "error");
+        return;
+      }
+      const payloads = rows.map(rowDiseasePayload);
+      const invalid = payloads.find((payload) => !validateDiseasePayload(payload));
+      if (invalid) {
+        showToast(`候选 ${invalid.id} 缺少品牌、病症分类、病症名称或方向`, "error");
+        return;
+      }
+      if (!window.confirm(`确认批量写入 ${payloads.length} 条病症数据？`)) {
+        return;
+      }
+      await runAction(async () => {
+        for (const payload of payloads) {
+          await api(`/api/consumer/disease/reviews/${payload.id}/approve`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              brand: payload.brand,
+              primary_symptom: payload.primary_symptom,
+              secondary_symptom: payload.secondary_symptom,
+              direct: payload.direct,
+              reviewer: "pipeline-review-page",
+              reviewer_note: "病症数据确认页面批量确认",
+            }),
+          });
+        }
+        showToast(`已批量确认 ${payloads.length} 条`);
+      });
+    }
+
+    async function bulkRejectDisease() {
+      const rows = selectedDiseaseRows();
+      if (!rows.length) {
+        showToast("请先勾选要驳回的数据", "error");
+        return;
+      }
+      if (!window.confirm(`确认批量驳回 ${rows.length} 条病症候选？`)) {
+        return;
+      }
+      await runAction(async () => {
+        for (const row of rows) {
+          await api(`/api/consumer/disease/reviews/${row.dataset.id}/reject`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ reviewer_note: "病症数据确认页面批量驳回" }),
+          });
+        }
+        showToast(`已批量驳回 ${rows.length} 条`);
+      });
+    }
+
+    function scheduleDiseaseFilterReload() {
+      window.clearTimeout(diseaseFilterTimer);
+      diseaseFilterTimer = window.setTimeout(() => {
+        diseaseOffset = 0;
+        loadDiseaseItems();
+      }, 350);
+    }
+
+    function applyDiseaseFilterOnEnter(event) {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        window.clearTimeout(diseaseFilterTimer);
+        diseaseOffset = 0;
+        loadDiseaseItems();
+      }
+    }
+
     function switchTab(tab) {
       activeTab = tab;
       nodeTab.classList.toggle("active", tab === "node");
       identityTab.classList.toggle("active", tab === "identity");
+      diseaseTab.classList.toggle("active", tab === "disease");
       nodeSection.hidden = tab !== "node";
       identitySection.hidden = tab !== "identity";
+      diseaseSection.hidden = tab !== "disease";
       if (tab === "identity" && !identityRowsEl.children.length) {
         loadIdentityItems();
+      }
+      if (tab === "disease" && !diseaseRowsEl.children.length) {
+        loadDiseaseOptions();
+        loadDiseaseItems();
       }
       if (tab === "node" && !rowsEl.children.length) {
         loadItems();
@@ -744,8 +1171,44 @@
 
     refreshBtn.addEventListener("click", loadItems);
     identityRefreshBtn.addEventListener("click", loadIdentityItems);
+    diseaseRefreshBtn.addEventListener("click", loadDiseaseItems);
+    diseaseBulkApproveBtn.addEventListener("click", bulkApproveDisease);
+    diseaseBulkRejectBtn.addEventListener("click", bulkRejectDisease);
+    diseaseSelectAll.addEventListener("change", () => {
+      diseaseRowsEl.querySelectorAll('[data-field="selected"]').forEach((checkbox) => {
+        checkbox.checked = diseaseSelectAll.checked;
+      });
+    });
+    diseaseApplyFilter.addEventListener("click", () => {
+      diseaseOffset = 0;
+      loadDiseaseItems();
+    });
+    [diseaseBrandFilter, diseaseSymptomFilter, diseaseMinConfidenceFilter, diseaseMaxConfidenceFilter].forEach((input) => {
+      input.addEventListener("input", scheduleDiseaseFilterReload);
+      input.addEventListener("change", scheduleDiseaseFilterReload);
+      input.addEventListener("keydown", applyDiseaseFilterOnEnter);
+    });
+    diseaseResetFilter.addEventListener("click", () => {
+      diseaseBrandFilter.value = "";
+      diseaseSymptomFilter.value = "";
+      diseaseMinConfidenceFilter.value = "";
+      diseaseMaxConfidenceFilter.value = "";
+      diseaseOffset = 0;
+      loadDiseaseItems();
+    });
+    diseasePrevPage.addEventListener("click", () => {
+      diseaseOffset = Math.max(0, diseaseOffset - diseasePageSize);
+      loadDiseaseItems();
+    });
+    diseaseNextPage.addEventListener("click", () => {
+      if (diseaseOffset + diseasePageSize < diseaseTotal) {
+        diseaseOffset += diseasePageSize;
+        loadDiseaseItems();
+      }
+    });
     nodeTab.addEventListener("click", () => switchTab("node"));
     identityTab.addEventListener("click", () => switchTab("identity"));
+    diseaseTab.addEventListener("click", () => switchTab("disease"));
     loadItems();
   </script>
 </body>
