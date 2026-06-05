@@ -1,0 +1,1350 @@
+{
+  "standard": {
+    "GO!": {
+      "brand_id": 1,
+      "standard_brand": "GO!",
+      "origin_type": "进口/国际品牌",
+      "brand_tier": "知名/主流",
+      "aliases": [],
+      "status": "active",
+      "remark": ""
+    },
+    "NOW": {
+      "brand_id": 2,
+      "standard_brand": "NOW",
+      "origin_type": "进口/国际品牌",
+      "brand_tier": "知名/主流",
+      "aliases": [
+        "NOW FRESH"
+      ],
+      "status": "active",
+      "remark": ""
+    },
+    "冠能": {
+      "brand_id": 3,
+      "standard_brand": "冠能",
+      "origin_type": "进口/国际品牌",
+      "brand_tier": "知名/主流",
+      "aliases": [
+        "至护系列",
+        "ProPlan",
+        "Pro Plan"
+      ],
+      "status": "active",
+      "remark": "已按用户确认的冲突标准名合并"
+    },
+    "巅峰": {
+      "brand_id": 4,
+      "standard_brand": "巅峰",
+      "origin_type": "进口/国际品牌",
+      "brand_tier": "知名/主流",
+      "aliases": [
+        "ZIWI",
+        "Ziwi",
+        "ziwi"
+      ],
+      "status": "active",
+      "remark": "已按用户确认的冲突标准名合并"
+    },
+    "新萃": {
+      "brand_id": 5,
+      "standard_brand": "新萃",
+      "origin_type": "进口/国际品牌",
+      "brand_tier": "知名/主流",
+      "aliases": [
+        "NutriSource"
+      ],
+      "status": "active",
+      "remark": ""
+    },
+    "法米娜": {
+      "brand_id": 6,
+      "standard_brand": "法米娜",
+      "origin_type": "进口/国际品牌",
+      "brand_tier": "知名/主流",
+      "aliases": [
+        "Farmina"
+      ],
+      "status": "active",
+      "remark": ""
+    },
+    "海洋之星": {
+      "brand_id": 7,
+      "standard_brand": "海洋之星",
+      "origin_type": "进口/国际品牌",
+      "brand_tier": "知名/主流",
+      "aliases": [
+        "海洋之心"
+      ],
+      "status": "active",
+      "remark": ""
+    },
+    "渴望": {
+      "brand_id": 8,
+      "standard_brand": "渴望",
+      "origin_type": "进口/国际品牌",
+      "brand_tier": "知名/主流",
+      "aliases": [
+        "Orijen",
+        "原始猎食渴望"
+      ],
+      "status": "active",
+      "remark": ""
+    },
+    "爱肯拿": {
+      "brand_id": 9,
+      "standard_brand": "爱肯拿",
+      "origin_type": "进口/国际品牌",
+      "brand_tier": "知名/主流",
+      "aliases": [
+        "Acana"
+      ],
+      "status": "active",
+      "remark": ""
+    },
+    "百利": {
+      "brand_id": 10,
+      "standard_brand": "百利",
+      "origin_type": "进口/国际品牌",
+      "brand_tier": "知名/主流",
+      "aliases": [
+        "天然百利",
+        "Instinct"
+      ],
+      "status": "active",
+      "remark": ""
+    },
+    "皇家": {
+      "brand_id": 11,
+      "standard_brand": "皇家",
+      "origin_type": "进口/国际品牌",
+      "brand_tier": "知名/主流",
+      "aliases": [
+        "黄家",
+        "Royal Canin"
+      ],
+      "status": "active",
+      "remark": ""
+    },
+    "福摩": {
+      "brand_id": 12,
+      "standard_brand": "福摩",
+      "origin_type": "进口/国际品牌",
+      "brand_tier": "知名/主流",
+      "aliases": [
+        "Fromm"
+      ],
+      "status": "active",
+      "remark": ""
+    },
+    "素力高": {
+      "brand_id": 13,
+      "standard_brand": "素力高",
+      "origin_type": "进口/国际品牌",
+      "brand_tier": "知名/主流",
+      "aliases": [
+        "金素",
+        "Solid Gold"
+      ],
+      "status": "active",
+      "remark": ""
+    },
+    "纽翠斯": {
+      "brand_id": 14,
+      "standard_brand": "纽翠斯",
+      "origin_type": "进口/国际品牌",
+      "brand_tier": "知名/主流",
+      "aliases": [
+        "乃瑞斯",
+        "Nutrience",
+        "紐崔斯 Nutrience"
+      ],
+      "status": "active",
+      "remark": "已按用户确认的冲突标准名合并"
+    },
+    "纽顿": {
+      "brand_id": 15,
+      "standard_brand": "纽顿",
+      "origin_type": "进口/国际品牌",
+      "brand_tier": "知名/主流",
+      "aliases": [
+        "Nutram"
+      ],
+      "status": "active",
+      "remark": ""
+    },
+    "美士": {
+      "brand_id": 16,
+      "standard_brand": "美士",
+      "origin_type": "进口/国际品牌",
+      "brand_tier": "知名/主流",
+      "aliases": [
+        "Nutro"
+      ],
+      "status": "active",
+      "remark": ""
+    },
+    "自然光环": {
+      "brand_id": 17,
+      "standard_brand": "自然光环",
+      "origin_type": "进口/国际品牌",
+      "brand_tier": "知名/主流",
+      "aliases": [
+        "Halo"
+      ],
+      "status": "active",
+      "remark": ""
+    },
+    "威滋": {
+      "brand_id": 18,
+      "standard_brand": "威滋",
+      "origin_type": "进口/国际品牌",
+      "brand_tier": "新兴品牌",
+      "aliases": [
+        "Wealtz 維爾滋"
+      ],
+      "status": "active",
+      "remark": ""
+    },
+    "霸弗": {
+      "brand_id": 19,
+      "standard_brand": "霸弗",
+      "origin_type": "进口/国际品牌",
+      "brand_tier": "新兴品牌",
+      "aliases": [
+        "麦富迪霸弗",
+        "Boreal"
+      ],
+      "status": "active",
+      "remark": ""
+    },
+    "WOWO": {
+      "brand_id": 20,
+      "standard_brand": "WOWO",
+      "origin_type": "国产品牌",
+      "brand_tier": "知名/主流",
+      "aliases": [
+        "喔喔",
+        "wowo",
+        "JWOWO"
+      ],
+      "status": "active",
+      "remark": ""
+    },
+    "伯纳天纯": {
+      "brand_id": 21,
+      "standard_brand": "伯纳天纯",
+      "origin_type": "国产品牌",
+      "brand_tier": "知名/主流",
+      "aliases": [],
+      "status": "active",
+      "remark": ""
+    },
+    "佩妮": {
+      "brand_id": 22,
+      "standard_brand": "佩妮",
+      "origin_type": "国产品牌",
+      "brand_tier": "知名/主流",
+      "aliases": [],
+      "status": "active",
+      "remark": ""
+    },
+    "倍内菲": {
+      "brand_id": 23,
+      "standard_brand": "倍内菲",
+      "origin_type": "国产品牌",
+      "brand_tier": "知名/主流",
+      "aliases": [],
+      "status": "active",
+      "remark": ""
+    },
+    "凯锐思": {
+      "brand_id": 24,
+      "standard_brand": "凯锐思",
+      "origin_type": "国产品牌",
+      "brand_tier": "知名/主流",
+      "aliases": [],
+      "status": "active",
+      "remark": ""
+    },
+    "力狼": {
+      "brand_id": 25,
+      "standard_brand": "力狼",
+      "origin_type": "国产品牌",
+      "brand_tier": "知名/主流",
+      "aliases": [],
+      "status": "active",
+      "remark": ""
+    },
+    "卫仕": {
+      "brand_id": 26,
+      "standard_brand": "卫仕",
+      "origin_type": "国产品牌",
+      "brand_tier": "知名/主流",
+      "aliases": [
+        "Nourse"
+      ],
+      "status": "active",
+      "remark": ""
+    },
+    "喵梵思": {
+      "brand_id": 27,
+      "standard_brand": "喵梵思",
+      "origin_type": "国产品牌",
+      "brand_tier": "知名/主流",
+      "aliases": [
+        "喵樊思虹"
+      ],
+      "status": "active",
+      "remark": ""
+    },
+    "坦克小希": {
+      "brand_id": 28,
+      "standard_brand": "坦克小希",
+      "origin_type": "国产品牌",
+      "brand_tier": "知名/主流",
+      "aliases": [
+        "鳟鱼鳕鱼猫粮",
+        "坦克小希金装猫粮",
+        "坦克小希鳟鱼鳕鱼猫粮"
+      ],
+      "status": "active",
+      "remark": ""
+    },
+    "好主人": {
+      "brand_id": 29,
+      "standard_brand": "好主人",
+      "origin_type": "国产品牌",
+      "brand_tier": "知名/主流",
+      "aliases": [
+        "Care"
+      ],
+      "status": "active",
+      "remark": ""
+    },
+    "宫典": {
+      "brand_id": 30,
+      "standard_brand": "宫典",
+      "origin_type": "国产品牌",
+      "brand_tier": "知名/主流",
+      "aliases": [
+        "宫典猫粮"
+      ],
+      "status": "active",
+      "remark": ""
+    },
+    "帕特": {
+      "brand_id": 31,
+      "standard_brand": "帕特",
+      "origin_type": "国产品牌",
+      "brand_tier": "知名/主流",
+      "aliases": [],
+      "status": "active",
+      "remark": ""
+    },
+    "弗列加特": {
+      "brand_id": 32,
+      "standard_brand": "弗列加特",
+      "origin_type": "国产品牌",
+      "brand_tier": "知名/主流",
+      "aliases": [
+        "弗新款",
+        "佛列加特",
+        "福利加特",
+        "费列加特"
+      ],
+      "status": "active",
+      "remark": ""
+    },
+    "比瑞吉": {
+      "brand_id": 33,
+      "standard_brand": "比瑞吉",
+      "origin_type": "国产品牌",
+      "brand_tier": "知名/主流",
+      "aliases": [],
+      "status": "active",
+      "remark": ""
+    },
+    "江小傲": {
+      "brand_id": 34,
+      "standard_brand": "江小傲",
+      "origin_type": "国产品牌",
+      "brand_tier": "知名/主流",
+      "aliases": [],
+      "status": "active",
+      "remark": ""
+    },
+    "猫爸爸的厨房": {
+      "brand_id": 35,
+      "standard_brand": "猫爸爸的厨房",
+      "origin_type": "国产品牌",
+      "brand_tier": "知名/主流",
+      "aliases": [
+        "泡芙",
+        "猫爸爸",
+        "泡芙猫粮",
+        "猫爸爸的厨房泡芙猫粮"
+      ],
+      "status": "active",
+      "remark": ""
+    },
+    "疯狂小狗": {
+      "brand_id": 36,
+      "standard_brand": "疯狂小狗",
+      "origin_type": "国产品牌",
+      "brand_tier": "知名/主流",
+      "aliases": [],
+      "status": "active",
+      "remark": ""
+    },
+    "纯福": {
+      "brand_id": 37,
+      "standard_brand": "纯福",
+      "origin_type": "国产品牌",
+      "brand_tier": "知名/主流",
+      "aliases": [],
+      "status": "active",
+      "remark": ""
+    },
+    "网易严选": {
+      "brand_id": 38,
+      "standard_brand": "网易严选",
+      "origin_type": "国产品牌",
+      "brand_tier": "知名/主流",
+      "aliases": [
+        "网易"
+      ],
+      "status": "active",
+      "remark": ""
+    },
+    "蓝氏": {
+      "brand_id": 39,
+      "standard_brand": "蓝氏",
+      "origin_type": "国产品牌",
+      "brand_tier": "知名/主流",
+      "aliases": [
+        "蓝式"
+      ],
+      "status": "active",
+      "remark": ""
+    },
+    "诚实一口": {
+      "brand_id": 40,
+      "standard_brand": "诚实一口",
+      "origin_type": "国产品牌",
+      "brand_tier": "知名/主流",
+      "aliases": [
+        "诚实"
+      ],
+      "status": "active",
+      "remark": ""
+    },
+    "豆柴": {
+      "brand_id": 41,
+      "standard_brand": "豆柴",
+      "origin_type": "国产品牌",
+      "brand_tier": "知名/主流",
+      "aliases": [],
+      "status": "active",
+      "remark": ""
+    },
+    "路斯": {
+      "brand_id": 42,
+      "standard_brand": "路斯",
+      "origin_type": "国产品牌",
+      "brand_tier": "知名/主流",
+      "aliases": [
+        "Luscious"
+      ],
+      "status": "active",
+      "remark": ""
+    },
+    "醇粹": {
+      "brand_id": 43,
+      "standard_brand": "醇粹",
+      "origin_type": "国产品牌",
+      "brand_tier": "知名/主流",
+      "aliases": [
+        "纯粹",
+        "纯粹黑标",
+        "醇粹鲜肉",
+        "醇粹黑标",
+        "黑标醇粹"
+      ],
+      "status": "active",
+      "remark": "已按用户确认的冲突标准名合并"
+    },
+    "里兜": {
+      "brand_id": 44,
+      "standard_brand": "里兜",
+      "origin_type": "国产品牌",
+      "brand_tier": "知名/主流",
+      "aliases": [],
+      "status": "active",
+      "remark": ""
+    },
+    "阿飞和巴弟": {
+      "brand_id": 45,
+      "standard_brand": "阿飞和巴弟",
+      "origin_type": "国产品牌",
+      "brand_tier": "知名/主流",
+      "aliases": [
+        "阿飞",
+        "E76",
+        "e76",
+        "阿飞巴弟",
+        "阿飞e76",
+        "阿飞的76",
+        "阿飞e76猫粮"
+      ],
+      "status": "active",
+      "remark": "已按用户确认的冲突标准名合并"
+    },
+    "顽皮": {
+      "brand_id": 46,
+      "standard_brand": "顽皮",
+      "origin_type": "国产品牌",
+      "brand_tier": "知名/主流",
+      "aliases": [
+        "Wanpy"
+      ],
+      "status": "active",
+      "remark": ""
+    },
+    "领先": {
+      "brand_id": 47,
+      "standard_brand": "领先",
+      "origin_type": "国产品牌",
+      "brand_tier": "知名/主流",
+      "aliases": [
+        "Toptrees"
+      ],
+      "status": "active",
+      "remark": ""
+    },
+    "高爷家": {
+      "brand_id": 48,
+      "standard_brand": "高爷家",
+      "origin_type": "国产品牌",
+      "brand_tier": "知名/主流",
+      "aliases": [
+        "高爷"
+      ],
+      "status": "active",
+      "remark": ""
+    },
+    "鲜朗": {
+      "brand_id": 49,
+      "standard_brand": "鲜朗",
+      "origin_type": "国产品牌",
+      "brand_tier": "知名/主流",
+      "aliases": [
+        "金鲜朗"
+      ],
+      "status": "active",
+      "remark": ""
+    },
+    "麦富迪": {
+      "brand_id": 50,
+      "standard_brand": "麦富迪",
+      "origin_type": "国产品牌",
+      "brand_tier": "知名/主流",
+      "aliases": [
+        "买富迪"
+      ],
+      "status": "active",
+      "remark": ""
+    },
+    "宠率": {
+      "brand_id": 51,
+      "standard_brand": "宠率",
+      "origin_type": "国产品牌",
+      "brand_tier": "国产主流/新锐",
+      "aliases": [],
+      "status": "active",
+      "remark": ""
+    },
+    "耐威克": {
+      "brand_id": 52,
+      "standard_brand": "耐威克",
+      "origin_type": "国产品牌",
+      "brand_tier": "国产主流/新锐",
+      "aliases": [],
+      "status": "active",
+      "remark": ""
+    },
+    "乐顿": {
+      "brand_id": 53,
+      "standard_brand": "乐顿",
+      "origin_type": "国产品牌",
+      "brand_tier": "新兴品牌",
+      "aliases": [],
+      "status": "active",
+      "remark": ""
+    },
+    "乖巧": {
+      "brand_id": 54,
+      "standard_brand": "乖巧",
+      "origin_type": "国产品牌",
+      "brand_tier": "新兴品牌",
+      "aliases": [
+        "乖巧猫粮",
+        "乖巧新疆猫粮"
+      ],
+      "status": "active",
+      "remark": ""
+    },
+    "伊莱恩": {
+      "brand_id": 55,
+      "standard_brand": "伊莱恩",
+      "origin_type": "国产品牌",
+      "brand_tier": "新兴品牌",
+      "aliases": [
+        "伊莱恩蓝色"
+      ],
+      "status": "active",
+      "remark": ""
+    },
+    "力爪": {
+      "brand_id": 56,
+      "standard_brand": "力爪",
+      "origin_type": "国产品牌",
+      "brand_tier": "新兴品牌",
+      "aliases": [],
+      "status": "active",
+      "remark": ""
+    },
+    "喜喵": {
+      "brand_id": 57,
+      "standard_brand": "喜喵",
+      "origin_type": "国产品牌",
+      "brand_tier": "新兴品牌",
+      "aliases": [
+        "喜喵家"
+      ],
+      "status": "active",
+      "remark": ""
+    },
+    "喵凯伦": {
+      "brand_id": 58,
+      "standard_brand": "喵凯伦",
+      "origin_type": "国产品牌",
+      "brand_tier": "新兴品牌",
+      "aliases": [],
+      "status": "active",
+      "remark": ""
+    },
+    "喵招": {
+      "brand_id": 59,
+      "standard_brand": "喵招",
+      "origin_type": "国产品牌",
+      "brand_tier": "新兴品牌",
+      "aliases": [
+        "喵招鸡"
+      ],
+      "status": "active",
+      "remark": ""
+    },
+    "嘉传": {
+      "brand_id": 60,
+      "standard_brand": "嘉传",
+      "origin_type": "国产品牌",
+      "brand_tier": "新兴品牌",
+      "aliases": [],
+      "status": "active",
+      "remark": ""
+    },
+    "大P家": {
+      "brand_id": 61,
+      "standard_brand": "大P家",
+      "origin_type": "国产品牌",
+      "brand_tier": "新兴品牌",
+      "aliases": [
+        "大p家",
+        "大P便当"
+      ],
+      "status": "active",
+      "remark": ""
+    },
+    "大食怪": {
+      "brand_id": 62,
+      "standard_brand": "大食怪",
+      "origin_type": "国产品牌",
+      "brand_tier": "新兴品牌",
+      "aliases": [],
+      "status": "active",
+      "remark": ""
+    },
+    "奶思": {
+      "brand_id": 63,
+      "standard_brand": "奶思",
+      "origin_type": "国产品牌",
+      "brand_tier": "新兴品牌",
+      "aliases": [],
+      "status": "active",
+      "remark": ""
+    },
+    "宠爱": {
+      "brand_id": 64,
+      "standard_brand": "宠爱",
+      "origin_type": "国产品牌",
+      "brand_tier": "新兴品牌",
+      "aliases": [
+        "Ca",
+        "CA宠爱",
+        "CA宠爱黑金",
+        "CA宠爱黑金猫粮"
+      ],
+      "status": "active",
+      "remark": "已按用户确认的冲突标准名合并"
+    },
+    "小金盾": {
+      "brand_id": 65,
+      "standard_brand": "小金盾",
+      "origin_type": "国产品牌",
+      "brand_tier": "新兴品牌",
+      "aliases": [
+        "茁悦小金盾"
+      ],
+      "status": "active",
+      "remark": ""
+    },
+    "布兰德": {
+      "brand_id": 66,
+      "standard_brand": "布兰德",
+      "origin_type": "国产品牌",
+      "brand_tier": "新兴品牌",
+      "aliases": [],
+      "status": "active",
+      "remark": ""
+    },
+    "归真": {
+      "brand_id": 67,
+      "standard_brand": "归真",
+      "origin_type": "国产品牌",
+      "brand_tier": "新兴品牌",
+      "aliases": [
+        "小毛豆",
+        "豆哥的归真"
+      ],
+      "status": "active",
+      "remark": "已按用户确认的冲突标准名合并"
+    },
+    "斑队长": {
+      "brand_id": 68,
+      "standard_brand": "斑队长",
+      "origin_type": "国产品牌",
+      "brand_tier": "新兴品牌",
+      "aliases": [],
+      "status": "active",
+      "remark": ""
+    },
+    "星宴": {
+      "brand_id": 69,
+      "standard_brand": "星宴",
+      "origin_type": "国产品牌",
+      "brand_tier": "新兴品牌",
+      "aliases": [],
+      "status": "active",
+      "remark": ""
+    },
+    "星速": {
+      "brand_id": 70,
+      "standard_brand": "星速",
+      "origin_type": "国产品牌",
+      "brand_tier": "新兴品牌",
+      "aliases": [
+        "乖星速"
+      ],
+      "status": "active",
+      "remark": ""
+    },
+    "有鱼": {
+      "brand_id": 71,
+      "standard_brand": "有鱼",
+      "origin_type": "国产品牌",
+      "brand_tier": "新兴品牌",
+      "aliases": [],
+      "status": "active",
+      "remark": ""
+    },
+    "格吾安": {
+      "brand_id": 72,
+      "standard_brand": "格吾安",
+      "origin_type": "国产品牌",
+      "brand_tier": "新兴品牌",
+      "aliases": [
+        "格武安"
+      ],
+      "status": "active",
+      "remark": ""
+    },
+    "桂姨": {
+      "brand_id": 73,
+      "standard_brand": "桂姨",
+      "origin_type": "国产品牌",
+      "brand_tier": "新兴品牌",
+      "aliases": [],
+      "status": "active",
+      "remark": ""
+    },
+    "歪耳朵": {
+      "brand_id": 74,
+      "standard_brand": "歪耳朵",
+      "origin_type": "国产品牌",
+      "brand_tier": "新兴品牌",
+      "aliases": [],
+      "status": "active",
+      "remark": ""
+    },
+    "滋奇": {
+      "brand_id": 75,
+      "standard_brand": "滋奇",
+      "origin_type": "国产品牌",
+      "brand_tier": "新兴品牌",
+      "aliases": [],
+      "status": "active",
+      "remark": ""
+    },
+    "猫有爱": {
+      "brand_id": 76,
+      "standard_brand": "猫有爱",
+      "origin_type": "国产品牌",
+      "brand_tier": "新兴品牌",
+      "aliases": [
+        "猫友爱520"
+      ],
+      "status": "active",
+      "remark": ""
+    },
+    "科膳": {
+      "brand_id": 77,
+      "standard_brand": "科膳",
+      "origin_type": "国产品牌",
+      "brand_tier": "新兴品牌",
+      "aliases": [],
+      "status": "active",
+      "remark": ""
+    },
+    "简创": {
+      "brand_id": 78,
+      "standard_brand": "简创",
+      "origin_type": "国产品牌",
+      "brand_tier": "新兴品牌",
+      "aliases": [
+        "简创猫粮"
+      ],
+      "status": "active",
+      "remark": ""
+    },
+    "纯适": {
+      "brand_id": 79,
+      "standard_brand": "纯适",
+      "origin_type": "国产品牌",
+      "brand_tier": "新兴品牌",
+      "aliases": [],
+      "status": "active",
+      "remark": ""
+    },
+    "聪颖": {
+      "brand_id": 80,
+      "standard_brand": "聪颖",
+      "origin_type": "国产品牌",
+      "brand_tier": "新兴品牌",
+      "aliases": [
+        "聪颖猫粮",
+        "聪颖鲜肉全价猫粮"
+      ],
+      "status": "active",
+      "remark": ""
+    },
+    "酥醒": {
+      "brand_id": 81,
+      "standard_brand": "酥醒",
+      "origin_type": "国产品牌",
+      "brand_tier": "新兴品牌",
+      "aliases": [],
+      "status": "active",
+      "remark": ""
+    },
+    "馋不腻": {
+      "brand_id": 82,
+      "standard_brand": "馋不腻",
+      "origin_type": "国产品牌",
+      "brand_tier": "新兴品牌",
+      "aliases": [
+        "宠馋记"
+      ],
+      "status": "active",
+      "remark": "已按用户确认的冲突标准名合并"
+    },
+    "喵哒": {
+      "brand_id": 83,
+      "standard_brand": "喵哒",
+      "origin_type": "国产品牌",
+      "brand_tier": "其他/小众",
+      "aliases": [],
+      "status": "active",
+      "remark": ""
+    },
+    "它选家": {
+      "brand_id": 84,
+      "standard_brand": "它选家",
+      "origin_type": "国产品牌",
+      "brand_tier": "其他/小众",
+      "aliases": [],
+      "status": "active",
+      "remark": ""
+    },
+    "宽福": {
+      "brand_id": 85,
+      "standard_brand": "宽福",
+      "origin_type": "国产品牌",
+      "brand_tier": "其他/小众",
+      "aliases": [],
+      "status": "active",
+      "remark": ""
+    },
+    "汪爸爸": {
+      "brand_id": 86,
+      "standard_brand": "汪爸爸",
+      "origin_type": "国产品牌",
+      "brand_tier": "其他/小众",
+      "aliases": [],
+      "status": "active",
+      "remark": ""
+    },
+    "爱立方": {
+      "brand_id": 87,
+      "standard_brand": "爱立方",
+      "origin_type": "国产品牌",
+      "brand_tier": "其他/小众",
+      "aliases": [],
+      "status": "active",
+      "remark": ""
+    },
+    "猫大圣": {
+      "brand_id": 88,
+      "standard_brand": "猫大圣",
+      "origin_type": "国产品牌",
+      "brand_tier": "其他/小众",
+      "aliases": [],
+      "status": "active",
+      "remark": ""
+    },
+    "能量怪兽": {
+      "brand_id": 89,
+      "standard_brand": "能量怪兽",
+      "origin_type": "国产品牌",
+      "brand_tier": "其他/小众",
+      "aliases": [],
+      "status": "active",
+      "remark": ""
+    },
+    "蛮肉派派": {
+      "brand_id": 90,
+      "standard_brand": "蛮肉派派",
+      "origin_type": "国产品牌",
+      "brand_tier": "其他/小众",
+      "aliases": [],
+      "status": "active",
+      "remark": ""
+    },
+    "蹲蹲": {
+      "brand_id": 91,
+      "standard_brand": "蹲蹲",
+      "origin_type": "国产品牌",
+      "brand_tier": "其他/小众",
+      "aliases": [],
+      "status": "active",
+      "remark": ""
+    },
+    "金凯撒": {
+      "brand_id": 92,
+      "standard_brand": "金凯撒",
+      "origin_type": "国产品牌",
+      "brand_tier": "其他/小众",
+      "aliases": [],
+      "status": "active",
+      "remark": ""
+    },
+    "霹雳宝贝": {
+      "brand_id": 93,
+      "standard_brand": "霹雳宝贝",
+      "origin_type": "国产品牌",
+      "brand_tier": "其他/小众",
+      "aliases": [],
+      "status": "active",
+      "remark": ""
+    },
+    "靓贝": {
+      "brand_id": 94,
+      "standard_brand": "靓贝",
+      "origin_type": "国产品牌",
+      "brand_tier": "其他/小众",
+      "aliases": [],
+      "status": "active",
+      "remark": ""
+    },
+    "亿欧": {
+      "brand_id": 95,
+      "standard_brand": "亿欧",
+      "origin_type": "待确认",
+      "brand_tier": "知名/主流",
+      "aliases": [
+        "Yeoh"
+      ],
+      "status": "active",
+      "remark": ""
+    },
+    "C3": {
+      "brand_id": 96,
+      "standard_brand": "C3",
+      "origin_type": "待确认",
+      "brand_tier": "新兴品牌",
+      "aliases": [
+        "C3帕缇朵"
+      ],
+      "status": "active",
+      "remark": ""
+    },
+    "JOQO": {
+      "brand_id": 97,
+      "standard_brand": "JOQO",
+      "origin_type": "待确认",
+      "brand_tier": "新兴品牌",
+      "aliases": [
+        "joqo"
+      ],
+      "status": "active",
+      "remark": ""
+    },
+    "NG兔": {
+      "brand_id": 98,
+      "standard_brand": "NG兔",
+      "origin_type": "待确认",
+      "brand_tier": "新兴品牌",
+      "aliases": [
+        "NG恩萃"
+      ],
+      "status": "active",
+      "remark": ""
+    },
+    "PACKAR": {
+      "brand_id": 99,
+      "standard_brand": "PACKAR",
+      "origin_type": "待确认",
+      "brand_tier": "新兴品牌",
+      "aliases": [
+        "packar"
+      ],
+      "status": "active",
+      "remark": ""
+    },
+    "WHYCAT": {
+      "brand_id": 100,
+      "standard_brand": "WHYCAT",
+      "origin_type": "待确认",
+      "brand_tier": "新兴品牌",
+      "aliases": [
+        "歪咖",
+        "whycat"
+      ],
+      "status": "active",
+      "remark": ""
+    },
+    "布拉迪": {
+      "brand_id": 101,
+      "standard_brand": "布拉迪",
+      "origin_type": "待确认",
+      "brand_tier": "新兴品牌",
+      "aliases": [],
+      "status": "active",
+      "remark": ""
+    },
+    "汤恩贝": {
+      "brand_id": 102,
+      "standard_brand": "汤恩贝",
+      "origin_type": "待确认",
+      "brand_tier": "新兴品牌",
+      "aliases": [
+        "TEB"
+      ],
+      "status": "active",
+      "remark": ""
+    },
+    "白博士": {
+      "brand_id": 103,
+      "standard_brand": "白博士",
+      "origin_type": "待确认",
+      "brand_tier": "新兴品牌",
+      "aliases": [
+        "猫博士"
+      ],
+      "status": "active",
+      "remark": ""
+    },
+    "艾美康": {
+      "brand_id": 104,
+      "standard_brand": "艾美康",
+      "origin_type": "待确认",
+      "brand_tier": "新兴品牌",
+      "aliases": [
+        "Animal Care"
+      ],
+      "status": "active",
+      "remark": ""
+    },
+    "MAG": {
+      "brand_id": 105,
+      "standard_brand": "MAG",
+      "origin_type": "待确认",
+      "brand_tier": "其他/小众",
+      "aliases": [
+        "mag"
+      ],
+      "status": "active",
+      "remark": ""
+    },
+    "YEE": {
+      "brand_id": 106,
+      "standard_brand": "YEE",
+      "origin_type": "待确认",
+      "brand_tier": "其他/小众",
+      "aliases": [],
+      "status": "active",
+      "remark": ""
+    },
+    "乐唯诺": {
+      "brand_id": 107,
+      "standard_brand": "乐唯诺",
+      "origin_type": "待确认",
+      "brand_tier": "其他/小众",
+      "aliases": [],
+      "status": "active",
+      "remark": ""
+    },
+    "佰萃": {
+      "brand_id": 108,
+      "standard_brand": "佰萃",
+      "origin_type": "待确认",
+      "brand_tier": "其他/小众",
+      "aliases": [
+        "佰萃粮"
+      ],
+      "status": "active",
+      "remark": ""
+    },
+    "玫斯": {
+      "brand_id": 109,
+      "standard_brand": "玫斯",
+      "origin_type": "待确认",
+      "brand_tier": "其他/小众",
+      "aliases": [],
+      "status": "active",
+      "remark": ""
+    }
+  },
+  "alias_to_brand": {
+    "go!": "GO!",
+    "now": "NOW",
+    "nowfresh": "NOW",
+    "冠能": "冠能",
+    "至护系列": "冠能",
+    "proplan": "冠能",
+    "巅峰": "巅峰",
+    "ziwi": "巅峰",
+    "新萃": "新萃",
+    "nutrisource": "新萃",
+    "法米娜": "法米娜",
+    "farmina": "法米娜",
+    "海洋之星": "海洋之星",
+    "海洋之心": "海洋之星",
+    "渴望": "渴望",
+    "orijen": "渴望",
+    "原始猎食渴望": "渴望",
+    "爱肯拿": "爱肯拿",
+    "acana": "爱肯拿",
+    "百利": "百利",
+    "天然百利": "百利",
+    "instinct": "百利",
+    "皇家": "皇家",
+    "黄家": "皇家",
+    "royalcanin": "皇家",
+    "福摩": "福摩",
+    "fromm": "福摩",
+    "素力高": "素力高",
+    "金素": "素力高",
+    "solidgold": "素力高",
+    "纽翠斯": "纽翠斯",
+    "乃瑞斯": "纽翠斯",
+    "nutrience": "纽翠斯",
+    "紐崔斯nutrience": "纽翠斯",
+    "纽顿": "纽顿",
+    "nutram": "纽顿",
+    "美士": "美士",
+    "nutro": "美士",
+    "自然光环": "自然光环",
+    "halo": "自然光环",
+    "威滋": "威滋",
+    "wealtz維爾滋": "威滋",
+    "霸弗": "霸弗",
+    "麦富迪霸弗": "霸弗",
+    "boreal": "霸弗",
+    "wowo": "WOWO",
+    "喔喔": "WOWO",
+    "jwowo": "WOWO",
+    "伯纳天纯": "伯纳天纯",
+    "佩妮": "佩妮",
+    "倍内菲": "倍内菲",
+    "凯锐思": "凯锐思",
+    "力狼": "力狼",
+    "卫仕": "卫仕",
+    "nourse": "卫仕",
+    "喵梵思": "喵梵思",
+    "喵樊思虹": "喵梵思",
+    "坦克小希": "坦克小希",
+    "鳟鱼鳕鱼猫粮": "坦克小希",
+    "坦克小希金装猫粮": "坦克小希",
+    "坦克小希鳟鱼鳕鱼猫粮": "坦克小希",
+    "好主人": "好主人",
+    "care": "好主人",
+    "宫典": "宫典",
+    "宫典猫粮": "宫典",
+    "帕特": "帕特",
+    "弗列加特": "弗列加特",
+    "弗新款": "弗列加特",
+    "佛列加特": "弗列加特",
+    "福利加特": "弗列加特",
+    "费列加特": "弗列加特",
+    "比瑞吉": "比瑞吉",
+    "江小傲": "江小傲",
+    "猫爸爸的厨房": "猫爸爸的厨房",
+    "泡芙": "猫爸爸的厨房",
+    "猫爸爸": "猫爸爸的厨房",
+    "泡芙猫粮": "猫爸爸的厨房",
+    "猫爸爸的厨房泡芙猫粮": "猫爸爸的厨房",
+    "疯狂小狗": "疯狂小狗",
+    "纯福": "纯福",
+    "网易严选": "网易严选",
+    "网易": "网易严选",
+    "蓝氏": "蓝氏",
+    "蓝式": "蓝氏",
+    "诚实一口": "诚实一口",
+    "诚实": "诚实一口",
+    "豆柴": "豆柴",
+    "路斯": "路斯",
+    "luscious": "路斯",
+    "醇粹": "醇粹",
+    "纯粹": "醇粹",
+    "纯粹黑标": "醇粹",
+    "醇粹鲜肉": "醇粹",
+    "醇粹黑标": "醇粹",
+    "黑标醇粹": "醇粹",
+    "里兜": "里兜",
+    "阿飞和巴弟": "阿飞和巴弟",
+    "阿飞": "阿飞和巴弟",
+    "e76": "阿飞和巴弟",
+    "阿飞巴弟": "阿飞和巴弟",
+    "阿飞e76": "阿飞和巴弟",
+    "阿飞的76": "阿飞和巴弟",
+    "阿飞e76猫粮": "阿飞和巴弟",
+    "顽皮": "顽皮",
+    "wanpy": "顽皮",
+    "领先": "领先",
+    "toptrees": "领先",
+    "高爷家": "高爷家",
+    "高爷": "高爷家",
+    "鲜朗": "鲜朗",
+    "金鲜朗": "鲜朗",
+    "麦富迪": "麦富迪",
+    "买富迪": "麦富迪",
+    "宠率": "宠率",
+    "耐威克": "耐威克",
+    "乐顿": "乐顿",
+    "乖巧": "乖巧",
+    "乖巧猫粮": "乖巧",
+    "乖巧新疆猫粮": "乖巧",
+    "伊莱恩": "伊莱恩",
+    "伊莱恩蓝色": "伊莱恩",
+    "力爪": "力爪",
+    "喜喵": "喜喵",
+    "喜喵家": "喜喵",
+    "喵凯伦": "喵凯伦",
+    "喵招": "喵招",
+    "喵招鸡": "喵招",
+    "嘉传": "嘉传",
+    "大p家": "大P家",
+    "大p便当": "大P家",
+    "大食怪": "大食怪",
+    "奶思": "奶思",
+    "宠爱": "宠爱",
+    "ca": "宠爱",
+    "ca宠爱": "宠爱",
+    "ca宠爱黑金": "宠爱",
+    "ca宠爱黑金猫粮": "宠爱",
+    "小金盾": "小金盾",
+    "茁悦小金盾": "小金盾",
+    "布兰德": "布兰德",
+    "归真": "归真",
+    "小毛豆": "归真",
+    "豆哥的归真": "归真",
+    "斑队长": "斑队长",
+    "星宴": "星宴",
+    "星速": "星速",
+    "乖星速": "星速",
+    "有鱼": "有鱼",
+    "格吾安": "格吾安",
+    "格武安": "格吾安",
+    "桂姨": "桂姨",
+    "歪耳朵": "歪耳朵",
+    "滋奇": "滋奇",
+    "猫有爱": "猫有爱",
+    "猫友爱520": "猫有爱",
+    "科膳": "科膳",
+    "简创": "简创",
+    "简创猫粮": "简创",
+    "纯适": "纯适",
+    "聪颖": "聪颖",
+    "聪颖猫粮": "聪颖",
+    "聪颖鲜肉全价猫粮": "聪颖",
+    "酥醒": "酥醒",
+    "馋不腻": "馋不腻",
+    "宠馋记": "馋不腻",
+    "喵哒": "喵哒",
+    "它选家": "它选家",
+    "宽福": "宽福",
+    "汪爸爸": "汪爸爸",
+    "爱立方": "爱立方",
+    "猫大圣": "猫大圣",
+    "能量怪兽": "能量怪兽",
+    "蛮肉派派": "蛮肉派派",
+    "蹲蹲": "蹲蹲",
+    "金凯撒": "金凯撒",
+    "霹雳宝贝": "霹雳宝贝",
+    "靓贝": "靓贝",
+    "亿欧": "亿欧",
+    "yeoh": "亿欧",
+    "c3": "C3",
+    "c3帕缇朵": "C3",
+    "joqo": "JOQO",
+    "ng兔": "NG兔",
+    "ng恩萃": "NG兔",
+    "packar": "PACKAR",
+    "whycat": "WHYCAT",
+    "歪咖": "WHYCAT",
+    "布拉迪": "布拉迪",
+    "汤恩贝": "汤恩贝",
+    "teb": "汤恩贝",
+    "白博士": "白博士",
+    "猫博士": "白博士",
+    "艾美康": "艾美康",
+    "animalcare": "艾美康",
+    "mag": "MAG",
+    "yee": "YEE",
+    "乐唯诺": "乐唯诺",
+    "佰萃": "佰萃",
+    "佰萃粮": "佰萃",
+    "玫斯": "玫斯"
+  }
+}

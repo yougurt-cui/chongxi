@@ -20,6 +20,7 @@ from services.product_function_service import infer_function_positioning, normal
 BASE_DIR = Path(__file__).resolve().parents[1]
 DEFAULT_TAOBAO_SKU_DIR = Path("/Users/yoghourt/anaconda3/envs/comment_labeler_env/taobao/out_catfood_sku")
 DEFAULT_BRAND_EXCEL_PATH = Path("/Users/yoghourt/Downloads/猫粮品牌最终标准化主表_区分进口国产.xlsx")
+DEFAULT_BRAND_STANDARD_JSON_PATH = BASE_DIR / "vendor" / "csv_mysql_labeling" / "config" / "catfood_brand_standard.json"
 
 CATALOG_TABLE = "catfood_product_catalog"
 BRAND_STANDARD_TABLE = "catfood_brand_standard"
@@ -234,6 +235,12 @@ def load_brand_maps(excel_path: Path | str = DEFAULT_BRAND_EXCEL_PATH) -> dict[s
     standard: dict[str, dict[str, Any]] = {}
     alias_to_brand: dict[str, str] = {}
     if not path.exists():
+        if DEFAULT_BRAND_STANDARD_JSON_PATH.exists():
+            data = _json_loads(DEFAULT_BRAND_STANDARD_JSON_PATH.read_text(encoding="utf-8"), {})
+            return {
+                "standard": data.get("standard") or {},
+                "alias_to_brand": data.get("alias_to_brand") or {},
+            }
         return {"standard": standard, "alias_to_brand": alias_to_brand}
 
     main_df = pd.read_excel(path, sheet_name="最终品牌主表", header=1).fillna("")
