@@ -41,7 +41,7 @@ git pull --ff-only origin "$REMOTE_BRANCH"
   vendor/csv_mysql_labeling/src/extract_catfood_brand_relations.py \
   vendor/feature_score_pipeline/scripts/brand_normalizer.py
 
-for port in "$APP_PORT"; do
+for port in "$APP_PORT" 8502; do
   pid=$(ss -ltnp | sed -n "s/.*:$port.*pid=\([0-9][0-9]*\).*/\1/p" | head -n 1 || true)
   if [ -n "$pid" ]; then
     kill "$pid" || true
