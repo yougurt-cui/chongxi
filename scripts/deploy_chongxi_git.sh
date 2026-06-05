@@ -30,8 +30,12 @@ git pull --ff-only origin "$REMOTE_BRANCH"
   main.py \
   app_config.py \
   api/consumer_api.py \
+  api/product_catalog_api.py \
+  api/product_function_api.py \
   services/orchestrator_service.py \
   services/cat_food_task_service.py \
+  services/cat_food_product_catalog_service.py \
+  services/product_function_service.py \
   services/product_identity_service.py \
   vendor/csv_mysql_labeling/src/parse_catfood_ocr.py \
   vendor/csv_mysql_labeling/src/extract_catfood_brand_relations.py \

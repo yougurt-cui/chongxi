@@ -43,6 +43,34 @@ type ProductInfo = {
   baseline_profile: ProfilePoint[];
 };
 
+type ProductOption = {
+  id: string;
+  catalog_key: string;
+  product_key?: string | null;
+  label: string;
+  brand: string;
+  raw_brand?: string | null;
+  product_name: string;
+  raw_title?: string | null;
+  origin_type?: string | null;
+  brand_tier?: string | null;
+  source: "score_db" | "taobao" | "merged" | string;
+  source_item_id?: string | null;
+  source_url?: string | null;
+  price?: number | null;
+  price_bucket?: string | null;
+  food_taste?: string | null;
+  net_content?: string | null;
+  sold_text?: string | null;
+  main_image_url?: string | null;
+  main_images?: string[];
+  compare_available: boolean;
+  display_text?: string | null;
+  function_tags?: Array<{ tag: string; display_tag?: string; level?: string; score?: number }>;
+  warning_tags?: Array<{ tag: string; level?: string }>;
+  quality_flags?: string[];
+};
+
 type CompareResult = {
   current_food: ProductInfo;
   target_food: ProductInfo;
@@ -273,6 +301,42 @@ function levelTone(value: string) {
   return "bg-slate-100 text-slate-700";
 }
 
+function optionTone(value?: string | null) {
+  const text = value || "";
+  if (text.includes("国产")) return "bg-emerald-50 text-emerald-700";
+  if (text.includes("进口")) return "bg-blue-50 text-blue-700";
+  if (text.includes("80")) return "bg-orange-50 text-orange-700";
+  if (text.includes("慎选") || text.includes("未匹配") || text.includes("暂无评分")) return "bg-rose-50 text-rose-700";
+  return "bg-slate-100 text-slate-700";
+}
+
+function sourceLabel(source: string) {
+  if (source === "merged") return "已补淘宝信息";
+  if (source === "score_db") return "评分库";
+  if (source === "taobao") return "淘宝待评分";
+  return source;
+}
+
+function sourceTone(source: string) {
+  if (source === "merged") return "bg-indigo-50 text-indigo-700";
+  if (source === "score_db") return "bg-slate-100 text-slate-700";
+  return "bg-amber-50 text-amber-700";
+}
+
+function SectionTitle(props: { marker: string; title: string; hint?: string }) {
+  return (
+    <div className="mb-4 flex flex-col gap-1 md:flex-row md:items-center md:gap-3">
+      <div className="flex items-center gap-2">
+        <span className="flex h-6 min-w-6 items-center justify-center rounded-md bg-slate-900 px-2 text-xs font-semibold text-white">
+          {props.marker}
+        </span>
+        <h2 className="text-base font-semibold text-slate-950">{props.title}</h2>
+      </div>
+      {props.hint && <p className="text-xs font-medium text-slate-500">{props.hint}</p>}
+    </div>
+  );
+}
+
 function productDisplayName(product?: ProductInfo) {
   if (!product) return "";
   return [product.brand_name, product.name].filter(Boolean).join(" ");
@@ -308,6 +372,41 @@ function MultiSelect(props: {
                 active
                   ? "border-slate-900 bg-slate-900 text-white"
                   : "border-slate-200 bg-slate-50 text-slate-700 hover:border-slate-300 hover:bg-white"
+              }`}
+            >
+              {option}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function InlineMultiSelect(props: {
+  label: string;
+  note: string;
+  options: string[];
+  selected: string[];
+  onChange: (next: string[]) => void;
+}) {
+  return (
+    <div className="flex min-w-0 flex-col gap-2 md:flex-row md:items-center">
+      <div className="shrink-0 text-sm font-semibold text-slate-950 md:w-32">
+        {props.label} <span className="ml-1 text-xs font-medium text-slate-400">（{props.note}）</span>
+      </div>
+      <div className="flex min-w-0 flex-wrap gap-2">
+        {props.options.map((option) => {
+          const active = props.selected.includes(option);
+          return (
+            <button
+              key={option}
+              type="button"
+              onClick={() => props.onChange(normalizeMultiSelect(props.options, props.selected, option))}
+              className={`inline-flex h-9 items-center rounded-full border px-4 text-xs font-medium transition ${
+                active
+                  ? "border-slate-700 bg-slate-800 text-white shadow-sm"
+                  : "border-slate-200 bg-white text-slate-500 hover:border-blue-200 hover:bg-blue-50"
               }`}
             >
               {option}
@@ -390,6 +489,251 @@ function ProductCombobox(props: {
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+function ProductPicker(props: {
+  label: string;
+  value: string;
+  options: ProductOption[];
+  loading: boolean;
+  onChange: (value: string, option?: ProductOption) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const [origin, setOrigin] = useState("全部");
+  const [priceBucket, setPriceBucket] = useState("全部");
+  const [functionTag, setFunctionTag] = useState("全部");
+  const [onlyAvailable, setOnlyAvailable] = useState(true);
+
+  const selected = useMemo(() => {
+    return props.options.find((option) => option.label === props.value || option.product_key === props.value);
+  }, [props.options, props.value]);
+
+  const filteredOptions = useMemo(() => {
+    const normalizedQuery = query.trim().toLowerCase();
+    return props.options
+      .filter((option) => {
+        if (onlyAvailable && !option.compare_available) return false;
+        if (origin !== "全部" && option.origin_type !== origin) return false;
+        if (priceBucket !== "全部" && option.price_bucket !== priceBucket) return false;
+        if (
+          functionTag !== "全部" &&
+          !(option.function_tags || []).some((item) => item.tag === functionTag || item.display_tag === functionTag)
+        ) {
+          return false;
+        }
+        if (!normalizedQuery) return true;
+        const haystack = [
+          option.label,
+          option.brand,
+          option.product_name,
+          option.raw_title,
+          option.food_taste,
+          option.net_content,
+          option.display_text,
+        ]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase();
+        return haystack.includes(normalizedQuery);
+      })
+      .slice(0, 40);
+  }, [functionTag, onlyAvailable, origin, priceBucket, props.options, query]);
+
+  const filters = [
+    { value: "全部", setter: setOrigin, active: origin === "全部" },
+    { value: "国产品牌", label: "国产", setter: setOrigin, active: origin === "国产品牌" },
+    { value: "进口/国际品牌", label: "进口", setter: setOrigin, active: origin === "进口/国际品牌" },
+    { value: "<50", setter: setPriceBucket, active: priceBucket === "<50" },
+    { value: "50-80", setter: setPriceBucket, active: priceBucket === "50-80" },
+    { value: "80以上", setter: setPriceBucket, active: priceBucket === "80以上" },
+    { value: "肠胃友好", setter: setFunctionTag, active: functionTag === "肠胃友好" },
+    { value: "黑下巴友好", setter: setFunctionTag, active: functionTag === "黑下巴友好" },
+    { value: "控重管理", setter: setFunctionTag, active: functionTag === "控重管理" },
+    { value: "皮肤毛发", setter: setFunctionTag, active: functionTag === "皮肤毛发" },
+    { value: "增肌长肉", setter: setFunctionTag, active: functionTag === "增肌长肉" },
+  ];
+
+  function selectOption(option: ProductOption) {
+    if (!option.compare_available) return;
+    props.onChange(option.label, option);
+    setQuery("");
+    setOpen(false);
+  }
+
+  function clearSelection() {
+    props.onChange("");
+    setQuery("");
+    setOpen(false);
+  }
+
+  const displayValue = open ? query : selected?.label || props.value;
+
+  return (
+    <div className="relative">
+      <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-slate-950">
+        <span>{props.label}</span>
+        <span className="inline-flex h-4 w-4 items-center justify-center rounded-full border border-slate-300 text-[10px] text-slate-400">i</span>
+      </div>
+
+      <div className="relative">
+        <span className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-lg text-slate-400">⌕</span>
+        <input
+          value={displayValue}
+          onFocus={() => setOpen(true)}
+          onChange={(event) => {
+            setQuery(event.target.value);
+            setOpen(true);
+          }}
+          onBlur={() => window.setTimeout(() => setOpen(false), 150)}
+          className="h-12 w-full rounded-xl border border-slate-200 bg-white pl-11 pr-20 text-sm font-medium text-slate-950 outline-none transition focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10"
+          placeholder="输入品牌或产品名"
+        />
+        {(selected || displayValue) && (
+          <button
+            type="button"
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={clearSelection}
+            className="absolute right-12 top-1/2 -translate-y-1/2 text-lg text-slate-400 hover:text-slate-700"
+            aria-label="清空"
+          >
+            ×
+          </button>
+        )}
+        <button
+          type="button"
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={() => setOpen((prev) => !prev)}
+          className="absolute right-4 top-1/2 -translate-y-1/2 text-lg text-slate-700"
+          aria-label="搜索"
+        >
+          ⌄
+        </button>
+      </div>
+
+      {open && (
+        <div className="absolute z-40 mt-2 w-full overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl">
+          <div className="border-b border-slate-100 p-3">
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <div className="text-xs font-semibold text-slate-500">筛选产品目录</div>
+              <label className="flex items-center gap-2 text-xs text-slate-500">
+                <input
+                  type="checkbox"
+                  checked={onlyAvailable}
+                  onChange={(event) => setOnlyAvailable(event.target.checked)}
+                  className="h-3.5 w-3.5 rounded border-slate-300"
+                />
+                仅可对比
+              </label>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {filters.map((filter) => (
+                <button
+                  key={`${filter.value}-${filter.label || ""}`}
+                  type="button"
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={() => filter.setter(filter.value)}
+                  className={`rounded-lg px-3 py-1.5 text-xs font-medium transition ${
+                    filter.active ? "bg-blue-600 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                  }`}
+                >
+                  {filter.label || filter.value}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="max-h-[360px] overflow-auto">
+            {props.loading ? (
+              <div className="px-4 py-8 text-center text-sm text-slate-500">正在加载产品目录...</div>
+            ) : filteredOptions.length ? (
+              filteredOptions.map((option) => {
+                const disabled = !option.compare_available;
+                return (
+                  <button
+                    key={option.catalog_key}
+                    type="button"
+                    disabled={disabled}
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={() => selectOption(option)}
+                    className={`flex w-full items-center gap-3 border-b border-slate-100 px-4 py-3 text-left last:border-b-0 ${
+                      option.label === props.value ? "bg-blue-50" : "bg-white hover:bg-slate-50"
+                    } ${disabled ? "cursor-not-allowed opacity-60" : ""}`}
+                  >
+                    {option.main_image_url ? (
+                      <img src={option.main_image_url} alt="" className="h-12 w-12 shrink-0 rounded-full object-cover" />
+                    ) : (
+                      <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-blue-50 text-xs text-blue-400">·</div>
+                    )}
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate text-sm font-semibold text-slate-950">{option.label}</div>
+                      <div className="mt-1 flex flex-wrap gap-1.5">
+                        <span className={`rounded-md px-2 py-0.5 text-[11px] font-medium ${optionTone(option.origin_type)}`}>
+                          {option.origin_type?.includes("进口") ? "进口" : option.origin_type?.includes("国产") ? "国产" : "待确认"}
+                        </span>
+                        {option.price_bucket && option.price_bucket !== "未知" && (
+                          <span className="rounded-md bg-orange-50 px-2 py-0.5 text-[11px] font-medium text-orange-700">{option.price_bucket}</span>
+                        )}
+                        {(option.function_tags || []).slice(0, 1).map((tag) => (
+                          <span key={`${option.catalog_key}-${tag.tag}`} className="rounded-md bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700">
+                            {tag.display_tag || tag.tag}
+                          </span>
+                        ))}
+                        {disabled && <span className="rounded-md bg-rose-50 px-2 py-0.5 text-[11px] font-medium text-rose-700">暂无评分</span>}
+                      </div>
+                    </div>
+                  </button>
+                );
+              })
+            ) : (
+              <div className="px-4 py-8 text-center text-sm text-slate-500">没有匹配的产品</div>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SelectedFoodSummary(props: {
+  label: string;
+  value: string;
+  option?: ProductOption;
+  accent: "blue" | "orange";
+}) {
+  const iconClass = props.accent === "blue" ? "border-blue-200 bg-blue-50 text-blue-600" : "border-orange-200 bg-orange-50 text-orange-600";
+  const title = props.option?.label || props.value || "未选择";
+  const brand = props.option?.brand || props.value.split(" ")[0] || "待选择";
+  const tags = [
+    `品牌：${brand}`,
+    props.option?.origin_type?.includes("进口") ? "进口" : props.option?.origin_type?.includes("国产") ? "国产" : "",
+    props.option?.price_bucket && props.option.price_bucket !== "未知" ? `${props.option.price_bucket}元/斤` : "",
+    ...(props.option?.function_tags || []).slice(0, 1).map((tag) => tag.display_tag || tag.tag),
+  ].filter(Boolean);
+
+  return (
+    <div className="flex min-w-0 items-center gap-3">
+      <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border ${iconClass}`}>
+        <span className="h-4 w-5 rounded-b-lg rounded-t-sm border-2 border-current" />
+      </div>
+      <div className="min-w-0">
+        <div className="flex min-w-0 items-center gap-2 text-sm">
+          <span className="shrink-0 font-semibold text-slate-700">{props.label}：</span>
+          <span className="truncate font-bold text-slate-950">{title}</span>
+        </div>
+        <div className="mt-1 flex min-w-0 flex-wrap gap-2">
+          {tags.length ? (
+            tags.map((tag) => (
+              <span key={tag} className="rounded-md bg-slate-100 px-2.5 py-1 text-[11px] font-medium text-slate-600">
+                {tag}
+              </span>
+            ))
+          ) : (
+            <span className="rounded-md bg-slate-100 px-2.5 py-1 text-[11px] font-medium text-slate-500">请选择产品</span>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
@@ -800,27 +1144,354 @@ function RadarChart(props: { title: string; profile: ProfilePoint[]; baseline?: 
   );
 }
 
+function focusIcon(dimension: string) {
+  if (dimension.includes("蛋白")) return "♙";
+  if (dimension.includes("脂肪") || dimension.includes("黑下巴")) return "◉";
+  if (dimension.includes("肠胃") || dimension.includes("纤维") || dimension.includes("菌群")) return "♧";
+  if (dimension.includes("Omega") || dimension.includes("皮肤")) return "⌘";
+  return "◎";
+}
+
+function FocusBarComparison(props: {
+  currentProfile: ProfilePoint[];
+  targetProfile: ProfilePoint[];
+  currentName: string;
+  targetName: string;
+}) {
+  const targetScoreByDimension = new Map(
+    props.targetProfile
+      .filter((point) => point.score !== null && point.score !== undefined)
+      .map((point) => [point.dimension, Number(point.score)]),
+  );
+  const rows = props.currentProfile
+    .filter((point) => point.score !== null && point.score !== undefined && targetScoreByDimension.has(point.dimension))
+    .map((point) => ({
+      dimension: point.dimension,
+      currentScore: Number(point.score),
+      targetScore: Number(targetScoreByDimension.get(point.dimension)),
+    }))
+    .slice(0, 7);
+
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-white p-4">
+      <div className="mb-3 flex justify-end">
+        <div className="flex flex-wrap items-center gap-4 text-xs font-medium text-slate-500">
+          <span className="inline-flex items-center gap-1">
+            <span className="h-2 w-2 rounded-full bg-blue-600" />
+            {props.currentName}
+          </span>
+          <span className="inline-flex items-center gap-1">
+            <span className="h-2 w-2 rounded-full bg-emerald-500" />
+            {props.targetName}
+          </span>
+          <span>0–100 分</span>
+        </div>
+      </div>
+
+      {rows.length ? (
+        <div className="space-y-3">
+          {rows.map((row) => {
+            const currentScore = Math.max(0, Math.min(100, row.currentScore));
+            const targetScore = Math.max(0, Math.min(100, row.targetScore));
+            return (
+              <div key={row.dimension} className="grid gap-2 md:grid-cols-[140px_1fr_1fr] md:items-center">
+                <div className="flex min-w-0 items-center gap-2 text-xs font-medium text-slate-700">
+                  <span className="text-slate-400">{focusIcon(row.dimension)}</span>
+                  <span className="truncate">{row.dimension}</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <div className="h-2.5 flex-1 overflow-hidden rounded-full bg-slate-100">
+                    <div className="h-full rounded-full bg-blue-600" style={{ width: `${currentScore}%` }} />
+                  </div>
+                  <span className="w-8 text-right text-xs font-medium text-slate-700">{formatScore(currentScore)}</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <div className="h-2.5 flex-1 overflow-hidden rounded-full bg-slate-100">
+                    <div className="h-full rounded-full bg-emerald-500" style={{ width: `${targetScore}%` }} />
+                  </div>
+                  <span className="w-8 text-right text-xs font-medium text-slate-700">{formatScore(targetScore)}</span>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      ) : (
+        <div className="rounded-xl bg-slate-50 px-4 py-6 text-center text-sm text-slate-500">
+          暂无足够分数生成侧重点对比。
+        </div>
+      )}
+    </div>
+  );
+}
+
+function keyChangeSummary(row: ProfileDiff, currentName: string, targetName: string) {
+  if (row.diff_b_minus_a === null || row.diff_b_minus_a === undefined) return row.summary || "该维度暂无足够数据。";
+  const config = DIMENSION_INTERPRETATION_CONFIG[row.dimension];
+  const delta = row.diff_b_minus_a;
+  const higher = delta > 0 ? targetName : currentName;
+  const lower = delta > 0 ? currentName : targetName;
+  const displayName = config?.displayName || row.dimension;
+  const absDelta = Math.abs(delta).toFixed(0);
+  if ((config?.type || row.type) === "pressure") {
+    return `${displayName}：${higher} 比 ${lower} 高 ${absDelta} 分，需要结合猫咪耐受观察。`;
+  }
+  return `${displayName}：${higher} 比 ${lower} 高 ${absDelta} 分，相关支持表现更突出。`;
+}
+
+function KeyChangeSummary(props: {
+  rows: ProfileDiff[];
+  currentName: string;
+  targetName: string;
+}) {
+  const rows = props.rows.slice(0, 4);
+
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-white p-4">
+      <h3 className="mb-3 text-sm font-semibold text-slate-950">关键变化总结</h3>
+      {rows.length ? (
+        <div className="space-y-3">
+          {rows.map((row) => {
+            const isPositive =
+              row.diff_b_minus_a !== null &&
+              row.diff_b_minus_a !== undefined &&
+              ((row.type === "pressure" && row.diff_b_minus_a < 0) || (row.type !== "pressure" && row.diff_b_minus_a > 0));
+            return (
+              <div key={row.dimension} className="flex gap-2 text-sm leading-5 text-slate-700">
+                <span
+                  className={`mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full border text-[10px] ${
+                    isPositive ? "border-emerald-300 bg-emerald-50 text-emerald-600" : "border-rose-300 bg-rose-50 text-rose-600"
+                  }`}
+                >
+                  {isPositive ? "↑" : "!"}
+                </span>
+                <span>{keyChangeSummary(row, props.currentName, props.targetName)}</span>
+              </div>
+            );
+          })}
+        </div>
+      ) : (
+        <div className="rounded-xl bg-slate-50 px-4 py-6 text-center text-sm text-slate-500">
+          两款粮暂无明显关键变化。
+        </div>
+      )}
+    </div>
+  );
+}
+
+function dimensionMeta(dimension: string) {
+  if (dimension.includes("黑下巴")) {
+    return {
+      icon: "◉",
+      tone: "bg-rose-50 text-rose-600",
+      description: "反映配方对黑下巴问题的潜在影响",
+    };
+  }
+  if (dimension.includes("肠胃")) {
+    return {
+      icon: "♨",
+      tone: "bg-orange-50 text-orange-600",
+      description: "反映配方对肠胃健康的潜在影响",
+    };
+  }
+  if (dimension.includes("适口")) {
+    return {
+      icon: "▱",
+      tone: "bg-slate-100 text-slate-500",
+      description: "反映猫咪对口味和适口性的潜在接受度",
+    };
+  }
+  if (dimension.includes("皮肤")) {
+    return {
+      icon: "✦",
+      tone: "bg-emerald-50 text-emerald-600",
+      description: "反映配方对皮肤和毛发状态的潜在影响",
+    };
+  }
+  return {
+    icon: "◎",
+    tone: "bg-blue-50 text-blue-600",
+    description: "反映该维度在整体产品池中的相对表现",
+  };
+}
+
+function scoreLevelLabel(score: number | null | undefined) {
+  if (score === null || score === undefined || Number.isNaN(Number(score))) return "暂无数据";
+  if (Number(score) >= 66) return "中高";
+  if (Number(score) >= 40) return "中等";
+  return "偏低";
+}
+
+function scorePositionLabel(score: number | null | undefined) {
+  if (score === null || score === undefined || Number.isNaN(Number(score))) return "暂无足够数据支持横向评估";
+  if (Number(score) >= 66) return "处于中游偏上";
+  if (Number(score) >= 40) return "低于多数产品";
+  return "处于靠后位置";
+}
+
+function DimensionScoreBlock(props: {
+  label: string;
+  name: string;
+  score: number | null;
+  accent: "blue" | "green";
+}) {
+  const hasData = props.score !== null && props.score !== undefined && !Number.isNaN(Number(props.score));
+  const score = hasData ? Math.max(0, Math.min(100, Number(props.score))) : 0;
+  const accentClass = props.accent === "blue" ? "text-blue-600" : "text-emerald-600";
+  const barClass = props.accent === "blue" ? "bg-blue-600" : "bg-emerald-500";
+  const badgeClass = hasData && score >= 66 ? "bg-emerald-50 text-emerald-700" : hasData ? "bg-rose-50 text-rose-600" : "bg-slate-100 text-slate-500";
+
+  return (
+    <div className="min-w-0">
+      <div className="mb-2 flex min-w-0 items-center gap-2 text-xs">
+        <span className={`shrink-0 font-semibold ${accentClass}`}>{props.label}</span>
+        <span className="text-slate-300">|</span>
+        <span className="truncate font-medium text-slate-500">{props.name}</span>
+      </div>
+      {hasData ? (
+        <>
+          <div className="flex items-center gap-2">
+            <span className="text-base font-semibold leading-none text-slate-950">{Number(props.score).toFixed(1)}</span>
+            <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${badgeClass}`}>{scoreLevelLabel(props.score)}</span>
+          </div>
+          <div className="mt-2 text-xs font-medium text-slate-500">{scorePositionLabel(props.score)}</div>
+          <div className="mt-2.5 h-1.5 overflow-hidden rounded-full bg-slate-100">
+            <div className={`h-full rounded-full ${barClass}`} style={{ width: `${score}%` }} />
+          </div>
+          <div className="mt-2 flex justify-between text-xs font-medium text-slate-500">
+            <span>低</span>
+            <span>中</span>
+            <span>高</span>
+          </div>
+        </>
+      ) : (
+        <div className="rounded-xl bg-slate-50 px-4 py-5 text-xs font-medium text-slate-500">
+          暂无数据
+          <div className="mt-2 text-xs font-normal">当前暂无足够数据支持横向评估</div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function DimensionComparisonPanel(props: {
+  rows: FriendlyRow[];
+  currentName: string;
+  targetName: string;
+}) {
+  return (
+    <section className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
+      <div className="mb-3 flex flex-col justify-end gap-3 md:flex-row md:items-center">
+        <div className="flex flex-wrap items-center gap-4 text-xs font-normal text-slate-500">
+          <span className="inline-flex items-center gap-1.5"><span className="flex h-4 w-4 items-center justify-center rounded-full bg-emerald-50 text-xs text-emerald-600">↑</span>对比粮更优</span>
+          <span className="inline-flex items-center gap-1.5"><span className="h-3 w-3 rounded-full bg-blue-100 ring-4 ring-blue-50" />当前粮更优</span>
+          <span className="inline-flex items-center gap-1.5"><span className="h-3 w-3 rounded-full bg-slate-300 ring-4 ring-slate-100" />两者接近</span>
+          <span className="inline-flex items-center gap-1.5"><span className="h-3 w-3 rounded-full bg-orange-100 ring-4 ring-orange-50" />暂无数据</span>
+        </div>
+      </div>
+
+      <div className="space-y-3">
+        {props.rows.map((row) => {
+          const meta = dimensionMeta(row.dimension);
+          const currentScore = row.current_score;
+          const targetScore = row.target_score;
+          const hasBoth = currentScore !== null && currentScore !== undefined && targetScore !== null && targetScore !== undefined;
+          const diff = hasBoth ? Number(targetScore) - Number(currentScore) : null;
+          const status =
+            diff === null
+              ? { label: "暂无数据", tone: "bg-slate-100 text-slate-500", icon: "−", text: "暂不支持该维度横向评估" }
+              : Math.abs(diff) < 5
+                ? { label: "两者接近", tone: "bg-slate-100 text-slate-600", icon: "−", text: `两款粮在${row.dimension}上表现接近。` }
+                : diff > 0
+                  ? { label: "对比粮更优", tone: "bg-emerald-50 text-emerald-700", icon: "↑", text: `对比粮领先 ${Math.abs(diff).toFixed(1)} 分，在产品库中更靠前，${row.dimension}优势更明显。` }
+                  : { label: "当前粮更优", tone: "bg-blue-50 text-blue-700", icon: "↑", text: `当前粮领先 ${Math.abs(diff).toFixed(1)} 分，在${row.dimension}上优势更明显。` };
+
+          return (
+            <div key={row.dimension} className="grid overflow-hidden rounded-2xl border border-slate-200 bg-white lg:grid-cols-[250px_1fr_1fr_250px]">
+              <div className="flex items-center gap-3 border-b border-slate-100 bg-slate-50/40 p-4 lg:border-b-0 lg:border-r">
+                <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-base ${meta.tone}`}>{meta.icon}</div>
+                <div>
+                  <div className="text-sm font-semibold text-slate-950">{row.dimension}</div>
+                  <div className="mt-1.5 text-xs leading-5 text-slate-500">{meta.description}</div>
+                </div>
+              </div>
+              <div className="border-b border-slate-100 p-4 lg:border-b-0 lg:border-r">
+                <DimensionScoreBlock label="当前粮" name={props.currentName} score={currentScore} accent="blue" />
+              </div>
+              <div className="relative border-b border-slate-100 p-4 lg:border-b-0 lg:border-r">
+                <span className="absolute -left-3.5 top-1/2 hidden h-7 w-7 -translate-y-1/2 items-center justify-center rounded-full bg-slate-100 text-[11px] font-semibold text-slate-500 lg:flex">VS</span>
+                <DimensionScoreBlock label="对比粮" name={props.targetName} score={targetScore} accent="green" />
+              </div>
+              <div className="flex items-center justify-between gap-3 p-4">
+                <div>
+                  <span className={`rounded-lg px-2.5 py-1 text-xs font-semibold ${status.tone}`}>{status.label}</span>
+                  <div className="mt-3 text-xs leading-5 text-slate-600">{status.text}</div>
+                </div>
+                <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full border text-base ${status.tone}`}>{status.icon}</span>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="mt-4 flex items-center gap-3 rounded-xl border border-blue-100 bg-blue-50 px-4 py-3 text-xs leading-5 text-slate-600">
+        <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-blue-500 text-[10px] font-bold text-white">i</span>
+        <span><span className="font-semibold text-slate-800">说明</span>　以上结果基于产品库样本数据进行风险换算和横向排序，仅作为参考，不代表绝对结论，建议结合猫咪个体情况综合评估。</span>
+      </div>
+    </section>
+  );
+}
+
 function ProductIngredientCard(props: {
   label: string;
   product: ProductInfo;
+  option?: ProductOption;
 }) {
+  const [expanded, setExpanded] = useState(false);
+  const ingredientText = props.product.ingredient_composition || "暂无原始配料信息";
+  const collapsedText = ingredientText.length > 150 ? `${ingredientText.slice(0, 150)}...` : ingredientText;
+  const brand = props.option?.brand || props.product.brand_name || "待确认";
+  const origin = props.option?.origin_type?.includes("进口")
+    ? "进口品牌"
+    : props.option?.origin_type?.includes("国产")
+      ? "国产品牌"
+      : "";
+  const price = props.option?.price_bucket && props.option.price_bucket !== "未知" ? `${props.option.price_bucket}元/斤` : "";
+  const meta = [`品牌：${brand}`, origin, price].filter(Boolean);
+
   return (
-    <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-      <div className="text-sm font-semibold text-slate-600">{props.label}</div>
-      <div className="mt-1 text-xl font-bold leading-snug text-slate-950">{props.product.name}</div>
-      {props.product.brand_name && (
-        <div className="mt-1 text-sm text-slate-500">品牌：{props.product.brand_name}</div>
-      )}
-      <div className="mt-4 max-h-40 overflow-auto rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm leading-6 text-slate-600">
-        <div className="mb-1 font-semibold text-slate-700">原始配料信息</div>
-        {props.product.ingredient_composition || "暂无原始配料信息"}
+    <div className="rounded-2xl border border-slate-200 bg-white p-4">
+      <div className="text-sm font-bold leading-snug text-slate-950">
+        {props.label}｜{productDisplayName(props.product)}
+      </div>
+      <div className="mt-2 flex flex-wrap items-center gap-2 text-xs font-medium text-slate-500">
+        {meta.map((item, index) => (
+          <React.Fragment key={item}>
+            {index > 0 && <span className="text-slate-300">|</span>}
+            <span>{item}</span>
+          </React.Fragment>
+        ))}
+      </div>
+      <div className="mt-3 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
+        <div className="mb-1 text-xs font-bold text-slate-700">原始配料信息</div>
+        <div className="text-xs leading-5 text-slate-600">
+          {expanded ? ingredientText : collapsedText}
+        </div>
+        {ingredientText.length > 150 && (
+          <button
+            type="button"
+            onClick={() => setExpanded((prev) => !prev)}
+            className="mx-auto mt-2 block text-xs font-medium text-blue-600 hover:text-blue-500"
+          >
+            {expanded ? "收起" : "展开全部"}⌄
+          </button>
+        )}
       </div>
     </div>
   );
 }
 
 export default function CatFoodComparePage() {
-  const [products, setProducts] = useState<string[]>([]);
+  const [productOptions, setProductOptions] = useState<ProductOption[]>([]);
   const [brandOptions, setBrandOptions] = useState<string[]>([]);
   const [productsLoading, setProductsLoading] = useState(true);
   const [productsError, setProductsError] = useState("");
@@ -854,7 +1525,7 @@ export default function CatFoodComparePage() {
       setProductsError("");
       try {
         const [productsResponse, brandsResponse] = await Promise.all([
-          fetch("/api/cat-food-compare/products"),
+          fetch("/api/cat-food-compare/product-options?limit=500"),
           fetch("/api/cat-food-compare/brands"),
         ]);
         const data = await productsResponse.json();
@@ -862,8 +1533,8 @@ export default function CatFoodComparePage() {
         const brandsData = await brandsResponse.json();
         if (!brandsResponse.ok) throw new Error(brandsData.error || "品牌库加载失败");
         if (cancelled) return;
-        const nextProducts = data.products || [];
-        setProducts(nextProducts);
+        const nextProducts = data.items || [];
+        setProductOptions(nextProducts);
         setBrandOptions(brandsData.brands || []);
       } catch (error) {
         if (!cancelled) {
@@ -880,6 +1551,20 @@ export default function CatFoodComparePage() {
   }, []);
 
   const canCompare = currentFood && targetFood && currentFood !== targetFood && !compareLoading;
+
+  function handleCurrentFoodChange(value: string) {
+    setCurrentFood(value);
+    setTask(null);
+    setCompareResult(null);
+    setSummary("");
+  }
+
+  function handleTargetFoodChange(value: string) {
+    setTargetFood(value);
+    setTask(null);
+    setCompareResult(null);
+    setSummary("");
+  }
 
   function removeMissingProductSubmission() {
     if (missingProductSubmission?.previewUrl) {
@@ -1057,11 +1742,12 @@ export default function CatFoodComparePage() {
     }
   }
 
-  const selectedDescription = useMemo(() => {
-    if (!currentFood || !targetFood) return "请选择当前粮和对比粮";
-    if (currentFood === targetFood) return "当前粮和对比粮不能相同";
-    return `当前粮：${currentFood} ｜ 对比粮：${targetFood}`;
-  }, [currentFood, targetFood]);
+  const selectedCurrentFood = useMemo(() => {
+    return productOptions.find((option) => option.label === currentFood || option.product_key === currentFood);
+  }, [currentFood, productOptions]);
+  const selectedTargetFood = useMemo(() => {
+    return productOptions.find((option) => option.label === targetFood || option.product_key === targetFood);
+  }, [targetFood, productOptions]);
   const keyProfileDiff = useMemo(() => {
     return (compareResult?.profile_diff || []).filter((row) => {
       if (row.diff_b_minus_a === null || row.diff_b_minus_a === undefined) return false;
@@ -1070,38 +1756,36 @@ export default function CatFoodComparePage() {
   }, [compareResult]);
 
   return (
-    <div className="min-h-screen bg-slate-50 px-4 py-8 text-slate-900">
-      <div className="mx-auto max-w-7xl space-y-6">
-        <header className="rounded-3xl bg-white p-6 shadow-sm">
-          <div className="mb-2 text-sm font-medium text-slate-500">宠析 · C端 Demo</div>
-          <h1 className="text-2xl font-bold tracking-tight md:text-3xl">猫粮对比分析</h1>
-          <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600">
-            选择当前粮和对比粮，系统会基于猫粮库中的品牌、产品名、配方画像和风险结果，生成清晰的换粮判断。
-          </p>
+    <div className="min-h-screen bg-[#f5f8ff] px-5 py-6 text-slate-900">
+      <div className="mx-auto max-w-[1840px] space-y-4">
+        <header className="flex flex-col justify-between gap-4 md:flex-row md:items-start">
+          <div>
+            <h1 className="text-[28px] font-bold tracking-tight text-slate-950">猫粮对比分析</h1>
+            <p className="mt-2 text-sm font-medium text-slate-500">
+              分析当前粮和对比粮的配方差异，帮你找到更适合猫咪的主粮
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setMissingProductModalOpen(true)}
+            className="inline-flex items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white px-5 py-2.5 text-sm font-semibold text-blue-600 shadow-sm hover:border-blue-200 hover:bg-blue-50"
+          >
+            <span className="inline-flex h-4 w-4 items-center justify-center rounded-full border border-blue-500 text-[10px]">i</span>
+            不知道粮名？ 上传配料表图片分析
+          </button>
         </header>
 
-        <section className="rounded-3xl bg-white p-6 shadow-sm">
-          <div className="flex flex-col justify-between gap-3 md:flex-row md:items-start">
+        <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="grid gap-5 lg:grid-cols-[0.9fr_1fr_1.1fr]">
             <div>
-              <h2 className="text-lg font-semibold">输入信息</h2>
-              <p className="mt-1 text-sm text-slate-500">
-                当前粮和对比粮均来自猫粮库，格式为品牌 + 产品名。
-              </p>
-            </div>
-            {productsLoading && <span className="text-sm text-slate-500">正在加载产品库...</span>}
-          </div>
-
-          {productsError && (
-            <div className="mt-4 rounded-2xl bg-rose-50 p-4 text-sm text-rose-700">{productsError}</div>
-          )}
-
-          <div className="mt-5 grid gap-4 md:grid-cols-3">
-            <div>
-              <label className="mb-1 block text-sm font-medium text-slate-700">猫龄</label>
+              <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-slate-950">
+                <span className="text-blue-600">♣</span>
+                <span>猫龄</span>
+              </div>
               <select
                 value={catProfile.age}
                 onChange={(event) => setCatProfile((prev) => ({ ...prev, age: event.target.value }))}
-                className="h-[42px] w-full rounded-xl border border-slate-200 bg-white px-3 text-sm outline-none focus:border-slate-900"
+                className="h-12 w-full rounded-xl border border-slate-200 bg-white px-4 text-sm font-medium text-slate-950 outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10"
               >
                 {CAT_AGE_OPTIONS.map((age) => (
                   <option key={age} value={age}>
@@ -1111,56 +1795,61 @@ export default function CatFoodComparePage() {
               </select>
             </div>
 
-            <ProductCombobox
+            <ProductPicker
               label="当前粮"
               value={currentFood}
-              options={products}
-              placeholder="输入品牌或产品名搜索"
-              onChange={setCurrentFood}
+              options={productOptions}
+              loading={productsLoading}
+              onChange={handleCurrentFoodChange}
             />
 
-            <ProductCombobox
-              label="对比粮"
+            <ProductPicker
+              label="对比粮（可选）"
               value={targetFood}
-              options={products}
-              placeholder="输入品牌或产品名搜索"
-              onChange={setTargetFood}
+              options={productOptions}
+              loading={productsLoading}
+              onChange={handleTargetFoodChange}
             />
           </div>
 
-          <MissingProductUploadEntry
-            submitted={missingProductSubmission}
-            onOpen={() => setMissingProductModalOpen(true)}
-            onRemove={removeMissingProductSubmission}
-          />
+          {productsLoading && <div className="mt-4 text-sm text-slate-500">正在加载产品库...</div>}
+          {productsError && (
+            <div className="mt-4 rounded-2xl bg-rose-50 p-4 text-sm text-rose-700">{productsError}</div>
+          )}
 
-          <div className="mt-5 grid gap-5 md:grid-cols-2">
-            <MultiSelect
-              label="历史问题"
-              description="选择猫咪过去出现过的长期或反复问题。"
-              options={HISTORY_ISSUE_OPTIONS}
-              selected={catProfile.historyIssues}
-              onChange={(historyIssues) => setCatProfile((prev) => ({ ...prev, historyIssues }))}
-            />
-            <MultiSelect
-              label="近期症状"
-              description="选择最近换粮前后需要重点观察的表现。"
-              options={RECENT_SYMPTOM_OPTIONS}
-              selected={catProfile.recentSymptoms}
-              onChange={(recentSymptoms) => setCatProfile((prev) => ({ ...prev, recentSymptoms }))}
-            />
-          </div>
+          {missingProductSubmission && (
+            <div className="mt-3 flex flex-wrap items-center gap-2 rounded-2xl bg-slate-50 px-4 py-3 text-sm text-slate-600">
+              <span className="rounded-lg bg-white px-3 py-1">品牌：{missingProductSubmission.brandName}</span>
+              <span className="rounded-lg bg-white px-3 py-1">产品：{missingProductSubmission.productName}</span>
+              <span className="rounded-lg bg-white px-3 py-1">图片：{missingProductSubmission.fileName}</span>
+              <button type="button" onClick={removeMissingProductSubmission} className="text-xs text-slate-500 underline">移除</button>
+            </div>
+          )}
 
-          <div className="mt-5 rounded-2xl bg-slate-50 p-4 text-sm text-slate-600">{selectedDescription}</div>
-
-          <div className="mt-5 flex justify-end">
+          <div className="mt-5 grid gap-4 border-t border-slate-100 pt-4 xl:grid-cols-[1fr_auto] xl:items-center">
+            <div className="space-y-3">
+              <InlineMultiSelect
+                label="历史问题"
+                note="可多选"
+                options={HISTORY_ISSUE_OPTIONS}
+                selected={catProfile.historyIssues}
+                onChange={(historyIssues) => setCatProfile((prev) => ({ ...prev, historyIssues }))}
+              />
+              <InlineMultiSelect
+                label="近期症状"
+                note="可多选"
+                options={RECENT_SYMPTOM_OPTIONS}
+                selected={catProfile.recentSymptoms}
+                onChange={(recentSymptoms) => setCatProfile((prev) => ({ ...prev, recentSymptoms }))}
+              />
+            </div>
             <button
               type="button"
               disabled={!canCompare}
               onClick={handleCompare}
-              className="rounded-full bg-slate-900 px-5 py-2.5 text-sm font-medium text-white shadow-sm hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300"
+              className="h-12 shrink-0 rounded-xl bg-blue-600 px-9 text-sm font-bold text-white shadow-lg shadow-blue-600/25 hover:bg-blue-500 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:shadow-none"
             >
-              {compareLoading ? "正在对比..." : "开始对比"}
+              {compareLoading ? "正在分析..." : "开始分析 →"}
             </button>
           </div>
 
@@ -1170,164 +1859,82 @@ export default function CatFoodComparePage() {
         </section>
 
         {compareResult && (
-          <>
-            <section className="grid gap-4 lg:grid-cols-2">
-              <ProductIngredientCard label="当前粮" product={compareResult.current_food} />
-              <ProductIngredientCard label="对比粮" product={compareResult.target_food} />
+          <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+            <div className="mb-4 flex flex-col gap-2 md:flex-row md:items-center">
+              <h2 className="text-lg font-bold text-slate-950">分析结果</h2>
+              <button
+                type="button"
+                onClick={() => setMissingProductModalOpen(true)}
+                className="text-left text-sm font-medium text-blue-600 hover:text-blue-500"
+              >
+                这两款都不合适？试试智能推荐 →
+              </button>
+            </div>
+
+            <section className="mt-4">
+              <SectionTitle marker="A" title="原材料展示" hint="查看两款粮的基础信息和原始配料内容" />
+              <div className="grid gap-4 lg:grid-cols-2">
+                <ProductIngredientCard label="当前粮" product={compareResult.current_food} option={selectedCurrentFood} />
+                <ProductIngredientCard label="对比粮" product={compareResult.target_food} option={selectedTargetFood} />
+              </div>
             </section>
 
-            <section className="rounded-3xl bg-white p-6 shadow-sm">
+            <section className="mt-4 grid gap-4 lg:grid-cols-2">
+              <div className="lg:col-span-2">
+                <SectionTitle marker="B" title="两款粮侧重点" hint="按蛋白、碳水、脂肪、纤维等配方维度对比分数" />
+              </div>
+              <FocusBarComparison
+                currentProfile={compareResult.current_food.profile}
+                targetProfile={compareResult.target_food.profile}
+                currentName={productDisplayName(compareResult.current_food)}
+                targetName={productDisplayName(compareResult.target_food)}
+              />
+              <KeyChangeSummary
+                rows={keyProfileDiff}
+                currentName={productDisplayName(compareResult.current_food)}
+                targetName={productDisplayName(compareResult.target_food)}
+              />
+            </section>
+
+            <section className="mt-4">
+              <SectionTitle marker="C" title="潜在风险对比" hint="基于产品库横向位置，识别两款粮在常见风险维度上的差异" />
+              <DimensionComparisonPanel
+                rows={compareResult.friendly_rows}
+                currentName={productDisplayName(compareResult.current_food)}
+                targetName={productDisplayName(compareResult.target_food)}
+              />
+            </section>
+
+            <section className="mt-4">
               <div className="flex flex-col justify-between gap-3 md:flex-row md:items-start">
-                <div>
-                  <h2 className="text-lg font-semibold">两款粮侧重点</h2>
-                  <p className="mt-1 text-sm text-slate-500">
-                    只展示差值达到 15 分以上的关键变化维度：15–30 为明显变化，超过 30 为重点变化。
-                  </p>
-                </div>
-              </div>
-
-              <div className="mt-5 grid gap-4 lg:grid-cols-2">
-                <RadarChart
-                  title={`当前粮｜${productDisplayName(compareResult.current_food)}`}
-                  profile={compareResult.current_food.profile}
-                  baseline={compareResult.current_food.baseline_profile}
-                  color="#0f172a"
-                />
-                <RadarChart
-                  title={`对比粮｜${productDisplayName(compareResult.target_food)}`}
-                  profile={compareResult.target_food.profile}
-                  baseline={compareResult.target_food.baseline_profile}
-                  color="#2563eb"
-                />
-              </div>
-
-              <div className="mt-5 overflow-auto rounded-2xl border border-slate-200">
-                <table className="w-full min-w-[860px] border-collapse text-left text-sm">
-                  <thead className="bg-slate-100 text-slate-600">
-                    <tr>
-                      <th className="px-4 py-3 font-medium">关键变化维度</th>
-                      <th className="px-4 py-3 font-medium">
-                        当前粮｜{productDisplayName(compareResult.current_food)}
-                      </th>
-                      <th className="px-4 py-3 font-medium">
-                        对比粮｜{productDisplayName(compareResult.target_food)}
-                      </th>
-                      <th className="px-4 py-3 font-medium">差值</th>
-                      <th className="px-4 py-3 font-medium">变化级别</th>
-                      <th className="px-4 py-3 font-medium">变化提示</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {keyProfileDiff.map((row) => (
-                      <tr key={row.dimension} className="border-t border-slate-100">
-                        <td className="px-4 py-4 font-medium text-slate-900">{row.dimension}</td>
-                        <td className="px-4 py-4">
-                          <div>{formatScore(row.product_a_score)}</div>
-                        </td>
-                        <td className="px-4 py-4">
-                          <div>{formatScore(row.product_b_score)}</div>
-                        </td>
-                        <td className="px-4 py-4 font-medium text-slate-900">
-                          {row.diff_b_minus_a === null || row.diff_b_minus_a === undefined
-                            ? "暂无"
-                            : Math.abs(row.diff_b_minus_a).toFixed(1)}
-                        </td>
-                        <td className="px-4 py-4">
-                          <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs text-slate-700">
-                            {getRowDiffLevel(row)}
-                          </span>
-                        </td>
-                        <td className="px-4 py-4 leading-6 text-slate-600">
-                          {diffTip(
-                            row,
-                            productDisplayName(compareResult.current_food),
-                            productDisplayName(compareResult.target_food),
-                          )}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-              {!keyProfileDiff.length && (
-                <div className="mt-4 rounded-2xl bg-slate-50 p-4 text-sm text-slate-500">
-                  两款粮暂无差值达到 15 分以上的关键变化维度。
-                </div>
-              )}
-            </section>
-
-            <section className="rounded-3xl bg-white p-6 shadow-sm">
-              <h2 className="text-lg font-semibold">两款粮在所有粮中表现</h2>
-              <p className="mt-1 text-sm text-slate-500">
-                友好度来自产品库中的风险结果换算，用于横向比较当前粮和对比粮在整体产品池中的相对位置。
-              </p>
-
-              <div className="mt-5 overflow-auto rounded-2xl border border-slate-200">
-                <table className="w-full min-w-[860px] border-collapse text-left text-sm">
-                  <thead className="bg-slate-100 text-slate-600">
-                    <tr>
-                      <th className="px-4 py-3 font-medium">友好度维度</th>
-                      <th className="px-4 py-3 font-medium">
-                        当前粮｜{productDisplayName(compareResult.current_food)}
-                      </th>
-                      <th className="px-4 py-3 font-medium">
-                        对比粮｜{productDisplayName(compareResult.target_food)}
-                      </th>
-                      <th className="px-4 py-3 font-medium">横向解读</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {compareResult.friendly_rows.map((row) => (
-                      <tr key={row.dimension} className="border-t border-slate-100">
-                        <td className="px-4 py-4 font-medium text-slate-900">{row.dimension}</td>
-                        <td className="px-4 py-4">
-                          <span className={`rounded-full px-2.5 py-1 text-xs ${levelTone(row.current)}`}>
-                            {row.current}
-                          </span>
-                        </td>
-                        <td className="px-4 py-4">
-                          <span className={`rounded-full px-2.5 py-1 text-xs ${levelTone(row.target)}`}>
-                            {row.target}
-                          </span>
-                        </td>
-                        <td className="px-4 py-4 leading-6 text-slate-600">{row.interpretation}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </section>
-
-            <section className="rounded-3xl bg-white p-6 shadow-sm">
-              <div className="flex flex-col justify-between gap-3 md:flex-row md:items-start">
-                <div>
-                  <h2 className="text-lg font-semibold">模块三：大模型总结</h2>
-                </div>
+                <SectionTitle marker="D" title="大模型总结" hint="综合配方差异、潜在风险和猫咪情况生成建议" />
                 <button
                   type="button"
                   disabled={summaryLoading}
                   onClick={handleGenerateSummary}
-                  className="rounded-full bg-slate-900 px-5 py-2.5 text-sm font-medium text-white shadow-sm hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300"
+                  className="h-10 shrink-0 rounded-xl bg-blue-600 px-5 text-sm font-bold text-white shadow-lg shadow-blue-600/20 hover:bg-blue-500 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:shadow-none"
                 >
                   {summaryLoading ? "正在生成..." : "生成大模型总结"}
                 </button>
               </div>
+              <div className="rounded-2xl border border-slate-200 bg-white p-5">
 
-              {summaryError && (
-                <div className="mt-4 rounded-2xl bg-rose-50 p-4 text-sm text-rose-700">{summaryError}</div>
-              )}
+                {summaryError && (
+                  <div className="mt-4 rounded-2xl bg-rose-50 p-4 text-sm text-rose-700">{summaryError}</div>
+                )}
 
-              {summary ? (
-                <div className="mt-5 whitespace-pre-wrap rounded-3xl border border-slate-200 bg-white p-6 text-sm leading-7 text-slate-700 shadow-sm">
-                  {summary}
-                </div>
-              ) : (
-                <div className="mt-5 rounded-2xl bg-slate-50 p-5 text-sm leading-6 text-slate-600">
-                  点击“生成大模型总结”后，大模型会围绕两款粮各有优势、整体产品池表现、换到对比粮可能改善什么和怎么选进行总结。
-                </div>
-              )}
+                {summary ? (
+                  <div className="mt-5 whitespace-pre-wrap rounded-3xl border border-slate-200 bg-white p-6 text-sm leading-7 text-slate-700 shadow-sm">
+                    {summary}
+                  </div>
+                ) : (
+                  <div className="mt-5 rounded-2xl bg-slate-50 p-5 text-sm leading-6 text-slate-600">
+                    点击“生成大模型总结”后，大模型会围绕两款粮各有优势、整体产品池表现、换到对比粮可能改善什么和怎么选进行总结。
+                  </div>
+                )}
+              </div>
             </section>
-          </>
+          </section>
         )}
       </div>
       <MissingProductUploadModal

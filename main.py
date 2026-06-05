@@ -25,6 +25,8 @@ try:
     from .api.exception_api import exception_api
     from .api.orchestrator_api import orchestrator_api
     from .api.pipeline_api import pipeline_api
+    from .api.product_catalog_api import product_catalog_api
+    from .api.product_function_api import product_function_api
     from .api.product_identity_api import product_identity_api
     from .api.process_signal_api import process_signal_api
 except ImportError:
@@ -32,6 +34,8 @@ except ImportError:
     from api.exception_api import exception_api
     from api.orchestrator_api import orchestrator_api
     from api.pipeline_api import pipeline_api
+    from api.product_catalog_api import product_catalog_api
+    from api.product_function_api import product_function_api
     from api.product_identity_api import product_identity_api
     from api.process_signal_api import process_signal_api
 
@@ -161,7 +165,6 @@ def _start_consumer_apps() -> None:
     if os.getenv("CHONGXI_START_CONSUMER_APPS", "1").strip().lower() in {"0", "false", "no"}:
         return
     _start_streamlit_app("product_recommendation_engine.py", 8501, "consumer/recommendation-engine")
-    _start_streamlit_app("product_compare_qwen.py", 8502, "consumer/product-compare")
 
 
 def _stop_consumer_apps() -> None:
@@ -1048,6 +1051,8 @@ def create_app() -> Flask:
     flask_app.register_blueprint(exception_api)
     flask_app.register_blueprint(orchestrator_api)
     flask_app.register_blueprint(pipeline_api)
+    flask_app.register_blueprint(product_catalog_api)
+    flask_app.register_blueprint(product_function_api)
     flask_app.register_blueprint(product_identity_api)
     flask_app.register_blueprint(process_signal_api)
 
@@ -1409,8 +1414,11 @@ def create_app() -> Flask:
         return redirect("/consumer/recommendation-engine", code=302)
 
     @flask_app.get("/consumer/product-compare")
+    @flask_app.get("/consumer/product-compare/")
     def consumer_product_compare():
-        return redirect(_consumer_app_url("consumer/product-compare", 8502), code=302)
+        if (DIST_DIR / "index.html").exists():
+            return send_from_directory(DIST_DIR, "index.html")
+        return send_from_directory(WEB_DIR, "index.html")
 
     return flask_app
 
