@@ -482,6 +482,28 @@ def get_table_columns(engine, table_name: str) -> set:
     return set(df["COLUMN_NAME"].tolist())
 
 
+def get_table_columns_in_schema(engine, schema_name: str, table_name: str) -> set:
+    sql = text("""
+        SELECT COLUMN_NAME
+        FROM INFORMATION_SCHEMA.COLUMNS
+        WHERE TABLE_SCHEMA = :schema_name
+          AND TABLE_NAME = :table_name
+    """)
+    try:
+        df = pd.read_sql(
+            sql,
+            engine,
+            params={"schema_name": schema_name, "table_name": table_name},
+        )
+    except Exception:
+        return set()
+    return set(df["COLUMN_NAME"].tolist())
+
+
+def qualified_table(schema_name: str, table_name: str) -> str:
+    return f"{quote_identifier(schema_name)}.{quote_identifier(table_name)}"
+
+
 @st.cache_data(ttl=300)
 def load_product_options() -> List[str]:
     engine = get_engine()
@@ -702,6 +724,187 @@ def get_ingredient_composition(engine, source_id: Any) -> str:
     return str(df.iloc[0].get("ingredient_composition") or "").strip()
 
 
+def _compact_row(row: pd.Series, fields: List[str]) -> dict:
+    result = {}
+    for field in fields:
+        if field not in row.index:
+            continue
+        value = row.get(field)
+        if value is None or pd.isna(value):
+            continue
+        result[field] = value
+    return make_json_safe(result)
+
+
+def get_product_guarantee_values(engine, source_id: Any) -> List[dict]:
+    if source_id is None or pd.isna(source_id):
+        return []
+
+    schema_name = "csv_labeling"
+    table_name = "product_guarantee"
+    columns = get_table_columns_in_schema(engine, schema_name, table_name)
+    if not columns or "source_id" not in columns:
+        return []
+
+    preferred_fields = [
+        "metric_name",
+        "operator_symbol",
+        "metric_value",
+        "metric_unit",
+        "basis",
+        "raw_text",
+    ]
+    selected_fields = [field for field in preferred_fields if field in columns]
+    if not selected_fields:
+        return []
+
+    order_field = "created_at" if "created_at" in columns else "id" if "id" in columns else None
+    order_sql = f"ORDER BY {quote_identifier(order_field)} DESC" if order_field else ""
+    sql = text(f"""
+        SELECT {", ".join(quote_identifier(field) for field in selected_fields)}
+        FROM {qualified_table(schema_name, table_name)}
+        WHERE {quote_identifier("source_id")} = :source_id
+        {order_sql}
+        LIMIT 40
+    """)
+    try:
+        df = pd.read_sql(sql, engine, params={"source_id": source_id})
+    except Exception:
+        return []
+    if df.empty:
+        return []
+
+    key_metrics = ["粗蛋白", "粗脂肪", "粗纤维", "水分", "粗灰分", "钙", "总磷", "牛磺酸"]
+    rows = []
+    seen = set()
+    for _, row in df.iterrows():
+        metric_name = str(row.get("metric_name") or "").strip()
+        if not metric_name:
+            continue
+        if key_metrics and not any(key in metric_name for key in key_metrics):
+            continue
+        dedupe_key = (
+            metric_name,
+            str(row.get("operator_symbol") or ""),
+            str(row.get("metric_value") or ""),
+            str(row.get("metric_unit") or ""),
+        )
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+        rows.append(_compact_row(row, selected_fields))
+    return rows
+
+
+def _fetch_feature_row(
+    engine,
+    table_name: str,
+    selected_fields: List[str],
+    *,
+    source_id: Any = None,
+    product_key: Any = None,
+    source_ids_json: bool = False,
+) -> dict:
+    columns = get_table_columns(engine, table_name)
+    if not columns:
+        return {}
+
+    fields = [field for field in selected_fields if field in columns]
+    if not fields:
+        return {}
+
+    clauses = []
+    params = {}
+    if source_id is not None and not pd.isna(source_id) and "source_id" in columns:
+        clauses.append(f"{quote_identifier('source_id')} = :source_id")
+        params["source_id"] = source_id
+    if product_key is not None and str(product_key).strip() and "product_key" in columns:
+        clauses.append(f"{quote_identifier('product_key')} = :product_key")
+        params["product_key"] = str(product_key).strip()
+    if source_ids_json and not clauses and source_id is not None and not pd.isna(source_id) and "source_ids" in columns:
+        clauses.append("JSON_CONTAINS(`source_ids`, CAST(:source_id_json AS JSON))")
+        params["source_id_json"] = str(int(source_id))
+    if not clauses:
+        return {}
+
+    order_field = "updated_at" if "updated_at" in columns else "aggregated_at" if "aggregated_at" in columns else "id" if "id" in columns else None
+    order_sql = f"ORDER BY {quote_identifier(order_field)} DESC" if order_field else ""
+    sql = text(f"""
+        SELECT {", ".join(quote_identifier(field) for field in fields)}
+        FROM {quote_identifier(table_name)}
+        WHERE {" OR ".join(clauses)}
+        {order_sql}
+        LIMIT 1
+    """)
+    try:
+        df = pd.read_sql(sql, engine, params=params)
+    except Exception:
+        return {}
+    if df.empty:
+        return {}
+    return _compact_row(df.iloc[0], fields)
+
+
+def get_material_role_evidence(engine, source_id: Any, product_key: Any, ingredient_composition: str) -> dict:
+    protein_roles = _fetch_feature_row(
+        engine,
+        "protein_source_aggregate",
+        [
+            "animal_sources",
+            "animal_source_level1_categories",
+            "animal_source_level2_sources",
+            "protein_source_details",
+            "primary_meat_source_species",
+            "secondary_meat_source_species",
+            "primary_meat_source_type",
+            "secondary_meat_source_type",
+            "plant_protein_labels",
+            "guarantee_crude_protein_value",
+            "guarantee_crude_protein_unit",
+        ],
+        source_id=source_id,
+        product_key=product_key,
+    )
+    fat_roles = _fetch_feature_row(
+        engine,
+        "catfood_fat_material_features",
+        [
+            "fat_sources",
+            "fat_source_types",
+            "antioxidant_sources",
+            "antioxidant_types",
+            "micronutrient_sources",
+            "micronutrient_types",
+            "omega6_sources",
+            "omega3_sources",
+            "guarantee_crude_fat_value",
+            "guarantee_crude_fat_unit",
+            "guarantee_crude_fat_operator",
+        ],
+        source_id=source_id,
+        product_key=product_key,
+    )
+    fiber_carb_roles = _fetch_feature_row(
+        engine,
+        "catfood_fiber_feature_json",
+        [
+            "raw_ingredient_text",
+            "ingredient_feature_json",
+            "starch_ingredients_json",
+        ],
+        source_id=source_id,
+        product_key=product_key,
+        source_ids_json=True,
+    )
+
+    return make_json_safe({
+        "raw_ingredient_text": ingredient_composition or fiber_carb_roles.get("raw_ingredient_text") or "",
+        "protein_roles": protein_roles,
+        "fat_roles": fat_roles,
+        "fiber_carb_roles": fiber_carb_roles,
+    })
+
+
 def get_product_data(product_name: str) -> Dict[str, Any]:
     engine = get_engine()
 
@@ -735,7 +938,17 @@ def get_product_data(product_name: str) -> Dict[str, Any]:
 
     pool_summary = get_pool_summary(engine, product_name)
     source_id = safe_get(score_row, "source_id") or safe_get(black_chin_row, "source_id") or safe_get(soft_stool_row, "source_id")
+    product_key = (
+        safe_get(score_row, "product_key")
+        or safe_get(score_row, "sku_id")
+        or safe_get(black_chin_row, "product_key")
+        or safe_get(black_chin_row, "sku_id")
+        or safe_get(soft_stool_row, "product_key")
+        or safe_get(soft_stool_row, "sku_id")
+    )
     ingredient_composition = get_ingredient_composition(engine, source_id)
+    guarantee_values = get_product_guarantee_values(engine, source_id)
+    material_role_evidence = get_material_role_evidence(engine, source_id, product_key, ingredient_composition)
 
     return {
         "score": score_row,
@@ -743,6 +956,10 @@ def get_product_data(product_name: str) -> Dict[str, Any]:
         "soft_stool": soft_stool_row,
         "pool_summary": pool_summary,
         "ingredient_composition": ingredient_composition,
+        "source_id": source_id,
+        "product_key": product_key,
+        "guarantee_values": guarantee_values,
+        "material_role_evidence": material_role_evidence,
     }
 
 
@@ -1024,6 +1241,10 @@ def build_product_context(product_name: str) -> Dict[str, Any]:
         "name": str(product_display_name),
         "brand_name": str(brand_name),
         "ingredient_composition": str(data.get("ingredient_composition") or ""),
+        "source_id": data.get("source_id"),
+        "product_key": data.get("product_key"),
+        "guarantee_values": data.get("guarantee_values") or [],
+        "material_role_evidence": data.get("material_role_evidence") or {},
         "data": data,
         "score_df": score_df,
         "profile_df": profile_df,
@@ -1240,6 +1461,41 @@ def profile_df_to_context(profile_df: pd.DataFrame) -> List[dict]:
     return make_json_safe(rows)
 
 
+def _material_evidence_for_dimension(material_evidence: dict, dimension: str) -> dict:
+    material_evidence = material_evidence or {}
+    if dimension in {"蛋白质量", "蛋白压力"}:
+        return {
+            "raw_ingredient_text": material_evidence.get("raw_ingredient_text") or "",
+            "protein_roles": material_evidence.get("protein_roles") or {},
+        }
+    if dimension in {"脂肪负担", "皮肤保护"}:
+        return {
+            "raw_ingredient_text": material_evidence.get("raw_ingredient_text") or "",
+            "fat_roles": material_evidence.get("fat_roles") or {},
+        }
+    if dimension in {"碳水负担", "纤维缓冲", "菌群支持"}:
+        return {
+            "raw_ingredient_text": material_evidence.get("raw_ingredient_text") or "",
+            "fiber_carb_roles": material_evidence.get("fiber_carb_roles") or {},
+        }
+    return {"raw_ingredient_text": material_evidence.get("raw_ingredient_text") or ""}
+
+
+def score_material_evidence_to_context(product: Dict[str, Any]) -> List[dict]:
+    material_evidence = product.get("material_role_evidence") or {}
+    rows = []
+    for item in profile_df_to_context(product["profile_df"]):
+        dimension = item.get("dimension")
+        rows.append({
+            "dimension": dimension,
+            "score": item.get("score"),
+            "score_type": item.get("type"),
+            "underlying_scores": item.get("underlying_scores") or [],
+            "related_material_evidence": _material_evidence_for_dimension(material_evidence, str(dimension or "")),
+        })
+    return make_json_safe(rows)
+
+
 def diff_df_to_context(diff_df: pd.DataFrame) -> List[dict]:
     rows = []
     for _, row in diff_df.iterrows():
@@ -1270,14 +1526,22 @@ def build_llm_compare_context(
         "product_a": {
             "name": product_a["name"],
             "brand_name": product_a["brand_name"],
+            "ingredient_composition": product_a.get("ingredient_composition") or "",
+            "guarantee_values": product_a.get("guarantee_values") or [],
+            "material_role_evidence": product_a.get("material_role_evidence") or {},
             "profile": profile_df_to_context(product_a["profile_df"]),
+            "score_material_evidence": score_material_evidence_to_context(product_a),
             "black_chin_risk": product_a["black_chin_risk"],
             "soft_stool_risk": product_a["soft_stool_risk"],
         },
         "product_b": {
             "name": product_b["name"],
             "brand_name": product_b["brand_name"],
+            "ingredient_composition": product_b.get("ingredient_composition") or "",
+            "guarantee_values": product_b.get("guarantee_values") or [],
+            "material_role_evidence": product_b.get("material_role_evidence") or {},
             "profile": profile_df_to_context(product_b["profile_df"]),
+            "score_material_evidence": score_material_evidence_to_context(product_b),
             "black_chin_risk": product_b["black_chin_risk"],
             "soft_stool_risk": product_b["soft_stool_risk"],
         },

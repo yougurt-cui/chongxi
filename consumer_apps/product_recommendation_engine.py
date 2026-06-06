@@ -179,6 +179,21 @@ SYMPTOM_LABELS = {
     "weight_gain": "增重",
 }
 
+CAT_AGE_OPTIONS = ["0～1年", "1～3年", "3～6年", "6年以上"]
+LONG_TERM_PROBLEM_OPTIONS = ["黑下巴反复", "肠胃敏感", "皮肤敏感", "泌尿问题", "挑食", "体重管理", "便软食物不耐受"]
+CURRENT_OBSERVATION_OPTIONS = ["下巴出油", "特别/黑下巴", "软便", "拉稀", "呕吐", "食欲下降", "掉食", "泪痕加重", "便秘"]
+ORIGIN_PREF_OPTIONS = ["不限", "国产", "进口"]
+PRICE_PREF_OPTIONS = ["不限", "50元/斤内", "50-80元/斤", "80元+/斤"]
+FUNCTION_PREF_OPTIONS = ["不限", "肠胃友好", "黑下巴友好", "美毛护肤", "控重管理", "低敏尝试"]
+
+SYMPTOM_TRIGGER_RULES = [
+    ("black_chin", ["黑下巴", "下巴出油"]),
+    ("soft_stool", ["软便", "拉稀", "肠胃"]),
+    ("tear_stain", ["泪痕"]),
+    ("vomit", ["呕吐"]),
+    ("weight_loss", ["体重管理", "控重"]),
+]
+
 
 # =========================================================
 # 3. 基础工具函数
@@ -1463,6 +1478,272 @@ def signal_options_for_symptom(signal_rules: Dict[str, Dict[str, Any]], symptom_
     return options
 
 
+def inject_recommendation_styles() -> None:
+    st.markdown(
+        """
+        <style>
+          .stApp {
+            background: #f5f8ff;
+            color: #0f172a;
+          }
+          [data-testid="stSidebar"] {
+            display: none;
+          }
+          .block-container {
+            max-width: 1840px;
+            padding: 26px 20px 42px;
+            padding-bottom: 40px;
+          }
+          .cx-header {
+            margin-bottom: 14px;
+          }
+          .cx-title {
+            font-size: 28px;
+            line-height: 1.2;
+            font-weight: 700;
+            color: #020617;
+            margin: 0;
+          }
+          .cx-subtitle {
+            margin-top: 6px;
+            color: #64748b;
+            font-size: 14px;
+            font-weight: 500;
+          }
+          [data-testid="stVerticalBlockBorderWrapper"] {
+            border: 1px solid #dbe3ef !important;
+            border-radius: 24px !important;
+            background: #fff;
+            box-shadow: 0 10px 24px rgba(15, 23, 42, .04);
+          }
+          .cx-module-title {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin: 2px 0 14px;
+          }
+          .cx-marker {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            min-width: 28px;
+            height: 24px;
+            padding: 0 8px;
+            border-radius: 8px;
+            background: #0f172a;
+            color: #fff;
+            font-size: 12px;
+            font-weight: 700;
+          }
+          .cx-module-heading {
+            color: #0f172a;
+            font-size: 16px;
+            font-weight: 650;
+          }
+          .cx-module-hint {
+            color: #94a3b8;
+            font-size: 12px;
+            font-weight: 500;
+          }
+          .cx-help {
+            margin-top: -10px;
+            margin-bottom: 12px;
+            color: #64748b;
+            font-size: 13px;
+          }
+          .cx-food-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            padding: 11px 14px;
+            border: 1px solid #e2e8f0;
+            border-radius: 12px;
+            background: #fff;
+            margin-bottom: 8px;
+          }
+          .cx-food-left {
+            display: flex;
+            align-items: center;
+            min-width: 0;
+            gap: 14px;
+          }
+          .cx-food-tag {
+            min-width: 84px;
+            border-radius: 999px;
+            background: #eff6ff;
+            color: #2563eb;
+            padding: 5px 12px;
+            text-align: center;
+            font-size: 13px;
+            font-weight: 650;
+          }
+          .cx-food-tag.history {
+            background: #f1f5f9;
+            color: #64748b;
+          }
+          .cx-food-name {
+            color: #0f172a;
+            font-size: 14px;
+            font-weight: 650;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+          }
+          .cx-badges {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin-top: 4px;
+          }
+          .cx-badge {
+            display: inline-flex;
+            align-items: center;
+            border-radius: 8px;
+            background: #eff6ff;
+            color: #2563eb;
+            padding: 7px 12px;
+            font-size: 13px;
+            font-weight: 650;
+          }
+          .stSelectbox label,
+          .stMultiSelect label,
+          .stTextInput label,
+          .stTextArea label {
+            color: #0f172a !important;
+            font-size: 14px !important;
+            font-weight: 600 !important;
+          }
+          div[data-baseweb="select"] > div,
+          div[data-testid="stTextInput"] input,
+          div[data-testid="stTextArea"] textarea {
+            border-radius: 12px !important;
+            border-color: #dbe3ef !important;
+            background: #fff !important;
+          }
+          div[data-testid="stButton"] > button[kind="primary"],
+          div[data-testid="stButton"] > button[kind="secondary"] {
+            border-radius: 12px;
+            font-weight: 700;
+          }
+          div[data-testid="stButton"] > button[kind="primary"] {
+            background: #2563eb;
+            border-color: #2563eb;
+            box-shadow: 0 12px 24px rgba(37, 99, 235, .22);
+          }
+          div[data-testid="stPills"] button {
+            border-radius: 999px !important;
+            min-height: 36px;
+            font-size: 13px;
+            font-weight: 600;
+            border-color: #dbe3ef !important;
+            background: #fff !important;
+          }
+          div[data-testid="stPills"] button[aria-pressed="true"],
+          div[data-testid="stPills"] button[kind="primary"] {
+            background: #2563eb !important;
+            border-color: #2563eb !important;
+            color: #fff !important;
+          }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_module_title(marker: str, title: str, hint: str = "") -> None:
+    hint_html = f'<span class="cx-module-hint">{hint}</span>' if hint else ""
+    st.markdown(
+        f"""
+        <div class="cx-module-title">
+          <span class="cx-marker">{marker}</span>
+          <span class="cx-module-heading">{title}</span>
+          {hint_html}
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def load_product_label_options() -> List[str]:
+    try:
+        engine = get_engine()
+        table = CONFIG_TABLES["score_table"]
+        product_col = CONFIG_TABLES["product_name_col"]
+        brand_col = CONFIG_TABLES["brand_name_col"]
+        columns = get_table_columns(engine, table)
+        if product_col not in columns:
+            return []
+        select_cols = [quote_identifier(product_col)]
+        if brand_col in columns:
+            select_cols.insert(0, quote_identifier(brand_col))
+        sql = text(
+            f"""
+            SELECT DISTINCT {', '.join(select_cols)}
+            FROM {quote_identifier(table)}
+            WHERE {quote_identifier(product_col)} IS NOT NULL
+              AND {quote_identifier(product_col)} <> ''
+            ORDER BY {quote_identifier(brand_col) if brand_col in columns else quote_identifier(product_col)},
+                     {quote_identifier(product_col)}
+            LIMIT 300
+            """
+        )
+        df = pd.read_sql(sql, engine)
+        labels = []
+        for _, row in df.iterrows():
+            brand = str(row.get(brand_col) or "").strip() if brand_col in df.columns else ""
+            product = str(row.get(product_col) or "").strip()
+            label = f"{brand} {product}".strip()
+            if label:
+                labels.append(label)
+        return labels
+    except Exception:
+        return []
+
+
+def infer_symptom_type_from_ui(long_term: List[str], current_observations: List[str]) -> str:
+    joined = " ".join([*(long_term or []), *(current_observations or [])])
+    for symptom, keywords in SYMPTOM_TRIGGER_RULES:
+        if any(keyword in joined for keyword in keywords):
+            return symptom
+    return "black_chin"
+
+
+def resolve_signal_codes(signal_rules: Dict[str, Dict[str, Any]], selected_labels: List[str]) -> List[str]:
+    selected_codes: List[str] = []
+    selected_text = " ".join(selected_labels or [])
+    for code, rule in signal_rules.items():
+        label = str(rule.get("label") or code)
+        if label in selected_labels or any(part and part in label for part in selected_labels) or any(part and part in selected_text for part in [label]):
+            selected_codes.append(code)
+    return list(dict.fromkeys(selected_codes))
+
+
+def render_food_feedback_rows(current_food: str, history_foods: List[str]) -> None:
+    rows = []
+    if current_food:
+        rows.append(("当前在吃", current_food, ""))
+    for food in history_foods[:3]:
+        rows.append(("历史", food, "history"))
+    if not rows:
+        rows = [("当前在吃", "暂未选择", ""), ("历史", "可添加吃过的粮", "history")]
+
+    for tag, name, extra_class in rows:
+        st.markdown(
+            f"""
+            <div class="cx-food-row">
+              <div class="cx-food-left">
+                <span class="cx-food-tag {extra_class}">{tag}</span>
+                <span class="cx-food-name">{name}</span>
+              </div>
+              <span style="color:#94a3b8;font-weight:700;">×</span>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+
 
 def render_history_food_context(history_context: Optional[Dict[str, Any]]):
     """展示历史粮命中、关键画像和本次微调方向。"""
@@ -1598,16 +1879,16 @@ def render_recommendation_table(rec_df: pd.DataFrame):
 
 def render_page():
     st.set_page_config(page_title="宠析 - 猫咪体质推荐", layout="wide")
-    st.title("宠析｜猫咪体质推荐引擎")
-
-    with st.sidebar:
-        st.markdown("## 配置检查")
-        st.write(f"数据库：`{DB_CONFIG['database']}`")
-        st.write(f"通义千问模型：`{QWEN_CONFIG['model']}`")
-        if os.getenv("DASHSCOPE_API_KEY"):
-            st.success("已检测到 DASHSCOPE_API_KEY")
-        else:
-            st.warning("未检测到 DASHSCOPE_API_KEY")
+    inject_recommendation_styles()
+    st.markdown(
+        """
+        <div class="cx-header">
+          <h1 class="cx-title">猫粮智能推荐</h1>
+          <div class="cx-subtitle">结合猫咪年龄、吃粮反馈、长期问题和当前观察，生成更适合的主粮推荐。</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
     try:
         engine = get_engine()
@@ -1624,58 +1905,146 @@ def render_page():
         st.warning(f"用户信号规则为空，请检查 {CONFIG_TABLES['signal_rule_table']} 表。")
         return
 
-    st.markdown("## 1. 输入猫咪主问题、体质信号和历史粮（可选）")
-    col1, col2, col3 = st.columns([1, 2, 1])
+    product_options = load_product_label_options()
+    product_select_options = product_options or [""]
+    default_current_index = 0
+    for index, label in enumerate(product_select_options):
+        if "GO" in label and "美毛" in label:
+            default_current_index = index
+            break
 
-    with col1:
-        symptom_type = st.selectbox(
-            "主问题",
-            options=list(SYMPTOM_LABELS.keys()),
-            format_func=lambda x: SYMPTOM_LABELS.get(x, x),
-        )
+    with st.container(border=True):
+        left_col, right_col = st.columns([1.02, 1.55], gap="large")
 
-    signal_options = signal_options_for_symptom(signal_rules, symptom_type)
-    with col2:
-        selected_signals = st.multiselect(
-            "体质 / 历史反应信号",
-            options=list(signal_options.keys()),
-            format_func=lambda x: signal_options.get(x, x),
-        )
+        with left_col:
+            render_module_title("A", "基本信息")
+            age_col1, age_col2 = st.columns([1, 2.2])
+            with age_col1:
+                st.markdown("猫龄")
+            with age_col2:
+                cat_age = st.selectbox("猫龄", CAT_AGE_OPTIONS, index=2, label_visibility="collapsed")
 
-    with col3:
-        top_n_profiles = st.number_input("目标画像数量", min_value=1, max_value=6, value=3, step=1)
-        top_n_products = st.number_input("推荐产品数量", min_value=3, max_value=50, value=10, step=1)
+            food_col1, food_col2 = st.columns([1, 2.2])
+            with food_col1:
+                st.markdown("当前在吃的粮")
+            with food_col2:
+                current_food = st.selectbox(
+                    "当前在吃的粮",
+                    product_select_options,
+                    index=default_current_index if product_options else None,
+                    placeholder="选择当前在吃的粮",
+                    accept_new_options=True,
+                    label_visibility="collapsed",
+                )
 
-    st.markdown("### 历史吃过的粮（可选）")
-    history_col1, history_col2 = st.columns([2, 1])
-    with history_col1:
-        history_food_text = st.text_area(
-            "历史吃过的产品名称",
-            placeholder="每行一个，或用逗号/顿号分隔。例如：\n某品牌 鸡肉全价猫粮\n某品牌 鱼肉猫粮",
-            height=90,
-        )
-    with history_col2:
-        history_reaction_mode = st.selectbox(
-            "这些历史粮的反馈",
-            options=list(HISTORY_REACTION_MODES.keys()),
-            format_func=lambda x: HISTORY_REACTION_MODES.get(x, x),
-            index=0,
-            help="如果历史粮吃后出现当前问题，选“不适”；如果吃得稳定，选“适应良好”；如果只是记录背景，选“仅作为背景”。",
-        )
-        exclude_history_foods = st.checkbox(
-            "推荐结果中排除这些历史粮",
-            value=True,
-            help="默认排除历史粮，避免把已经吃过且可能有问题的产品再次推荐。",
-        )
+            st.markdown(
+                """
+                <div class="cx-badges">
+                  <span class="cx-badge">品牌：GO</span>
+                  <span class="cx-badge">进口品牌</span>
+                  <span class="cx-badge">70-80元/斤</span>
+                  <span class="cx-badge">美毛毛发</span>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+            st.divider()
 
-    if st.button("生成推荐", type="primary"):
-        st.session_state["run_recommendation"] = True
+            render_module_title("B", "过往吃粮反馈", "记录猫咪吃过的粮，帮助更准确推荐")
+            default_history = [
+                option for option in product_options
+                if any(keyword in option for keyword in ["皇家 BK34", "百利 高蛋白", "爱肯拿 牧场盛宴"])
+            ][:3]
+            history_foods = st.multiselect(
+                "历史吃过的粮",
+                product_options,
+                default=default_history,
+                placeholder="选择历史吃过的粮",
+                accept_new_options=True,
+                label_visibility="collapsed",
+            )
+            render_food_feedback_rows(current_food, history_foods)
+
+            custom_history_food = st.text_input(
+                "添加吃过的粮",
+                placeholder="+ 添加吃过的粮",
+                label_visibility="collapsed",
+            )
+
+        with right_col:
+            render_module_title("C", "长期问题 / 体质困扰", "可多选")
+            st.markdown('<div class="cx-help">选择猫咪长期存在或反复出现的问题</div>', unsafe_allow_html=True)
+            long_term_problems = st.pills(
+                "长期问题 / 体质困扰",
+                LONG_TERM_PROBLEM_OPTIONS,
+                default=["黑下巴反复", "肠胃敏感"],
+                selection_mode="multi",
+                label_visibility="collapsed",
+            )
+
+            st.markdown('<div style="height:10px;"></div>', unsafe_allow_html=True)
+            render_module_title("D", "当前重点观察", "可多选")
+            st.markdown('<div class="cx-help">选择最近最注意的点，协助更精准推荐关注的表现</div>', unsafe_allow_html=True)
+            current_observations = st.pills(
+                "当前重点观察",
+                CURRENT_OBSERVATION_OPTIONS,
+                default=["特别/黑下巴", "软便", "掉食"],
+                selection_mode="multi",
+                label_visibility="collapsed",
+            )
+
+            st.markdown('<div style="height:10px;"></div>', unsafe_allow_html=True)
+            render_module_title("E", "采购偏好设置", "可选")
+            pref_box = st.container(border=True)
+            with pref_box:
+                p1, p2 = st.columns([1, 5])
+                with p1:
+                    st.markdown("产地偏好：")
+                with p2:
+                    origin_pref = st.pills("产地偏好", ORIGIN_PREF_OPTIONS, default="不限", label_visibility="collapsed")
+
+                p3, p4 = st.columns([1, 5])
+                with p3:
+                    st.markdown("价格带：")
+                with p4:
+                    price_pref = st.pills("价格带", PRICE_PREF_OPTIONS, default="50-80元/斤", label_visibility="collapsed")
+
+                p5, p6 = st.columns([1, 5])
+                with p5:
+                    st.markdown("功能倾向：")
+                with p6:
+                    function_pref = st.pills("功能倾向", FUNCTION_PREF_OPTIONS, default="黑下巴友好", label_visibility="collapsed")
+
+            btn_col1, btn_col2 = st.columns([4, 1.45])
+            with btn_col2:
+                if st.button("✧  生成推荐", type="primary", use_container_width=True):
+                    st.session_state["run_recommendation"] = True
 
     if not st.session_state.get("run_recommendation"):
-        st.info("选择主问题和体质信号后，点击“生成推荐”。历史粮可选填。")
+        st.info("填写基础信息、体质困扰和当前观察后，点击“生成推荐”。")
         return
 
-    history_food_names = split_history_food_names(history_food_text)
+    selected_labels = [
+        *(long_term_problems or []),
+        *(current_observations or []),
+        *([function_pref] if function_pref and function_pref != "不限" else []),
+        *([origin_pref] if origin_pref and origin_pref != "不限" else []),
+        *([price_pref] if price_pref and price_pref != "不限" else []),
+        cat_age,
+    ]
+    symptom_type = infer_symptom_type_from_ui(long_term_problems or [], current_observations or [])
+    selected_signals = resolve_signal_codes(signal_rules, selected_labels)
+    if not selected_signals:
+        signal_options = signal_options_for_symptom(signal_rules, symptom_type)
+        selected_signals = list(signal_options.keys())[:2]
+    top_n_profiles = 3
+    top_n_products = 10
+    history_food_names = [
+        name for name in [current_food, *(history_foods or []), custom_history_food]
+        if str(name or "").strip()
+    ]
+    history_reaction_mode = "problem"
+    exclude_history_foods = True
 
     adjusted_profiles = build_adjusted_profiles_for_case(
         profiles=profiles,

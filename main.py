@@ -108,7 +108,19 @@ def _load_catfood_brand_options() -> list[str]:
     return brands
 
 
-SUMMARY_PROMPT_VERSION = "cat-food-compare-summary-v6"
+def _load_recommendation_app():
+    try:
+        from .consumer_apps import product_recommendation_engine as recommendation_app
+    except ImportError:
+        from consumer_apps import product_recommendation_engine as recommendation_app
+    return recommendation_app
+
+
+SUMMARY_PROMPT_VERSION = "cat-food-compare-summary-v14"
+SUMMARY_FIXED_DISCLAIMER = (
+    "评分为自研配方模型，仅用于两款横向对比，不等同 GB/T31217、AAFCO 实测营养值；"
+    "风险标签为全库配方与喂养反馈下的相对倾向，非诊断。"
+)
 
 
 def _port_is_open(port: int, host: str = "127.0.0.1") -> bool:
@@ -394,6 +406,9 @@ def _summary_cache_key(context: dict, friendly_rows: list) -> tuple[str, str]:
         "product_a": {
             "brand_name": product_a.get("brand_name"),
             "name": product_a.get("name"),
+            "ingredient_composition": product_a.get("ingredient_composition"),
+            "guarantee_values": product_a.get("guarantee_values"),
+            "score_material_evidence": product_a.get("score_material_evidence"),
             "profile": product_a.get("profile"),
             "black_chin_risk": product_a.get("black_chin_risk"),
             "soft_stool_risk": product_a.get("soft_stool_risk"),
@@ -401,6 +416,9 @@ def _summary_cache_key(context: dict, friendly_rows: list) -> tuple[str, str]:
         "product_b": {
             "brand_name": product_b.get("brand_name"),
             "name": product_b.get("name"),
+            "ingredient_composition": product_b.get("ingredient_composition"),
+            "guarantee_values": product_b.get("guarantee_values"),
+            "score_material_evidence": product_b.get("score_material_evidence"),
             "profile": product_b.get("profile"),
             "black_chin_risk": product_b.get("black_chin_risk"),
             "soft_stool_risk": product_b.get("soft_stool_risk"),
@@ -509,6 +527,38 @@ def _extract_risk_tags(context: dict) -> dict[str, Any]:
     return result
 
 
+def _extract_guarantee_values(context: dict) -> dict[str, Any]:
+    if not isinstance(context, dict):
+        return {}
+    products = {
+        "current_food": context.get("product_a", {}) if isinstance(context.get("product_a"), dict) else {},
+        "target_food": context.get("product_b", {}) if isinstance(context.get("product_b"), dict) else {},
+    }
+    return {
+        key: {
+            "product_name": _compact_product_name(product, key),
+            "guarantee_values": product.get("guarantee_values") or [],
+        }
+        for key, product in products.items()
+    }
+
+
+def _extract_score_material_evidence(context: dict) -> dict[str, Any]:
+    if not isinstance(context, dict):
+        return {}
+    products = {
+        "current_food": context.get("product_a", {}) if isinstance(context.get("product_a"), dict) else {},
+        "target_food": context.get("product_b", {}) if isinstance(context.get("product_b"), dict) else {},
+    }
+    return {
+        key: {
+            "product_name": _compact_product_name(product, key),
+            "score_material_evidence": product.get("score_material_evidence") or [],
+        }
+        for key, product in products.items()
+    }
+
+
 def _generate_cat_food_summary(payload: dict) -> dict:
     context = payload.get("llm_context")
     friendly_rows = payload.get("friendly_rows") or []
@@ -533,7 +583,15 @@ def _generate_cat_food_summary(payload: dict) -> dict:
     enriched_context = {
         "comparison_mode": "当前粮到对比粮的换粮判断",
         "cat_profile": cat_profile,
+        "summary_sources": {
+            "guarantee_values": _extract_guarantee_values(context),
+            "b_module_model_scores": _extract_chart_structure_scores(context),
+            "b_score_related_material_evidence": _extract_score_material_evidence(context),
+            "c_module_risk_tags": _extract_risk_tags(context),
+        },
         "chart_structure_scores": _extract_chart_structure_scores(context),
+        "guarantee_values": _extract_guarantee_values(context),
+        "score_material_evidence": _extract_score_material_evidence(context),
         "friendliness_scores": friendly_rows,
         "risk_tags": _extract_risk_tags(context),
         "score_reading_notes": _score_reading_notes(context),
@@ -982,6 +1040,58 @@ def _generate_cat_food_summary(payload: dict) -> dict:
 10. 是否整体太像技术报告？
 如果是，减少数字，保留核心证据，用更自然的宠主语言改写。
 """
+    system_prompt = """
+你是猫粮营养对比总结助手。请基于系统提供的“保证值、原材料营养角色、模型指标评分、症状风险标签”，生成两款猫粮的科学对比建议。
+
+输出逻辑必须遵循：
+保证值差异 → 原材料营养角色 → 指标评分 → 症状风险标签 → 分场景选粮建议。
+
+生成要求：
+1. 正文控制在350字左右，【说明】另算且必须简短。
+2. 保证值部分必须结合两款产品的实际差异，不得只写固定科普。
+3. 只解释影响结论的2–3个关键保证值，不要机械罗列所有保证值。
+4. 粗蛋白用于解释基础蛋白供给，但必须结合原材料说明蛋白质量和蛋白压力。
+5. 粗脂肪用于解释能量密度和脂肪压力，但黑下巴风险必须结合油脂来源、皮肤保护评分和风险标签。
+6. 粗纤维用于解释纤维总量，但便便稳定性必须结合纤维来源、纤维缓冲评分和菌群支持。
+7. 碳水估算用于解释碳水结构压力，并关联碳水负担评分、软便、易胖和血糖波动场景。
+8. 所有模型指标必须写成“评分”，不得写成营养成分百分比。
+9. 每个核心判断至少包含：保证值差异/原材料证据 + 指标评分 + 标签或猫咪场景。
+10. 不得编造未提供的保证值、原料或风险标签；数据缺失时要降低结论强度。
+11. 术语必须统一：
+   A. “粗蛋白”只指保证值里的蛋白含量，只能用于解释基础蛋白供给，不得写成蛋白质量。
+   B. “蛋白质量评分”只解释蛋白来源质量、动物蛋白来源、肉源清晰度、植物蛋白干扰、水解蛋白等。
+   C. “蛋白压力评分”统一用于解释蛋白来源复杂度和消化适应压力；不要使用“蛋白结构负载”“结构负载轻”“结构更易吸收”等混合表达。
+   D. “蛋白更足/蛋白更丰沛”统一改为“粗蛋白保证值更高”或“基础蛋白供给更高”。
+   E. “更易吸收/更好消化”属于强生理结论，除非输入明确提供消化率或临床证据，否则改为“蛋白来源支持更清晰”或“蛋白压力评分相对更低”。
+12. 数字表达规则：
+   A. 可以使用“VS”，但顺序必须固定为“当前粮产品名 VS 对比粮产品名”。
+   B. 每个 VS 数字后必须紧跟方向解释；支持型评分说明谁更高、支持更强，压力型评分说明谁更低、压力更小。
+   C. 禁止使用 B-A 差值、A→B 箭头、只写“下降/上升多少分”、或“前者/后者”指代。
+   D. 首次出现 VS 前必须用短句说明“以下数字顺序为：{当前粮产品名} VS {对比粮产品名}”。
+   E. 如果产品全名太长，可使用产品简称，但同一篇内简称必须稳定，不得在“当前粮/对比粮/前者/后者/产品名”之间来回切换。
+13. 【原料与指标解释】必须按“蛋白 → 碳水 → 脂肪 → 肠道支撑”的顺序层层递进拆解，不得只解释蛋白：
+   A. 蛋白组：分别解释“蛋白质量评分高/低的原料原因”和“蛋白压力评分高/低的原料原因”。蛋白质量通常回扣动物蛋白来源、肉源清晰度、植物蛋白干扰、水解蛋白等；蛋白压力通常回扣蛋白来源复杂度、多肉源叠加、植物蛋白/豆类参与等。
+   B. 碳水组：解释碳水负担评分变化原因，必须回扣淀粉、豆类、薯类或其他碳水原料。
+   C. 脂肪组：解释脂肪负担评分变化原因，必须回扣油脂来源或脂肪原料；如果只有抗氧化物/Omega证据，只能写为皮肤保护或脂肪氧化压力辅助，不得写成脂肪负担下降原因。
+   D. 肠道支撑组：解释纤维缓冲评分和菌群支持评分的变化原因，必须回扣纤维来源、供菌底物或菌群代谢支持。
+14. 如果字数受限，【原料与指标解释】每组只写一句，但蛋白、碳水、脂肪、肠道支撑四组都必须出现；不得只写分数高低。
+15. 【症状风险】不得在开头重复“风险标签基于产品库全量配方相对位置及用户反馈生成”这类说明，标签来源统一放在最后【说明】段。
+16. 【症状风险】必须结合指标和原材料解读：黑下巴需连接油脂来源/脂肪原料 + 脂肪负担评分或皮肤保护评分 + 黑下巴风险标签；软便需连接碳水/蛋白/纤维相关原料 + 碳水负担评分、蛋白压力评分、纤维缓冲评分或菌群支持评分 + 软便风险标签。
+17. 风险倾向下降或升高时必须说明原因，且原因必须来自前文已出现的原料或评分。示例：风险下降可写“与碳水负担评分下降、脂肪负担评分下降相关”；风险升高可写“与纤维缓冲不足、菌群支持下降或皮肤保护偏弱相关”。不得只写等级从高到低。
+18. 不得把风险标签写成两款粮之间直接计算出的结果；只能写两款粮在全库参照下的风险倾向变化。
+19. 如果风险标签下降，但纤维缓冲、菌群支持、皮肤保护等支撑指标仍偏弱，必须说明“风险倾向下降，但仍需观察”。
+20. 不得用“叠加”模糊连接无直接因果的证据。抗氧化物、Omega、微量营养素只能解释皮肤保护、脂肪氧化压力或脂肪调节支持，不得作为脂肪负担评分、碳水负担评分下降的直接原因。
+21. 【症状风险】中出现的每个风险标签原因，必须回扣【原料与指标解释】中已经出现的原料或评分；如果前文没有对应证据，必须改写为“标签提示某方向仍需观察”，不得强行解释原因。
+22. 固定输出为：【结论】【基础营养差异】【原料与指标解释】【症状风险】【分场景建议】【说明】。
+23. 【说明】段只能输出固定话术，不得改写：评分为自研配方模型，仅用于两款横向对比，不等同 GB/T31217、AAFCO 实测营养值；风险标签为全库配方与喂养反馈下的相对倾向，非诊断。
+
+输入说明：
+- summary_sources.guarantee_values 是保证值数据。
+- summary_sources.b_module_model_scores 是页面 B 模块的模型指标评分，只能按“评分”解释，不得当作营养成分百分比。
+- summary_sources.b_score_related_material_evidence 是每个 B 模块评分对应的原材料角色证据。
+- summary_sources.c_module_risk_tags 是页面 C 模块的症状风险标签。
+- base_context 可作为补充上下文，但不得覆盖以上四类核心输入。
+"""
     client = compare_app.get_qwen_client()
     completion = client.chat.completions.create(
         model=compare_app.QWEN_CONFIG["model"],
@@ -995,6 +1105,7 @@ def _generate_cat_food_summary(payload: dict) -> dict:
                 "content": (
                     "请只基于下面结构化数据输出，不要编造成分、疾病诊断或输入中不存在的结论。"
                     f"产品A完整名称是：{product_a_full_name}。产品B完整名称是：{product_b_full_name}。"
+                    f"所有 VS 数字顺序必须固定为：{product_a_full_name} VS {product_b_full_name}。"
                     "请严格按 system 中指定格式输出，并把模板中的产品A完整品牌+产品名称、产品B完整品牌+产品名称替换成上述完整名称。\n\n"
                     f"{json.dumps(enriched_context, ensure_ascii=False, indent=2)}"
                 ),
@@ -1003,7 +1114,9 @@ def _generate_cat_food_summary(payload: dict) -> dict:
         temperature=compare_app.QWEN_CONFIG["temperature"],
         max_tokens=max(compare_app.QWEN_CONFIG["max_tokens"], 1800),
     )
-    summary = completion.choices[0].message.content
+    summary = completion.choices[0].message.content or ""
+    if SUMMARY_FIXED_DISCLAIMER not in summary:
+        summary = f"{summary.rstrip()}\n\n【说明】{SUMMARY_FIXED_DISCLAIMER}"
     task_store.store_llm_result(
         cache_key=cache_key,
         task_type="compare_summary",
@@ -1044,9 +1157,108 @@ def _run_compare_task(task_id: str, payload: dict) -> None:
         task_store.set_task_state(task_id, status="failed", progress=100, error_message=str(exc))
 
 
+def _build_recommendation_response(payload: dict[str, Any]) -> dict[str, Any]:
+    recommendation_app = _load_recommendation_app()
+    engine = recommendation_app.get_engine()
+    profiles = recommendation_app.load_recommendation_profiles(engine)
+    signal_rules = recommendation_app.load_signal_rules(engine)
+    if not profiles:
+        raise ValueError(f"画像池为空，请检查 {recommendation_app.CONFIG_TABLES['profile_table']} 表。")
+    if not signal_rules:
+        raise ValueError(f"用户信号规则为空，请检查 {recommendation_app.CONFIG_TABLES['signal_rule_table']} 表。")
+
+    long_term_problems = [str(item).strip() for item in payload.get("long_term_problems") or [] if str(item).strip()]
+    current_observations = [str(item).strip() for item in payload.get("current_observations") or [] if str(item).strip()]
+    cat_age = str(payload.get("cat_age") or "3～6年").strip()
+    current_food = str(payload.get("current_food") or "").strip()
+    history_foods = [str(item).strip() for item in payload.get("history_foods") or [] if str(item).strip()]
+    custom_history_food = str(payload.get("custom_history_food") or "").strip()
+    origin_pref = str(payload.get("origin_pref") or "不限").strip()
+    price_pref = str(payload.get("price_pref") or "不限").strip()
+    function_pref = str(payload.get("function_pref") or "不限").strip()
+    history_reaction_mode = str(payload.get("history_reaction_mode") or "problem").strip()
+    if history_reaction_mode not in recommendation_app.HISTORY_REACTION_MODES:
+        history_reaction_mode = "problem"
+    exclude_history_foods = bool(payload.get("exclude_history_foods", True))
+    top_n_profiles = int(payload.get("top_n_profiles") or 3)
+    top_n_products = int(payload.get("top_n_products") or 10)
+
+    selected_labels = [
+        *long_term_problems,
+        *current_observations,
+        *([function_pref] if function_pref and function_pref != "不限" else []),
+        *([origin_pref] if origin_pref and origin_pref != "不限" else []),
+        *([price_pref] if price_pref and price_pref != "不限" else []),
+        cat_age,
+    ]
+    symptom_type = recommendation_app.infer_symptom_type_from_ui(long_term_problems, current_observations)
+    selected_signals = recommendation_app.resolve_signal_codes(signal_rules, selected_labels)
+    if not selected_signals:
+        signal_options = recommendation_app.signal_options_for_symptom(signal_rules, symptom_type)
+        selected_signals = list(signal_options.keys())[:2]
+
+    adjusted_profiles = recommendation_app.build_adjusted_profiles_for_case(
+        profiles=profiles,
+        signal_rules=signal_rules,
+        symptom_type=symptom_type,
+        user_signals=selected_signals,
+        top_n=max(1, min(top_n_profiles, 5)),
+    )
+
+    history_food_names = [
+        name for name in [current_food, *history_foods, custom_history_food]
+        if str(name or "").strip()
+    ]
+    history_food_context = None
+    if history_food_names:
+        history_food_context = recommendation_app.build_history_food_context(
+            engine=engine,
+            history_food_names=history_food_names,
+            symptom_type=symptom_type,
+            reaction_mode=history_reaction_mode,
+        )
+        adjusted_profiles = recommendation_app.apply_history_adjustments_to_profiles(
+            adjusted_profiles=adjusted_profiles,
+            history_context=history_food_context,
+        )
+
+    product_pool = recommendation_app.add_derived_features(recommendation_app.load_product_pool(engine))
+    if history_food_context and exclude_history_foods:
+        found_history_names = set(history_food_context.get("found_product_names") or [])
+        product_col = recommendation_app.CONFIG_TABLES["product_name_col"]
+        if found_history_names and product_col in product_pool.columns:
+            product_pool = product_pool[~product_pool[product_col].astype(str).isin(found_history_names)].copy()
+
+    rec_df = recommendation_app.recommend_products(
+        product_pool,
+        adjusted_profiles,
+        top_n=max(1, min(top_n_products, 30)),
+    )
+    rec_df = recommendation_app.enrich_top_products_with_risk(engine, rec_df)
+    llm_context = recommendation_app.build_llm_context(
+        symptom_type=symptom_type,
+        user_signals=selected_signals,
+        adjusted_profiles=adjusted_profiles,
+        rec_df=rec_df,
+        history_food_context=history_food_context,
+    )
+    input_hash = recommendation_app.calc_input_hash(llm_context)
+
+    return recommendation_app.make_json_safe({
+        "symptom_type": symptom_type,
+        "symptom_label": recommendation_app.SYMPTOM_LABELS.get(symptom_type, symptom_type),
+        "selected_signals": selected_signals,
+        "selected_labels": selected_labels,
+        "history_food_context": history_food_context,
+        "adjusted_profiles": adjusted_profiles,
+        "recommendations": rec_df.to_dict(orient="records"),
+        "llm_context": llm_context,
+        "input_hash": input_hash,
+    })
+
+
 def create_app() -> Flask:
     flask_app = Flask(__name__)
-    _start_consumer_apps()
     flask_app.register_blueprint(consumer_api)
     flask_app.register_blueprint(exception_api)
     flask_app.register_blueprint(orchestrator_api)
@@ -1405,9 +1617,47 @@ def create_app() -> Flask:
         except Exception as exc:
             return _json_error(f"大模型总结生成失败：{exc}", 500)
 
+    @flask_app.get("/api/consumer/recommendation/options")
+    def consumer_recommendation_options():
+        recommendation_app = _load_recommendation_app()
+        return jsonify({
+            "cat_age_options": recommendation_app.CAT_AGE_OPTIONS,
+            "long_term_problem_options": recommendation_app.LONG_TERM_PROBLEM_OPTIONS,
+            "current_observation_options": recommendation_app.CURRENT_OBSERVATION_OPTIONS,
+            "origin_pref_options": recommendation_app.ORIGIN_PREF_OPTIONS,
+            "price_pref_options": recommendation_app.PRICE_PREF_OPTIONS,
+            "function_pref_options": recommendation_app.FUNCTION_PREF_OPTIONS,
+            "history_reaction_modes": recommendation_app.HISTORY_REACTION_MODES,
+        })
+
+    @flask_app.post("/api/consumer/recommendation/run")
+    def consumer_recommendation_run():
+        payload = request.get_json(silent=True) or {}
+        try:
+            return jsonify(_build_recommendation_response(payload))
+        except ValueError as exc:
+            return _json_error(str(exc))
+        except Exception as exc:
+            return _json_error(f"推荐计算失败：{exc}", 500)
+
+    @flask_app.post("/api/consumer/recommendation/explanation")
+    def consumer_recommendation_explanation():
+        payload = request.get_json(silent=True) or {}
+        context = payload.get("llm_context")
+        if not context:
+            return _json_error("缺少推荐解释上下文。")
+        try:
+            recommendation_app = _load_recommendation_app()
+            return jsonify({"explanation": recommendation_app.generate_qwen_recommendation_explanation(context)})
+        except Exception as exc:
+            return _json_error(f"通义千问解释生成失败：{exc}", 500)
+
     @flask_app.get("/consumer/recommendation-engine")
+    @flask_app.get("/consumer/recommendation-engine/")
     def consumer_recommendation_engine():
-        return redirect(_consumer_app_url("consumer/recommendation-engine", 8501), code=302)
+        if (DIST_DIR / "index.html").exists():
+            return send_from_directory(DIST_DIR, "index.html")
+        return send_from_directory(WEB_DIR, "index.html")
 
     @flask_app.get("/consumer/product-display")
     def consumer_product_display():

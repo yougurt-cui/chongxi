@@ -1152,6 +1152,49 @@ function focusIcon(dimension: string) {
   return "◎";
 }
 
+function dimensionHelpText(dimension: string) {
+  if (dimension.includes("蛋白质量")) {
+    return "衡量蛋白来源、动物蛋白质量和正向支持。分数越高，代表蛋白质量支持相对更好。";
+  }
+  if (dimension.includes("蛋白压力")) {
+    return "衡量蛋白结构复杂度和潜在消化压力。分数越高，代表蛋白消化压力相对更高。";
+  }
+  if (dimension.includes("碳水")) {
+    return "衡量淀粉、豆类、薯类等结构带来的碳水负担。分数越高，代表碳水压力相对更重。";
+  }
+  if (dimension.includes("脂肪")) {
+    return "衡量油脂结构和脂肪消化负担。分数越高，代表脂肪压力相对更高，需要结合下巴出油、呕吐等表现观察。";
+  }
+  if (dimension.includes("纤维")) {
+    return "衡量便便成形、粪便骨架和肠道缓冲支持。分数越高，代表纤维缓冲相对更好。";
+  }
+  if (dimension.includes("菌群") || dimension.includes("肠胃")) {
+    return "衡量肠道菌群底物、代谢支持和肠胃稳定方向。分数越高，代表肠胃支持相对更充分。";
+  }
+  if (dimension.includes("皮肤") || dimension.includes("Omega")) {
+    return "衡量脂肪调节、抗氧化和皮肤毛发稳定支持。分数越高，代表皮肤保护方向相对更强。";
+  }
+  return "该分数用于比较两款粮在对应配方结构方向上的相对表现，仅作选粮参考。";
+}
+
+function MetricHelpIcon(props: { dimension: string }) {
+  return (
+    <span className="group/help relative inline-flex shrink-0">
+      <button
+        type="button"
+        aria-label={`${props.dimension}说明`}
+        className="flex h-4 w-4 items-center justify-center rounded-full border border-slate-300 bg-white text-[10px] font-bold leading-none text-slate-400 shadow-sm transition hover:border-blue-300 hover:bg-blue-50 hover:text-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
+      >
+        ?
+      </button>
+      <span className="pointer-events-none absolute left-0 top-6 z-30 w-64 rounded-xl border border-slate-200 bg-white px-3 py-2 text-left text-xs font-normal leading-5 text-slate-600 opacity-0 shadow-xl shadow-slate-900/10 transition group-hover/help:opacity-100 group-focus-within/help:opacity-100">
+        <span className="mb-1 block font-semibold text-slate-900">{props.dimension}</span>
+        {dimensionHelpText(props.dimension)}
+      </span>
+    </span>
+  );
+}
+
 function FocusBarComparison(props: {
   currentProfile: ProfilePoint[];
   targetProfile: ProfilePoint[];
@@ -1194,10 +1237,11 @@ function FocusBarComparison(props: {
             const currentScore = Math.max(0, Math.min(100, row.currentScore));
             const targetScore = Math.max(0, Math.min(100, row.targetScore));
             return (
-              <div key={row.dimension} className="grid gap-2 md:grid-cols-[140px_1fr_1fr] md:items-center">
+              <div key={row.dimension} className="grid gap-2 md:grid-cols-[170px_1fr_1fr] md:items-center">
                 <div className="flex min-w-0 items-center gap-2 text-xs font-medium text-slate-700">
                   <span className="text-slate-400">{focusIcon(row.dimension)}</span>
                   <span className="truncate">{row.dimension}</span>
+                  <MetricHelpIcon dimension={row.dimension} />
                 </div>
                 <div className="flex items-center gap-2">
                   <div className="h-2.5 flex-1 overflow-hidden rounded-full bg-slate-100">
@@ -1881,7 +1925,11 @@ export default function CatFoodComparePage() {
 
             <section className="mt-4 grid gap-4 lg:grid-cols-2">
               <div className="lg:col-span-2">
-                <SectionTitle marker="B" title="两款粮侧重点" hint="按蛋白、碳水、脂肪、纤维等配方维度对比分数" />
+                <SectionTitle
+                  marker="B"
+                  title="两款粮侧重点"
+                  hint="以下为配方结构模型评分，评分用于比较两款粮在蛋白、碳水、肠胃、皮肤等方向的相对表现，不等同于兽医诊断或国标营养保证值。"
+                />
               </div>
               <FocusBarComparison
                 currentProfile={compareResult.current_food.profile}
