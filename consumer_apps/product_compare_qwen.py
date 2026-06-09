@@ -995,7 +995,7 @@ def get_product_data(product_name: str) -> Dict[str, Any]:
 def build_score_profile(score_row: Optional[pd.Series]) -> pd.DataFrame:
     rows = []
     if score_row is None:
-        return pd.DataFrame()
+        return pd.DataFrame(columns=["field", "display_name", "score", "level", "type", "explain"])
 
     for col in TABLE_CONFIG["score_cols"]:
         if col not in score_row.index:
@@ -1018,6 +1018,8 @@ def build_score_profile(score_row: Optional[pd.Series]) -> pd.DataFrame:
 
 
 def _first_score_from_profile(score_df: pd.DataFrame, *fields: str) -> Optional[float]:
+    if score_df is None or score_df.empty or "field" not in score_df.columns:
+        return None
     for field in fields:
         sub = score_df[score_df["field"] == field]
         if not sub.empty:
@@ -1029,6 +1031,15 @@ def _first_score_from_profile(score_df: pd.DataFrame, *fields: str) -> Optional[
 
 def _score_evidence_item(score_df: pd.DataFrame, field: str, meaning: Optional[str] = None) -> dict:
     meta = SCORE_DISPLAY_MAP.get(field, {})
+    if score_df is None or score_df.empty or "field" not in score_df.columns:
+        return {
+            "field": field,
+            "name": meta.get("name", field),
+            "score": None,
+            "level": "暂无数据",
+            "type": meta.get("type", "mixed"),
+            "meaning": meaning or meta.get("explain", "暂无解释。"),
+        }
     sub = score_df[score_df["field"] == field]
 
     if sub.empty:
