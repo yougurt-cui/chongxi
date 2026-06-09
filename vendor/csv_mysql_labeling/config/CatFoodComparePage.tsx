@@ -12,6 +12,15 @@ type ProfilePoint = {
   level?: string;
   type?: "pressure" | "protective" | "mixed";
   summary?: string;
+  underlying_scores?: Array<{
+    field: string;
+    name: string;
+    score: number | null;
+    level?: string;
+    type?: string;
+    meaning?: string;
+  }>;
+  rule_explanations?: string[];
 };
 
 type ProfileDiff = {
@@ -59,6 +68,7 @@ type ProductOption = {
   source_url?: string | null;
   price?: number | null;
   price_bucket?: string | null;
+  price_band?: string | null;
   food_taste?: string | null;
   net_content?: string | null;
   sold_text?: string | null;
@@ -70,6 +80,13 @@ type ProductOption = {
   warning_tags?: Array<{ tag: string; level?: string }>;
   quality_flags?: string[];
 };
+
+function priceLabel(option?: ProductOption) {
+  if (!option) return "";
+  if (option.price_band && option.price_band !== "未知") return option.price_band;
+  if (option.price_bucket && option.price_bucket !== "未知") return `${option.price_bucket}元/斤`;
+  return "";
+}
 
 type CompareResult = {
   current_food: ProductInfo;
@@ -504,7 +521,6 @@ function ProductPicker(props: {
   const [query, setQuery] = useState("");
   const [origin, setOrigin] = useState("全部");
   const [priceBucket, setPriceBucket] = useState("全部");
-  const [functionTag, setFunctionTag] = useState("全部");
   const [onlyAvailable, setOnlyAvailable] = useState(true);
 
   const selected = useMemo(() => {
@@ -518,12 +534,6 @@ function ProductPicker(props: {
         if (onlyAvailable && !option.compare_available) return false;
         if (origin !== "全部" && option.origin_type !== origin) return false;
         if (priceBucket !== "全部" && option.price_bucket !== priceBucket) return false;
-        if (
-          functionTag !== "全部" &&
-          !(option.function_tags || []).some((item) => item.tag === functionTag || item.display_tag === functionTag)
-        ) {
-          return false;
-        }
         if (!normalizedQuery) return true;
         const haystack = [
           option.label,
@@ -540,7 +550,7 @@ function ProductPicker(props: {
         return haystack.includes(normalizedQuery);
       })
       .slice(0, 40);
-  }, [functionTag, onlyAvailable, origin, priceBucket, props.options, query]);
+  }, [onlyAvailable, origin, priceBucket, props.options, query]);
 
   const filters = [
     { value: "全部", setter: setOrigin, active: origin === "全部" },
@@ -549,11 +559,6 @@ function ProductPicker(props: {
     { value: "<50", setter: setPriceBucket, active: priceBucket === "<50" },
     { value: "50-80", setter: setPriceBucket, active: priceBucket === "50-80" },
     { value: "80以上", setter: setPriceBucket, active: priceBucket === "80以上" },
-    { value: "肠胃友好", setter: setFunctionTag, active: functionTag === "肠胃友好" },
-    { value: "黑下巴友好", setter: setFunctionTag, active: functionTag === "黑下巴友好" },
-    { value: "控重管理", setter: setFunctionTag, active: functionTag === "控重管理" },
-    { value: "皮肤毛发", setter: setFunctionTag, active: functionTag === "皮肤毛发" },
-    { value: "增肌长肉", setter: setFunctionTag, active: functionTag === "增肌长肉" },
   ];
 
   function selectOption(option: ProductOption) {
@@ -672,8 +677,8 @@ function ProductPicker(props: {
                         <span className={`rounded-md px-2 py-0.5 text-[11px] font-medium ${optionTone(option.origin_type)}`}>
                           {option.origin_type?.includes("进口") ? "进口" : option.origin_type?.includes("国产") ? "国产" : "待确认"}
                         </span>
-                        {option.price_bucket && option.price_bucket !== "未知" && (
-                          <span className="rounded-md bg-orange-50 px-2 py-0.5 text-[11px] font-medium text-orange-700">{option.price_bucket}</span>
+                        {priceLabel(option) && (
+                          <span className="rounded-md bg-orange-50 px-2 py-0.5 text-[11px] font-medium text-orange-700">{priceLabel(option)}</span>
                         )}
                         {(option.function_tags || []).slice(0, 1).map((tag) => (
                           <span key={`${option.catalog_key}-${tag.tag}`} className="rounded-md bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700">
@@ -708,7 +713,7 @@ function SelectedFoodSummary(props: {
   const tags = [
     `品牌：${brand}`,
     props.option?.origin_type?.includes("进口") ? "进口" : props.option?.origin_type?.includes("国产") ? "国产" : "",
-    props.option?.price_bucket && props.option.price_bucket !== "未知" ? `${props.option.price_bucket}元/斤` : "",
+    priceLabel(props.option),
     ...(props.option?.function_tags || []).slice(0, 1).map((tag) => tag.display_tag || tag.tag),
   ].filter(Boolean);
 
@@ -1154,27 +1159,27 @@ function focusIcon(dimension: string) {
 
 function dimensionHelpText(dimension: string) {
   if (dimension.includes("蛋白质量")) {
-    return "衡量蛋白来源、动物蛋白质量和正向支持。分数越高，代表蛋白质量支持相对更好。";
+    return "指标解释：衡量蛋白来源质量、动物蛋白优势和蛋白正向支持，不等同于蛋白压力低。\n得分因子：动物蛋白占优程度、肉源/动物来源清晰度、主要蛋白形态（鲜肉、冻肉、肉粉、水解蛋白等）、植物蛋白干扰程度、粗蛋白含量适配度。";
   }
   if (dimension.includes("蛋白压力")) {
-    return "衡量蛋白结构复杂度和潜在消化压力。分数越高，代表蛋白消化压力相对更高。";
+    return "指标解释：衡量蛋白结构是否复杂、偏重，以及可能带来的消化适应压力。分数越高，代表蛋白压力越高。\n得分因子：肉源复杂度、主要蛋白形态、次要蛋白形态、蛋白形式混合复杂度、水解蛋白缓释作用、植物蛋白干扰、蛋白含量结构负载。";
   }
   if (dimension.includes("碳水")) {
-    return "衡量淀粉、豆类、薯类等结构带来的碳水负担。分数越高，代表碳水压力相对更重。";
+    return "指标解释：衡量淀粉、豆类、薯类、谷物等碳水结构带来的负担。分数越高，代表碳水压力越重。\n得分因子：淀粉/碳水原料类别、原料基础负担强度、配料表顺位权重、精制淀粉/粉类/薯类/谷物/豆类等命中情况。";
   }
   if (dimension.includes("脂肪")) {
-    return "衡量油脂结构和脂肪消化负担。分数越高，代表脂肪压力相对更高，需要结合下巴出油、呕吐等表现观察。";
+    return "指标解释：衡量油脂结构、脂肪消化负担和脂肪酸失衡压力。分数越高，越需要关注下巴出油、黑下巴、呕吐或便便偏油。\n得分因子：动物脂肪负载、植物脂肪干扰、Omega-6 偏强与 Omega-3 缓冲不足、脂肪来源复杂度。";
   }
   if (dimension.includes("纤维")) {
-    return "衡量便便成形、粪便骨架和肠道缓冲支持。分数越高，代表纤维缓冲相对更好。";
+    return "指标解释：衡量纤维是否能帮助便便成形、粪便骨架和肠道缓冲，而不是只看粗纤维含量。分数越高，代表纤维缓冲支持越好。\n得分因子：便便成形支持、粪便骨架支持、肠道刺激缓冲、纤维功能标签、发酵性、溶解性、原料类别和配料顺位权重。";
   }
   if (dimension.includes("菌群") || dimension.includes("肠胃")) {
-    return "衡量肠道菌群底物、代谢支持和肠胃稳定方向。分数越高，代表肠胃支持相对更充分。";
+    return "指标解释：衡量配方对肠道菌群底物和菌群代谢环境的支持。分数越高，代表菌群支持越充分，但仍需结合发酵压力观察。\n得分因子：供菌底物、短链脂肪酸/菌群代谢支持、益生元功能、发酵性、菌群相关原料类别和配料顺位权重。";
   }
   if (dimension.includes("皮肤") || dimension.includes("Omega")) {
-    return "衡量脂肪调节、抗氧化和皮肤毛发稳定支持。分数越高，代表皮肤保护方向相对更强。";
+    return "指标解释：衡量配方对脂肪调节、氧化压力缓冲和皮肤毛发稳定的支持。分数越高，代表皮肤保护方向越强。\n得分因子：抗氧化支持、微量营养素支持、Omega-3 支持、Omega-6 偏强的扣分影响、鱼油/海洋脂肪酸等皮肤相关脂肪来源。";
   }
-  return "该分数用于比较两款粮在对应配方结构方向上的相对表现，仅作选粮参考。";
+  return "指标解释：该分数用于比较两款粮在对应配方结构方向上的相对表现，仅作选粮参考。\n得分因子：由对应原料结构、功能标签和配料顺位权重综合判断。";
 }
 
 function MetricHelpIcon(props: { dimension: string }) {
@@ -1187,7 +1192,7 @@ function MetricHelpIcon(props: { dimension: string }) {
       >
         ?
       </button>
-      <span className="pointer-events-none absolute left-0 top-6 z-30 w-64 rounded-xl border border-slate-200 bg-white px-3 py-2 text-left text-xs font-normal leading-5 text-slate-600 opacity-0 shadow-xl shadow-slate-900/10 transition group-hover/help:opacity-100 group-focus-within/help:opacity-100">
+      <span className="pointer-events-none absolute left-0 top-6 z-30 w-80 whitespace-pre-line rounded-xl border border-slate-200 bg-white px-3 py-2 text-left text-xs font-normal leading-5 text-slate-600 opacity-0 shadow-xl shadow-slate-900/10 transition group-hover/help:opacity-100 group-focus-within/help:opacity-100">
         <span className="mb-1 block font-semibold text-slate-900">{props.dimension}</span>
         {dimensionHelpText(props.dimension)}
       </span>
@@ -1201,17 +1206,21 @@ function FocusBarComparison(props: {
   currentName: string;
   targetName: string;
 }) {
-  const targetScoreByDimension = new Map(
-    props.targetProfile
-      .filter((point) => point.score !== null && point.score !== undefined)
-      .map((point) => [point.dimension, Number(point.score)]),
-  );
+  const targetPointByDimension = new Map(props.targetProfile.map((point) => [point.dimension, point]));
   const rows = props.currentProfile
-    .filter((point) => point.score !== null && point.score !== undefined && targetScoreByDimension.has(point.dimension))
+    .filter((point) => {
+      const targetPoint = targetPointByDimension.get(point.dimension);
+      return (
+        point.score !== null &&
+        point.score !== undefined &&
+        targetPoint?.score !== null &&
+        targetPoint?.score !== undefined
+      );
+    })
     .map((point) => ({
       dimension: point.dimension,
       currentScore: Number(point.score),
-      targetScore: Number(targetScoreByDimension.get(point.dimension)),
+      targetScore: Number(targetPointByDimension.get(point.dimension)?.score),
     }))
     .slice(0, 7);
 
@@ -1499,7 +1508,7 @@ function ProductIngredientCard(props: {
     : props.option?.origin_type?.includes("国产")
       ? "国产品牌"
       : "";
-  const price = props.option?.price_bucket && props.option.price_bucket !== "未知" ? `${props.option.price_bucket}元/斤` : "";
+  const price = priceLabel(props.option);
   const meta = [`品牌：${brand}`, origin, price].filter(Boolean);
 
   return (
@@ -1906,13 +1915,12 @@ export default function CatFoodComparePage() {
           <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
             <div className="mb-4 flex flex-col gap-2 md:flex-row md:items-center">
               <h2 className="text-lg font-bold text-slate-950">分析结果</h2>
-              <button
-                type="button"
-                onClick={() => setMissingProductModalOpen(true)}
+              <a
+                href="/consumer/recommendation-engine"
                 className="text-left text-sm font-medium text-blue-600 hover:text-blue-500"
               >
                 这两款都不合适？试试智能推荐 →
-              </button>
+              </a>
             </div>
 
             <section className="mt-4">
@@ -1928,7 +1936,7 @@ export default function CatFoodComparePage() {
                 <SectionTitle
                   marker="B"
                   title="两款粮侧重点"
-                  hint="以下为配方结构模型评分，评分用于比较两款粮在蛋白、碳水、肠胃、皮肤等方向的相对表现，不等同于兽医诊断或国标营养保证值。"
+                  hint="基于营养保证值，做进一步细拆。综合原材料的属性以及出现的位置给出得分，不等同于兽医诊断或国标营养保证值。"
                 />
               </div>
               <FocusBarComparison
@@ -1955,14 +1963,14 @@ export default function CatFoodComparePage() {
 
             <section className="mt-4">
               <div className="flex flex-col justify-between gap-3 md:flex-row md:items-start">
-                <SectionTitle marker="D" title="大模型总结" hint="综合配方差异、潜在风险和猫咪情况生成建议" />
+                <SectionTitle marker="D" title="换粮建议" hint="综合配方差异、潜在风险和猫咪情况生成建议" />
                 <button
                   type="button"
                   disabled={summaryLoading}
                   onClick={handleGenerateSummary}
                   className="h-10 shrink-0 rounded-xl bg-blue-600 px-5 text-sm font-bold text-white shadow-lg shadow-blue-600/20 hover:bg-blue-500 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:shadow-none"
                 >
-                  {summaryLoading ? "正在生成..." : "生成大模型总结"}
+                  {summaryLoading ? "正在生成..." : "生成换粮建议"}
                 </button>
               </div>
               <div className="rounded-2xl border border-slate-200 bg-white p-5">
@@ -1977,7 +1985,7 @@ export default function CatFoodComparePage() {
                   </div>
                 ) : (
                   <div className="mt-5 rounded-2xl bg-slate-50 p-5 text-sm leading-6 text-slate-600">
-                    点击“生成大模型总结”后，大模型会围绕两款粮各有优势、整体产品池表现、换到对比粮可能改善什么和怎么选进行总结。
+                    点击“生成换粮建议”后，大模型会围绕两款粮各有优势、整体产品池表现、换到对比粮可能改善什么和怎么选进行总结。
                   </div>
                 )}
               </div>

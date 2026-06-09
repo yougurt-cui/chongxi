@@ -865,6 +865,30 @@ def get_material_role_evidence(engine, source_id: Any, product_key: Any, ingredi
         source_id=source_id,
         product_key=product_key,
     )
+    protein_score_rules = _fetch_feature_row(
+        engine,
+        "protein_business_cluster_product_details_scored",
+        [
+            "animal_sources",
+            "animal_source_level1_categories",
+            "animal_source_level2_sources",
+            "protein_source_details",
+            "primary_meat_source_species",
+            "secondary_meat_source_species",
+            "primary_meat_source_type",
+            "secondary_meat_source_type",
+            "meat_source_complexity_norm",
+            "main_protein_form_norm",
+            "secondary_protein_form_norm",
+            "plant_protein_interference_norm",
+            "hydrolyzed_protein_role",
+            "crude_protein_for_score",
+            "guarantee_crude_protein_value",
+            "guarantee_crude_protein_unit",
+        ],
+        source_id=source_id,
+        product_key=product_key,
+    )
     fat_roles = _fetch_feature_row(
         engine,
         "catfood_fat_material_features",
@@ -900,6 +924,7 @@ def get_material_role_evidence(engine, source_id: Any, product_key: Any, ingredi
     return make_json_safe({
         "raw_ingredient_text": ingredient_composition or fiber_carb_roles.get("raw_ingredient_text") or "",
         "protein_roles": protein_roles,
+        "protein_score_rules": protein_score_rules,
         "fat_roles": fat_roles,
         "fiber_carb_roles": fiber_carb_roles,
     })
@@ -1467,6 +1492,7 @@ def _material_evidence_for_dimension(material_evidence: dict, dimension: str) ->
         return {
             "raw_ingredient_text": material_evidence.get("raw_ingredient_text") or "",
             "protein_roles": material_evidence.get("protein_roles") or {},
+            "protein_score_rules": material_evidence.get("protein_score_rules") or {},
         }
     if dimension in {"脂肪负担", "皮肤保护"}:
         return {
@@ -1479,6 +1505,105 @@ def _material_evidence_for_dimension(material_evidence: dict, dimension: str) ->
             "fiber_carb_roles": material_evidence.get("fiber_carb_roles") or {},
         }
     return {"raw_ingredient_text": material_evidence.get("raw_ingredient_text") or ""}
+
+
+def _first_text(*values: Any) -> str:
+    for value in values:
+        text_value = str(value or "").strip()
+        if text_value and text_value.lower() not in {"nan", "none", "null"}:
+            return text_value
+    return ""
+
+
+def _append_unique(items: list[str], value: str) -> None:
+    text_value = str(value or "").strip()
+    if text_value and text_value not in items:
+        items.append(text_value)
+
+
+def build_dimension_rule_explanations(product: Dict[str, Any], dimension: str) -> list[str]:
+    material_evidence = product.get("material_role_evidence") or {}
+    protein_roles = material_evidence.get("protein_roles") or {}
+    protein_rules = material_evidence.get("protein_score_rules") or {}
+    explanations: list[str] = []
+
+    if dimension == "蛋白质量":
+        main_form = _first_text(
+            protein_rules.get("main_protein_form_norm"),
+            protein_roles.get("primary_meat_source_type"),
+        )
+        if main_form:
+            if "鲜肉" in main_form or "冻肉" in main_form:
+                _append_unique(explanations, f"主要蛋白形态识别为{main_form}，在规则里更偏向正向蛋白质量支持。")
+            elif "肉粉" in main_form:
+                _append_unique(explanations, f"主要蛋白形态识别为{main_form}，仍属于动物蛋白来源，但质量支持弱于鲜肉/冻肉路径。")
+            elif "水解" in main_form:
+                _append_unique(explanations, f"主要蛋白形态识别为{main_form}，规则里更关注温和适配，不直接等同于高蛋白质量。")
+
+        animal_sources = _first_text(
+            protein_rules.get("animal_source_level2_sources"),
+            protein_rules.get("animal_sources"),
+            protein_roles.get("animal_source_level2_sources"),
+            protein_roles.get("animal_sources"),
+        )
+        if animal_sources:
+            _append_unique(explanations, f"动物蛋白来源识别到：{animal_sources}；来源越具体，蛋白来源清晰度越高。")
+
+        plant_interference = _first_text(
+            protein_rules.get("plant_protein_interference_norm"),
+            protein_roles.get("plant_protein_labels"),
+        )
+        if plant_interference:
+            if "无植物蛋白" in plant_interference:
+                _append_unique(explanations, "未识别到明显植物蛋白补强，蛋白质量判断更主要来自动物蛋白路径。")
+            else:
+                _append_unique(explanations, f"植物蛋白干扰识别为{plant_interference}，会拉低蛋白质量的正向判断。")
+
+        crude_protein = _first_text(
+            protein_rules.get("crude_protein_for_score"),
+            protein_rules.get("guarantee_crude_protein_value"),
+            protein_roles.get("guarantee_crude_protein_value"),
+        )
+        if crude_protein:
+            unit = _first_text(protein_rules.get("guarantee_crude_protein_unit"), protein_roles.get("guarantee_crude_protein_unit"))
+            _append_unique(explanations, f"粗蛋白含量参与含量适配判断：{crude_protein}{unit}；它只代表基础供给，不等同于蛋白质量本身。")
+
+    if dimension == "蛋白压力":
+        complexity = _first_text(protein_rules.get("meat_source_complexity_norm"))
+        if complexity:
+            _append_unique(explanations, f"肉源复杂度识别为{complexity}；肉源越多、跨类越多，蛋白适应压力通常越高。")
+
+        main_form = _first_text(
+            protein_rules.get("main_protein_form_norm"),
+            protein_roles.get("primary_meat_source_type"),
+        )
+        if main_form:
+            if "肉粉" in main_form:
+                _append_unique(explanations, f"主要蛋白形态为{main_form}，在蛋白压力规则里属于更重的结构。")
+            elif "鲜肉" in main_form or "冻肉" in main_form:
+                _append_unique(explanations, f"主要蛋白形态为{main_form}，结构负载通常低于肉粉为主。")
+            elif "水解" in main_form:
+                _append_unique(explanations, f"主要蛋白形态为{main_form}，水解蛋白在规则里会降低部分结构负载。")
+
+        secondary_form = _first_text(
+            protein_rules.get("secondary_protein_form_norm"),
+            protein_roles.get("secondary_meat_source_type"),
+        )
+        if secondary_form and secondary_form != "无":
+            _append_unique(explanations, f"次要蛋白形态识别为{secondary_form}，会和主要蛋白一起影响蛋白结构复杂度。")
+
+        plant_interference = _first_text(
+            protein_rules.get("plant_protein_interference_norm"),
+            protein_roles.get("plant_protein_labels"),
+        )
+        if plant_interference and "无植物蛋白" not in plant_interference:
+            _append_unique(explanations, f"植物蛋白干扰识别为{plant_interference}，会增加蛋白来源判断和适应压力。")
+
+        hydrolyzed_role = _first_text(protein_rules.get("hydrolyzed_protein_role"))
+        if hydrolyzed_role and hydrolyzed_role != "无":
+            _append_unique(explanations, f"水解蛋白角色识别为{hydrolyzed_role}，在规则里作为温和/缓释因素处理。")
+
+    return explanations[:4]
 
 
 def score_material_evidence_to_context(product: Dict[str, Any]) -> List[dict]:
@@ -1586,21 +1711,18 @@ def generate_qwen_compare_summary(context: dict) -> str:
 
 输出结构固定为：
 
-### 综合对比判断
-用 2-4 句话概括两款产品的主要取舍，不要直接说谁绝对更好。
+### 不同需求下怎么选
+把不同猫咪需求放在最前面，用条件化表达，按场景分条写清楚“建议、原因、观察点”：
+- 关注黑下巴/皮肤稳定
+- 关注软便/肠胃稳定
+- 关注蛋白质量/保肌肉
+- 日常稳定喂养
 
 ### 配方画像差异怎么看
 解释 3-5 个最关键差异，必须包含蛋白质量与蛋白压力的区分；不要逐项复述所有分数。
 
 ### 标签差异与风险结构
 只围绕已有问题标签解释黑下巴和软便的风险结构；如果某款产品没有对应问题标签，请写“未见明显问题标签”，不要创造新标签。
-
-### 不同需求下怎么选
-把不同猫咪需求放在这一节里，用条件化表达：
-- 关注黑下巴/皮肤稳定
-- 关注软便/肠胃稳定
-- 关注蛋白质量/保肌肉
-- 日常稳定喂养
 
 ### 需要重点观察的点
 列出 3-5 个观察点，语气克制，不做医学诊断。
