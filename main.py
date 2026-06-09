@@ -118,11 +118,31 @@ def _load_recommendation_app():
     return recommendation_app
 
 
-SUMMARY_PROMPT_VERSION = "cat-food-compare-summary-v16"
+SUMMARY_PROMPT_VERSION = "cat-food-compare-summary-v17"
 SUMMARY_FIXED_DISCLAIMER = (
     "评分为自研配方模型，仅用于两款横向对比，不等同 GB/T31217、AAFCO 实测营养值；"
     "风险标签为全库配方与喂养反馈下的相对倾向，非诊断。"
 )
+SUMMARY_BANNED_PRODUCT_PRONOUNS = {
+    "前者": "a",
+    "前款": "a",
+    "前一种": "a",
+    "前一个": "a",
+    "后者": "b",
+    "后款": "b",
+    "后一种": "b",
+    "后一个": "b",
+}
+
+
+def _replace_summary_product_pronouns(summary: str, product_a_name: str, product_b_name: str) -> str:
+    if not summary:
+        return summary
+    cleaned = summary
+    for phrase, product_key in SUMMARY_BANNED_PRODUCT_PRONOUNS.items():
+        replacement = product_a_name if product_key == "a" else product_b_name
+        cleaned = cleaned.replace(phrase, replacement)
+    return cleaned
 
 
 def _port_is_open(port: int, host: str = "127.0.0.1") -> bool:
@@ -1052,6 +1072,9 @@ def _generate_cat_food_summary(payload: dict) -> dict:
 
 11. 【分场景建议】里是否出现了“产品A VS 产品B”作为建议对象？
 如果是，必须改成单个产品名或“两款都需谨慎”；VS 只允许出现在后面的证据解释段。
+
+12. 全文是否出现了“前者、后者、前款、后款、前一种、后一种”等指代？
+如果是，必须改成具体产品名或稳定简称。
 """
     system_prompt = """
 你是猫粮营养对比总结助手。请基于系统提供的“保证值、原材料营养角色、模型指标评分、症状风险标签”，生成两款猫粮的科学对比建议。
@@ -1076,13 +1099,14 @@ def _generate_cat_food_summary(payload: dict) -> dict:
    C. “蛋白压力评分”统一用于解释蛋白来源复杂度和消化适应压力；不要使用“蛋白结构负载”“结构负载轻”“结构更易吸收”等混合表达。
    D. “蛋白更足/蛋白更丰沛”统一改为“粗蛋白保证值更高”或“基础蛋白供给更高”。
    E. “更易吸收/更好消化”属于强生理结论，除非输入明确提供消化率或临床证据，否则改为“蛋白来源支持更清晰”或“蛋白压力评分相对更低”。
+   F. 全文禁止使用“前者”“后者”“前款”“后款”“前一种”“后一种”等代词指代产品；任何段落都必须使用具体产品名或稳定简称。
 12. 数字表达规则：
    A. 可以在【基础营养差异】【原料与指标解释】【症状风险】中使用“VS”，但顺序必须固定为“当前粮产品名 VS 对比粮产品名”。
    B. 【分场景建议】中禁止使用“VS”表达，禁止写“可优先考虑 A VS B”“更适合作为观察方向的是 A VS B”这类句子；建议对象必须是单个产品名，或写“两款都需谨慎”。
    C. 每个 VS 数字后必须紧跟方向解释；支持型评分说明谁更高、支持更强，压力型评分说明谁更低、压力更小。
-   D. 禁止使用 B-A 差值、A→B 箭头、只写“下降/上升多少分”、或“前者/后者”指代。
+   D. 禁止使用 B-A 差值、A→B 箭头、只写“下降/上升多少分”，也禁止用代词指代产品。
    E. 首次出现 VS 前必须用短句说明“以下数字顺序为：{当前粮产品名} VS {对比粮产品名}”。
-   F. 如果产品全名太长，可使用产品简称，但同一篇内简称必须稳定，不得在“当前粮/对比粮/前者/后者/产品名”之间来回切换。
+   F. 如果产品全名太长，可使用产品简称，但同一篇内简称必须稳定；不得使用“当前粮/对比粮/前者/后者”等代词替代产品名。
 13. 【分场景建议】必须放在全文第一段，且结构要层次分明：
    A. 按场景分条写，优先覆盖“日常稳定/无明显问题”“黑下巴或下巴出油”“软便或玻璃胃/换粮敏感”“需要观察或不建议直接换”的场景；如果某场景输入证据不足，可以合并或省略。
    B. 每条必须采用“场景：建议；原因；观察点”的结构，不要写成一整段混在一起。
@@ -1142,6 +1166,7 @@ def _generate_cat_food_summary(payload: dict) -> dict:
     summary = completion.choices[0].message.content or ""
     if SUMMARY_FIXED_DISCLAIMER not in summary:
         summary = f"{summary.rstrip()}\n\n【说明】{SUMMARY_FIXED_DISCLAIMER}"
+    summary = _replace_summary_product_pronouns(summary, product_a_full_name, product_b_full_name)
     task_store.store_llm_result(
         cache_key=cache_key,
         task_type="compare_summary",
