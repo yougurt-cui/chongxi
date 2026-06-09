@@ -789,19 +789,35 @@ def _resolve_cleaned_brand_for_ocr(row: dict[str, Any], brand_rows: list[dict[st
     return best[1] if best else None
 
 
-def _fetch_ocr_parsed_rows(limit: int) -> list[dict[str, Any]]:
+def _fetch_ocr_parsed_rows(limit: int, q: str = "") -> list[dict[str, Any]]:
+    normalized_query = _clean_text(q)
+    query_like = f"%{normalized_query}%" if normalized_query else ""
     with _connect_csv(autocommit=True) as conn:
         with conn.cursor() as cursor:
-            cursor.execute(
+            query_sql = ""
+            params: list[Any] = []
+            if query_like:
+                query_sql = """
+                  AND (
+                    brand LIKE %s
+                    OR product_name LIKE %s
+                    OR image_name LIKE %s
+                    OR CONCAT(COALESCE(brand, ''), ' ', COALESCE(product_name, '')) LIKE %s
+                  )
                 """
+                params.extend([query_like, query_like, query_like, query_like])
+            params.append(max(limit * 5, limit))
+            cursor.execute(
+                f"""
                 SELECT id, source_id, image_name, image_path, brand, product_name, ingredient_composition
                 FROM catfood_ingredient_ocr_parsed
                 WHERE ingredient_composition IS NOT NULL
                   AND TRIM(ingredient_composition) <> ''
+                  {query_sql}
                 ORDER BY id DESC
                 LIMIT %s
                 """,
-                (max(limit * 5, limit),),
+                params,
             )
             return list(cursor.fetchall() or [])
 
@@ -818,7 +834,7 @@ def list_ocr_product_options_with_brand_mapping(
 ) -> dict[str, Any]:
     limit = max(1, min(int(limit or 200), 500))
     brand_rows = _fetch_brand_cleaned_rows()
-    parsed_rows = _fetch_ocr_parsed_rows(limit)
+    parsed_rows = _fetch_ocr_parsed_rows(limit, q=q)
     normalized_query = q.strip().lower()
     items = []
     seen = set()

@@ -543,6 +543,11 @@ def compact_text(value: str) -> str:
     return re.sub(r"\s+", "", str(value or "").strip())
 
 
+def identity_text(value: str) -> str:
+    """Normalize product identity for cross-table matching."""
+    return re.sub(r"[^0-9a-z\u4e00-\u9fff]+", "", str(value or "").lower())
+
+
 def resolve_brand_col(columns: set, preferred_col: str) -> Optional[str]:
     if preferred_col in columns:
         return preferred_col
@@ -576,13 +581,18 @@ def product_identity_mask(df: pd.DataFrame, product_col: str, query: str, brand_
     product_text = df[product_col].astype(str)
     raw_query = str(query or "").strip()
     mask = product_text.str.contains(raw_query, na=False, regex=False)
+    normalized_query = identity_text(raw_query)
+    if normalized_query:
+        mask = mask | product_text.map(identity_text).str.contains(normalized_query, na=False, regex=False)
     if brand_col and brand_col in df.columns:
         brand_text = df[brand_col].fillna("").astype(str)
         compact_query = compact_text(raw_query)
+        normalized_brand_product = (brand_text + product_text).map(identity_text)
         mask = (
             mask
             | (brand_text + product_text).str.contains(compact_query, na=False, regex=False)
             | (brand_text + " " + product_text).str.contains(raw_query, na=False, regex=False)
+            | normalized_brand_product.str.contains(normalized_query, na=False, regex=False)
         )
     return mask
 
@@ -604,6 +614,7 @@ def query_one_product(
 
     order_parts = []
     search_sql, exact_match_sql = build_product_search_sql(product_col, resolved_brand_col)
+    product_sql = quote_identifier(product_col)
     order_parts.append(f"CASE WHEN {exact_match_sql} THEN 0 ELSE 1 END")
     if "calculated_at" in columns:
         order_parts.append("calculated_at DESC")
@@ -636,6 +647,44 @@ def query_one_product(
     df = pd.read_sql(sql, engine, params=query_params)
 
     if df.empty:
+        fallback_where = f"{product_sql} LIKE :fallback_product_name"
+        if resolved_brand_col:
+            brand_sql = quote_identifier(resolved_brand_col)
+            fallback_where = (
+                f"({fallback_where} OR CONCAT(COALESCE({brand_sql}, ''), COALESCE({product_sql}, '')) LIKE :fallback_brand_product)"
+            )
+        fallback_sql = text(f"""
+            SELECT *
+            FROM {quote_identifier(table_name)}
+            WHERE {fallback_where}
+            {order_sql}
+            LIMIT 50
+        """)
+        fallback_terms = [
+            part for part in re.findall(r"[\u4e00-\u9fff]{2,}", product_query) + re.split(r"\s+", product_query)
+            if part
+        ]
+        fallback_terms.append(product_query)
+        seen_terms = set()
+        for fallback_term in fallback_terms:
+            if fallback_term in seen_terms:
+                continue
+            seen_terms.add(fallback_term)
+            fallback_df = pd.read_sql(
+                fallback_sql,
+                engine,
+                params={
+                    **query_params,
+                    "fallback_product_name": f"%{fallback_term}%",
+                    "fallback_brand_product": f"%{fallback_term}%",
+                },
+            )
+            if fallback_df.empty:
+                continue
+            filtered_df = fallback_df[product_identity_mask(fallback_df, product_col, product_query, resolved_brand_col)]
+            if not filtered_df.empty:
+                return filtered_df.iloc[0]
+            return fallback_df.iloc[0]
         return None
 
     return df.iloc[0]
