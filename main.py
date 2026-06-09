@@ -12,7 +12,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from typing import Any
 
-from flask import Flask, jsonify, redirect, request, send_from_directory
+from flask import Flask, Response, jsonify, redirect, request, send_from_directory
 from werkzeug.utils import secure_filename
 import yaml
 
@@ -1300,7 +1300,7 @@ def create_app() -> Flask:
 
     @flask_app.get("/")
     def workbench_index():
-        return send_from_directory(WEB_DIR, "index.html")
+        return Response("Not Found", status=404, mimetype="text/plain")
 
     @flask_app.get("/cat-food-compare.html")
     def cat_food_compare_index():
