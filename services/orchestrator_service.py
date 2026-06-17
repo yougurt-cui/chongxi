@@ -1399,6 +1399,10 @@ def build_node_input(task: dict[str, Any], node_def: NodeDefinition) -> dict[str
             return {
                 "orchestrator_task_id": task["id"],
                 "orchestrator_node_code": node_def.node_code,
+                "source_id": extract_output.get("source_id"),
+                "parsed_row_id": extract_output.get("parsed_row_id"),
+                "product_key": extract_output.get("product_key"),
+                "brand": extract_output.get("brand"),
                 "ingredient_composition": extract_output.get("ingredient_composition"),
                 "ingredients": extract_output.get("ingredients"),
                 "product_name": extract_output.get("product_name") or payload.get("product_name"),
@@ -1408,6 +1412,9 @@ def build_node_input(task: dict[str, Any], node_def: NodeDefinition) -> dict[str
             return {
                 "orchestrator_task_id": task["id"],
                 "orchestrator_node_code": node_def.node_code,
+                "source_id": standardize_output.get("source_id"),
+                "product_key": standardize_output.get("product_key"),
+                "brand": standardize_output.get("brand"),
                 "standardized_ingredients": standardize_output,
                 "product_name": standardize_output.get("product_name") or payload.get("product_name"),
             }
@@ -1583,6 +1590,58 @@ def run_task(task_id: str, *, max_steps: int = 100) -> dict[str, Any]:
     return get_task(task_id) or {"id": task_id}
 
 
+def _set_if_missing(output: dict[str, Any], key: str, value: Any) -> None:
+    if not _is_non_empty(output.get(key)) and _is_non_empty(value):
+        output[key] = value
+
+
+def _merge_identity_fields(output: dict[str, Any], *sources: dict[str, Any]) -> None:
+    for source in sources:
+        if not isinstance(source, dict):
+            continue
+        for key in (
+            "source_id",
+            "parsed_row_id",
+            "product_key",
+            "brand",
+            "product_name",
+            "ingredient_composition",
+            "ingredients",
+        ):
+            _set_if_missing(output, key, source.get(key))
+        parsed = source.get("parsed")
+        if isinstance(parsed, dict):
+            _set_if_missing(output, "parsed_row_id", parsed.get("id"))
+            _set_if_missing(output, "source_id", parsed.get("source_id"))
+            _set_if_missing(output, "brand", parsed.get("brand"))
+            _set_if_missing(output, "product_name", parsed.get("product_name"))
+            _set_if_missing(output, "ingredient_composition", parsed.get("ingredient_composition"))
+            if not isinstance(output.get("parsed"), dict):
+                output["parsed"] = parsed
+
+
+def _augment_node_output(task: dict[str, Any], node_code: str, output: dict[str, Any]) -> dict[str, Any]:
+    output = dict(output or {})
+    if task.get("task_type") != "catfood_image_analysis":
+        return output
+
+    ocr_output = _output_for(task, "ocr_formula")
+    extract_output = _output_for(task, "ingredient_extract")
+    standardize_output = _output_for(task, "ingredient_standardize")
+
+    if node_code == "ingredient_extract":
+        _merge_identity_fields(output, ocr_output)
+    elif node_code == "ingredient_standardize":
+        _merge_identity_fields(output, extract_output, ocr_output)
+    elif node_code == "formula_profile":
+        _merge_identity_fields(output, standardize_output, extract_output, ocr_output)
+        nested = output.get("standardized_ingredients")
+        if isinstance(nested, dict):
+            _merge_identity_fields(output, nested)
+
+    return output
+
+
 def apply_node_result(
     task_id: str,
     node_code: str,
@@ -1598,7 +1657,7 @@ def apply_node_result(
     if node_code not in nodes_by_code:
         raise ValueError(f"节点不存在: {task_id}/{node_code}")
 
-    output = dict(output or {})
+    output = _augment_node_output(task, node_code, dict(output or {}))
     normalized_status = str(call_status or "").strip().lower()
     with _connect() as conn:
         if output:
