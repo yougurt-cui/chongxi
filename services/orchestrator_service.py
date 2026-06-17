@@ -402,11 +402,71 @@ def _check_ingredient_extract(output: dict[str, Any]) -> CheckResult:
             },
         )
 
+    parsed_check = _check_parsed_ingredient_ready(
+        source_id=source_id,
+        parsed_row_id=parsed_row_id,
+        product_key=product_key,
+        output=output,
+    )
+    if parsed_check:
+        return parsed_check
+
     return _check_ingredient_feature_tables(
         source_id=source_id,
         parsed_row_id=parsed_row_id,
         product_key=product_key,
     )
+
+
+def _check_parsed_ingredient_ready(
+    *,
+    source_id: Any,
+    parsed_row_id: Any,
+    product_key: Any,
+    output: dict[str, Any] | None = None,
+) -> CheckResult | None:
+    parsed = (output or {}).get("parsed")
+    ingredient_text = _get_output_value(output or {}, "ingredient_composition")
+    details: dict[str, Any] = {
+        "source_id": source_id,
+        "parsed_row_id": parsed_row_id,
+        "product_key": product_key,
+        "table": "catfood_ingredient_ocr_parsed",
+    }
+
+    if isinstance(parsed, dict):
+        details["parsed"] = {
+            key: parsed.get(key)
+            for key in ("id", "source_id", "brand", "product_name", "ingredient_composition")
+            if key in parsed
+        }
+        ingredient_text = ingredient_text or parsed.get("ingredient_composition")
+
+    row = None
+    if not _is_non_empty(ingredient_text):
+        try:
+            row = _fetch_parsed_ingredient_row(source_id=source_id, parsed_row_id=parsed_row_id)
+        except Exception as exc:
+            return CheckResult(False, NODE_FAILED, f"原料解析表检查失败: {exc}", details)
+        if row:
+            details["parsed"] = {
+                key: row.get(key)
+                for key in ("id", "source_id", "brand", "product_name", "ingredient_composition")
+                if key in row
+            }
+            ingredient_text = row.get("ingredient_composition")
+
+    if not row and not isinstance(parsed, dict):
+        details["parsed"] = {"found": False}
+
+    if not _is_non_empty(ingredient_text):
+        return CheckResult(
+            False,
+            NODE_FAILED,
+            "原料解析结果为空，请先重跑 OCR 解析",
+            details,
+        )
+    return None
 
 
 def _check_ingredient_feature_tables(
@@ -598,7 +658,7 @@ def _fetch_score_wide_row(cursor: pymysql.cursors.DictCursor, source_id: Any, pr
         return None
     cursor.execute(
         f"""
-        SELECT source_id, product_key,
+        SELECT source_id, product_key, brand, product_name,
                protein_structure_score, protein_quality_score,
                fat_oily_score, fat_regulation_score, fat_score,
                omega_imbalance_score, fat_mix_complexity_score,
@@ -637,9 +697,15 @@ def _check_formula_profile(output: dict[str, Any]) -> CheckResult:
         with _connect_feature() as conn:
             with conn.cursor() as cursor:
                 wide_row = _fetch_score_wide_row(cursor, source_id=source_id, product_key=product_key)
-                if not _is_non_empty(product_key) and wide_row:
-                    product_key = wide_row.get("product_key")
-                sku_feature_row = _fetch_sku_feature_input_row(cursor, product_key)
+                product_key_candidates = _formula_profile_product_key_candidates(product_key, wide_row)
+                if not _is_non_empty(product_key) and product_key_candidates:
+                    product_key = product_key_candidates[0]
+                sku_feature_row, resolved_product_key = _fetch_first_sku_feature_input_row(
+                    cursor,
+                    product_key_candidates,
+                )
+                if _is_non_empty(resolved_product_key):
+                    product_key = resolved_product_key
                 risk_rows = _fetch_risk_result_rows(cursor, product_key)
     except Exception as exc:
         return CheckResult(False, NODE_FAILED, f"配方画像结果表检查失败: {exc}")
@@ -647,6 +713,7 @@ def _check_formula_profile(output: dict[str, Any]) -> CheckResult:
     details = {
         "source_id": source_id,
         "product_key": product_key,
+        "wide_product_key": wide_row.get("product_key") if wide_row else None,
         "tables": {
             "sku_feature_input": {"found": bool(sku_feature_row)},
             "sku_risk_score_result": {
@@ -696,6 +763,41 @@ def _check_formula_profile(output: dict[str, Any]) -> CheckResult:
     return CheckResult(True, NODE_SUCCESS, "配方画像结果表检查通过", details)
 
 
+def _formula_profile_product_key_candidates(
+    product_key: Any,
+    wide_row: dict[str, Any] | None,
+) -> list[str]:
+    candidates: list[str] = []
+
+    def add(value: Any) -> None:
+        if not _is_non_empty(value):
+            return
+        text = str(value)
+        if text not in candidates:
+            candidates.append(text)
+
+    add(product_key)
+    if wide_row:
+        add(wide_row.get("product_key"))
+        add(_normalized_product_key(brand=wide_row.get("brand"), product_name=wide_row.get("product_name")))
+    return candidates
+
+
+def _normalized_product_key(*, brand: Any, product_name: Any) -> str:
+    if not (_is_non_empty(brand) and _is_non_empty(product_name)):
+        return ""
+    try:
+        brand_normalizer = importlib.import_module("vendor.feature_score_pipeline.scripts.brand_normalizer")
+        canonical_brand = brand_normalizer.canonicalize_brand(brand)
+        if canonical_brand and not brand_normalizer.is_generic_brand(canonical_brand):
+            corrected_brand = canonical_brand
+        else:
+            corrected_brand = brand_normalizer.correct_brand(brand, product_name)
+        return brand_normalizer.build_product_key(corrected_brand, product_name)
+    except Exception:
+        return f"{brand}||{product_name}"
+
+
 def _fetch_sku_feature_input_row(cursor: pymysql.cursors.DictCursor, product_key: Any) -> dict[str, Any] | None:
     if not _is_non_empty(product_key):
         return None
@@ -712,6 +814,17 @@ def _fetch_sku_feature_input_row(cursor: pymysql.cursors.DictCursor, product_key
         (str(product_key),),
     )
     return cursor.fetchone()
+
+
+def _fetch_first_sku_feature_input_row(
+    cursor: pymysql.cursors.DictCursor,
+    product_keys: list[str],
+) -> tuple[dict[str, Any] | None, str | None]:
+    for key in product_keys:
+        row = _fetch_sku_feature_input_row(cursor, key)
+        if row:
+            return row, key
+    return None, None
 
 
 def _fetch_risk_result_rows(cursor: pymysql.cursors.DictCursor, product_key: Any) -> list[dict[str, Any]]:
@@ -749,6 +862,38 @@ def _fetch_protein_feature_row(cursor: pymysql.cursors.DictCursor, source_id: An
         params,
     )
     return cursor.fetchone()
+
+
+def _fetch_parsed_ingredient_row(source_id: Any, parsed_row_id: Any) -> dict[str, Any] | None:
+    with _connect() as conn:
+        with conn.cursor() as cursor:
+            if _is_non_empty(source_id):
+                cursor.execute(
+                    """
+                    SELECT id, source_id, brand, product_name, ingredient_composition
+                    FROM catfood_ingredient_ocr_parsed
+                    WHERE source_id = %s
+                    ORDER BY id DESC
+                    LIMIT 1
+                    """,
+                    (int(source_id),),
+                )
+                row = cursor.fetchone()
+                if row:
+                    return row
+            if _is_non_empty(parsed_row_id):
+                cursor.execute(
+                    """
+                    SELECT id, source_id, brand, product_name, ingredient_composition
+                    FROM catfood_ingredient_ocr_parsed
+                    WHERE id = %s
+                    ORDER BY id DESC
+                    LIMIT 1
+                    """,
+                    (int(parsed_row_id),),
+                )
+                return cursor.fetchone()
+    return None
 
 
 def _fetch_fat_feature_row(cursor: pymysql.cursors.DictCursor, source_id: Any, product_key: Any) -> dict[str, Any] | None:
@@ -1234,6 +1379,7 @@ def build_node_input(task: dict[str, Any], node_def: NodeDefinition) -> dict[str
                 "image_id": payload.get("image_id"),
                 "product_name": payload.get("product_name"),
                 "original_filename": payload.get("original_filename"),
+                "incremental_only": False,
             }
         if node_def.node_code == "ingredient_extract":
             ocr_output = _output_for(task, "ocr_formula")
@@ -1243,6 +1389,10 @@ def build_node_input(task: dict[str, Any], node_def: NodeDefinition) -> dict[str
                 "ocr_text": ocr_output.get("ocr_text"),
                 "image_path": payload.get("image_path"),
                 "product_name": payload.get("product_name"),
+                "source_id": ocr_output.get("source_id"),
+                "parsed_row_id": ocr_output.get("parsed_row_id"),
+                "ingredient_composition": ocr_output.get("ingredient_composition"),
+                "parsed": ocr_output.get("parsed"),
             }
         if node_def.node_code == "ingredient_standardize":
             extract_output = _output_for(task, "ingredient_extract")
@@ -1538,6 +1688,21 @@ def reset_node_for_reextract(task_id: str, node_code: str, reason: str | None = 
     definitions = {node.node_code: node for node in get_pipeline_definition(task["task_type"])}
     if node_code not in definitions:
         raise ValueError(f"节点不存在: {task_id}/{node_code}")
+
+    if task["task_type"] == "catfood_image_analysis" and node_code == "ingredient_extract":
+        ocr_output = _output_for(task, "ocr_formula")
+        extract_output = _output_for(task, "ingredient_extract")
+        source_id = ocr_output.get("source_id") or extract_output.get("source_id")
+        parsed_row_id = ocr_output.get("parsed_row_id") or extract_output.get("parsed_row_id")
+        product_key = extract_output.get("product_key") or ocr_output.get("product_key")
+        parsed_check = _check_parsed_ingredient_ready(
+            source_id=source_id,
+            parsed_row_id=parsed_row_id,
+            product_key=product_key,
+            output=ocr_output,
+        )
+        if parsed_check:
+            raise ValueError(f"{parsed_check.reason}，请先重跑配料表 OCR 识别")
 
     reset_codes = {node_code, *_downstream_node_codes(task["task_type"], node_code)}
     nodes_by_code = _node_map(task)

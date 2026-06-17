@@ -10,6 +10,8 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from sqlalchemy import text
+
 
 try:
     from app.vendor.csv_mysql_labeling.src.db import make_engine
@@ -141,6 +143,7 @@ def import_ingredient_images(
                     {
                         "image_name": image_path.name,
                         "file_sha256": result["file_sha256"],
+                        "ocr_text": result.get("ocr_text"),
                         "model_name": result["model_name"],
                         "model_latency_ms": result["model_latency_ms"],
                         "moved_path": str(moved_path) if moved_path else None,
@@ -160,6 +163,65 @@ def import_ingredient_images(
         "success_samples": succeeded[:10],
         "failure_samples": failed[:10],
     }
+
+
+def fetch_ocr_context_by_sha256(
+    *,
+    db_config: Dict[str, Any],
+    file_sha256: str,
+    ocr_table: str = DEFAULT_OCR_TABLE,
+    parsed_table: str = DEFAULT_PARSED_TABLE,
+) -> Dict[str, Any]:
+    """Return OCR text and parsed identifiers for a single imported image."""
+    sha = str(file_sha256 or "").strip()
+    if not sha:
+        return {}
+
+    engine = make_engine(db_config)
+    try:
+        with engine.connect() as conn:
+            ocr_row = conn.execute(
+                text(
+                    f"""
+                    SELECT id, image_path, image_name, file_sha256, ocr_text, model_name
+                    FROM `{ocr_table}`
+                    WHERE file_sha256 = :file_sha256
+                    ORDER BY id DESC
+                    LIMIT 1
+                    """
+                ),
+                {"file_sha256": sha},
+            ).mappings().first()
+            if not ocr_row:
+                return {}
+
+            parsed_row = conn.execute(
+                text(
+                    f"""
+                    SELECT id, source_id, brand, product_name, ingredient_composition
+                    FROM `{parsed_table}`
+                    WHERE file_sha256 = :file_sha256
+                       OR source_id = :source_id
+                    ORDER BY
+                        CASE WHEN source_id = :source_id THEN 0 ELSE 1 END,
+                        id DESC
+                    LIMIT 1
+                    """
+                ),
+                {"file_sha256": sha, "source_id": ocr_row["id"]},
+            ).mappings().first()
+
+        context: Dict[str, Any] = dict(ocr_row)
+        context["source_id"] = context.get("id")
+        if parsed_row:
+            context["parsed_row_id"] = parsed_row.get("id")
+            context["ingredient_composition"] = parsed_row.get("ingredient_composition")
+            context["brand"] = parsed_row.get("brand")
+            context["product_name"] = parsed_row.get("product_name")
+            context["parsed"] = dict(parsed_row)
+        return context
+    finally:
+        engine.dispose()
 
 
 def parse_ingredient_ocr(

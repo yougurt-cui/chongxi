@@ -16,6 +16,7 @@ try:
         DEFAULT_PARSED_TABLE,
         DEFAULT_PRODUCT_INFO_TABLE,
         import_ingredient_images,
+        fetch_ocr_context_by_sha256,
         load_default_db_config,
         parse_guarantee_values,
         parse_ingredient_ocr,
@@ -32,6 +33,7 @@ except ModuleNotFoundError:
         DEFAULT_PARSED_TABLE,
         DEFAULT_PRODUCT_INFO_TABLE,
         import_ingredient_images,
+        fetch_ocr_context_by_sha256,
         load_default_db_config,
         parse_guarantee_values,
         parse_ingredient_ocr,
@@ -55,6 +57,55 @@ def _normalize_steps(steps: Optional[Iterable[str]]) -> List[str]:
     if unknown:
         raise ValueError(f"unsupported steps: {', '.join(unknown)}")
     return normalized
+
+
+def _first_success_sha(result: Dict[str, Any]) -> Optional[str]:
+    ocr_result = (result.get("results") or {}).get("ocr_import") or {}
+    samples = ocr_result.get("success_samples") or []
+    if not isinstance(samples, list):
+        return None
+    for sample in samples:
+        if isinstance(sample, dict) and sample.get("file_sha256"):
+            return str(sample["file_sha256"])
+    return None
+
+
+def _attach_single_image_ocr_context(
+    result: Dict[str, Any],
+    *,
+    payload: Dict[str, Any],
+    db_config: Dict[str, Any],
+    ocr_table: str,
+    parsed_table: str,
+) -> None:
+    file_sha256 = (
+        payload.get("file_sha256")
+        or payload.get("sha256")
+        or _first_success_sha(result)
+    )
+    if not file_sha256:
+        return
+
+    context = fetch_ocr_context_by_sha256(
+        db_config=db_config,
+        file_sha256=str(file_sha256),
+        ocr_table=ocr_table,
+        parsed_table=parsed_table,
+    )
+    if not context:
+        return
+
+    result["source_id"] = context.get("source_id")
+    result["ocr_id"] = context.get("id")
+    result["parsed_row_id"] = context.get("parsed_row_id")
+    result["image_name"] = context.get("image_name")
+    result["file_sha256"] = context.get("file_sha256")
+    result["ocr_text"] = context.get("ocr_text")
+    result["ingredient_composition"] = context.get("ingredient_composition")
+    result["brand"] = context.get("brand")
+    result["product_name"] = context.get("product_name")
+    if context.get("parsed"):
+        result["parsed"] = context["parsed"]
 
 
 def ingest_catfood_ingredients(payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -141,5 +192,13 @@ def ingest_catfood_ingredients(payload: Dict[str, Any]) -> Dict[str, Any]:
             incremental_only=incremental_only,
             processed_dir=guarantee_history_dir,
         )
+
+    _attach_single_image_ocr_context(
+        result,
+        payload=payload,
+        db_config=db_config,
+        ocr_table=ocr_table,
+        parsed_table=parsed_table,
+    )
 
     return result
