@@ -45,6 +45,7 @@ type FriendlyRow = {
 
 type ProductInfo = {
   query: string;
+  product_key?: string | null;
   name: string;
   brand_name: string;
   ingredient_composition: string;
@@ -75,6 +76,7 @@ type ProductOption = {
   main_image_url?: string | null;
   main_images?: string[];
   compare_available: boolean;
+  score_source_id?: string | number | null;
   display_text?: string | null;
   function_tags?: Array<{ tag: string; display_tag?: string; level?: string; score?: number }>;
   warning_tags?: Array<{ tag: string; level?: string }>;
@@ -86,6 +88,17 @@ function priceLabel(option?: ProductOption) {
   if (option.price_band && option.price_band !== "未知") return option.price_band;
   if (option.price_bucket && option.price_bucket !== "未知") return `${option.price_bucket}元/斤`;
   return "";
+}
+
+function productOptionValue(option: ProductOption) {
+  return option.product_key || option.catalog_key || option.label;
+}
+
+function findProductOption(options: ProductOption[], value: string) {
+  return options.find((option) => {
+    const stableValue = productOptionValue(option);
+    return stableValue === value || option.product_key === value || option.catalog_key === value || option.label === value;
+  });
 }
 
 type CompareResult = {
@@ -512,6 +525,7 @@ function ProductCombobox(props: {
 
 function ProductPicker(props: {
   label: string;
+  required?: boolean;
   value: string;
   options: ProductOption[];
   loading: boolean;
@@ -523,9 +537,7 @@ function ProductPicker(props: {
   const [priceBucket, setPriceBucket] = useState("全部");
   const [onlyAvailable, setOnlyAvailable] = useState(true);
 
-  const selected = useMemo(() => {
-    return props.options.find((option) => option.label === props.value || option.product_key === props.value);
-  }, [props.options, props.value]);
+  const selected = useMemo(() => findProductOption(props.options, props.value), [props.options, props.value]);
 
   const filteredOptions = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
@@ -563,7 +575,7 @@ function ProductPicker(props: {
 
   function selectOption(option: ProductOption) {
     if (!option.compare_available) return;
-    props.onChange(option.label, option);
+    props.onChange(productOptionValue(option), option);
     setQuery("");
     setOpen(false);
   }
@@ -580,6 +592,9 @@ function ProductPicker(props: {
     <div className="relative">
       <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-slate-950">
         <span>{props.label}</span>
+        {props.required && (
+          <span className="rounded-md bg-rose-50 px-2 py-0.5 text-[11px] font-semibold text-rose-600">必选</span>
+        )}
         <span className="inline-flex h-4 w-4 items-center justify-center rounded-full border border-slate-300 text-[10px] text-slate-400">i</span>
       </div>
 
@@ -663,7 +678,7 @@ function ProductPicker(props: {
                     onMouseDown={(event) => event.preventDefault()}
                     onClick={() => selectOption(option)}
                     className={`flex w-full items-center gap-3 border-b border-slate-100 px-4 py-3 text-left last:border-b-0 ${
-                      option.label === props.value ? "bg-blue-50" : "bg-white hover:bg-slate-50"
+                      productOptionValue(option) === props.value ? "bg-blue-50" : "bg-white hover:bg-slate-50"
                     } ${disabled ? "cursor-not-allowed opacity-60" : ""}`}
                   >
                     {option.main_image_url ? (
@@ -1502,7 +1517,7 @@ function ProductIngredientCard(props: {
   const [expanded, setExpanded] = useState(false);
   const ingredientText = props.product.ingredient_composition || "暂无原始配料信息";
   const collapsedText = ingredientText.length > 150 ? `${ingredientText.slice(0, 150)}...` : ingredientText;
-  const brand = props.option?.brand || props.product.brand_name || "待确认";
+  const brand = props.product.brand_name || props.option?.brand || "待确认";
   const origin = props.option?.origin_type?.includes("进口")
     ? "进口品牌"
     : props.option?.origin_type?.includes("国产")
@@ -1630,8 +1645,16 @@ export default function CatFoodComparePage() {
   function taskPayload() {
     return {
       task_type: "cat_food_compare",
-      current_food: currentFood,
-      target_food: targetFood,
+      current_food: selectedCurrentFood?.label || currentFood,
+      target_food: selectedTargetFood?.label || targetFood,
+      current_display_brand: selectedCurrentFood?.brand || "",
+      current_display_name: selectedCurrentFood?.product_name || "",
+      target_display_brand: selectedTargetFood?.brand || "",
+      target_display_name: selectedTargetFood?.product_name || "",
+      current_source_id: selectedCurrentFood?.score_source_id || "",
+      target_source_id: selectedTargetFood?.score_source_id || "",
+      current_product_key: selectedCurrentFood?.product_key || "",
+      target_product_key: selectedTargetFood?.product_key || "",
       cat_profile: catProfile,
     };
   }
@@ -1735,8 +1758,16 @@ export default function CatFoodComparePage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          current_food: currentFood,
-          target_food: targetFood,
+          current_food: selectedCurrentFood?.label || currentFood,
+          target_food: selectedTargetFood?.label || targetFood,
+          current_display_brand: selectedCurrentFood?.brand || "",
+          current_display_name: selectedCurrentFood?.product_name || "",
+          target_display_brand: selectedTargetFood?.brand || "",
+          target_display_name: selectedTargetFood?.product_name || "",
+          current_source_id: selectedCurrentFood?.score_source_id || "",
+          target_source_id: selectedTargetFood?.score_source_id || "",
+          current_product_key: selectedCurrentFood?.product_key || "",
+          target_product_key: selectedTargetFood?.product_key || "",
           cat_profile: catProfile,
           missing_product_upload: missingProductSubmission
             ? {
@@ -1795,12 +1826,8 @@ export default function CatFoodComparePage() {
     }
   }
 
-  const selectedCurrentFood = useMemo(() => {
-    return productOptions.find((option) => option.label === currentFood || option.product_key === currentFood);
-  }, [currentFood, productOptions]);
-  const selectedTargetFood = useMemo(() => {
-    return productOptions.find((option) => option.label === targetFood || option.product_key === targetFood);
-  }, [targetFood, productOptions]);
+  const selectedCurrentFood = useMemo(() => findProductOption(productOptions, currentFood), [currentFood, productOptions]);
+  const selectedTargetFood = useMemo(() => findProductOption(productOptions, targetFood), [targetFood, productOptions]);
   const keyProfileDiff = useMemo(() => {
     return (compareResult?.profile_diff || []).filter((row) => {
       if (row.diff_b_minus_a === null || row.diff_b_minus_a === undefined) return false;
@@ -1850,6 +1877,7 @@ export default function CatFoodComparePage() {
 
             <ProductPicker
               label="当前粮"
+              required
               value={currentFood}
               options={productOptions}
               loading={productsLoading}
@@ -1857,7 +1885,8 @@ export default function CatFoodComparePage() {
             />
 
             <ProductPicker
-              label="对比粮（可选）"
+              label="对比粮"
+              required
               value={targetFood}
               options={productOptions}
               loading={productsLoading}

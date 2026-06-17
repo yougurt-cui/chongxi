@@ -375,14 +375,38 @@ def _load_compare_app():
 def _build_cat_food_compare_response(payload: dict) -> dict:
     current_query = str(payload.get("current_food") or "").strip()
     target_query = str(payload.get("target_food") or "").strip()
+    current_source_id = str(payload.get("current_source_id") or "").strip()
+    target_source_id = str(payload.get("target_source_id") or "").strip()
+    current_product_key = str(payload.get("current_product_key") or "").strip()
+    target_product_key = str(payload.get("target_product_key") or "").strip()
+    current_display_brand = str(payload.get("current_display_brand") or "").strip()
+    current_display_name = str(payload.get("current_display_name") or "").strip()
+    target_display_brand = str(payload.get("target_display_brand") or "").strip()
+    target_display_name = str(payload.get("target_display_name") or "").strip()
     if not current_query or not target_query:
         raise ValueError("请选择当前粮和对比粮。")
-    if current_query == target_query:
+    if current_query == target_query and current_source_id == target_source_id and current_product_key == target_product_key:
         raise ValueError("当前粮和对比粮不能相同。")
 
     compare_app = _load_compare_app()
-    current_product = compare_app.build_product_context(current_query)
-    target_product = compare_app.build_product_context(target_query)
+    current_product = compare_app.build_product_context(
+        current_query,
+        source_id=current_source_id or None,
+        product_key=current_product_key or None,
+    )
+    target_product = compare_app.build_product_context(
+        target_query,
+        source_id=target_source_id or None,
+        product_key=target_product_key or None,
+    )
+    if current_display_brand:
+        current_product["brand_name"] = current_display_brand
+    if current_display_name:
+        current_product["name"] = current_display_name
+    if target_display_brand:
+        target_product["brand_name"] = target_display_brand
+    if target_display_name:
+        target_product["name"] = target_display_name
     diff_df = compare_app.build_profile_diff(current_product, target_product)
     core_diff_explanations = compare_app.build_core_diff_explanations(
         diff_df,
@@ -406,6 +430,7 @@ def _build_cat_food_compare_response(payload: dict) -> dict:
     return {
         "current_food": {
             "query": current_query,
+            "product_key": current_product.get("product_key"),
             "name": current_product["name"],
             "brand_name": current_product["brand_name"],
             "ingredient_composition": current_product.get("ingredient_composition") or "",
@@ -414,6 +439,7 @@ def _build_cat_food_compare_response(payload: dict) -> dict:
         },
         "target_food": {
             "query": target_query,
+            "product_key": target_product.get("product_key"),
             "name": target_product["name"],
             "brand_name": target_product["brand_name"],
             "ingredient_composition": target_product.get("ingredient_composition") or "",

@@ -577,6 +577,10 @@ def build_product_search_sql(product_col: str, brand_col: Optional[str] = None) 
     return where_sql, exact_sql
 
 
+def resolve_product_key_cols(columns: set) -> List[str]:
+    return [col for col in ("product_key", "sku_id") if col in columns]
+
+
 def product_identity_mask(df: pd.DataFrame, product_col: str, query: str, brand_col: Optional[str] = None) -> pd.Series:
     product_text = df[product_col].astype(str)
     raw_query = str(query or "").strip()
@@ -604,6 +608,8 @@ def query_one_product(
     *,
     product_col: str,
     brand_col: Optional[str] = None,
+    source_id: Any = None,
+    product_key: Any = None,
     extra_where: str = "",
     params: Optional[dict] = None,
 ) -> Optional[pd.Series]:
@@ -611,6 +617,63 @@ def query_one_product(
     if product_col not in columns:
         return None
     resolved_brand_col = resolve_brand_col(columns, brand_col or TABLE_CONFIG["brand_name_col"])
+    source_id_value = str(source_id or "").strip()
+
+    if source_id_value and "source_id" in columns:
+        where_sql = f"WHERE {quote_identifier('source_id')} = :source_id"
+        if extra_where:
+            where_sql += f" AND {extra_where}"
+        order_field = (
+            "calculated_at" if "calculated_at" in columns
+            else "created_at" if "created_at" in columns
+            else "updated_at" if "updated_at" in columns
+            else "id" if "id" in columns
+            else None
+        )
+        order_sql = f"ORDER BY {quote_identifier(order_field)} DESC" if order_field else ""
+        query_params = {"source_id": source_id_value}
+        if params:
+            query_params.update(params)
+        source_sql = text(f"""
+            SELECT *
+            FROM {quote_identifier(table_name)}
+            {where_sql}
+            {order_sql}
+            LIMIT 10
+        """)
+        source_df = pd.read_sql(source_sql, engine, params=query_params)
+        if not source_df.empty:
+            return source_df.iloc[0]
+
+    product_key_value = str(product_key or "").strip()
+
+    if product_key_value:
+        product_key_cols = resolve_product_key_cols(columns)
+        if product_key_cols:
+            where_sql = "WHERE (" + " OR ".join(f"{quote_identifier(col)} = :product_key" for col in product_key_cols) + ")"
+            if extra_where:
+                where_sql += f" AND {extra_where}"
+            order_field = (
+                "calculated_at" if "calculated_at" in columns
+                else "created_at" if "created_at" in columns
+                else "updated_at" if "updated_at" in columns
+                else "id" if "id" in columns
+                else None
+            )
+            order_sql = f"ORDER BY {quote_identifier(order_field)} DESC" if order_field else ""
+            query_params = {"product_key": product_key_value}
+            if params:
+                query_params.update(params)
+            key_sql = text(f"""
+                SELECT *
+                FROM {quote_identifier(table_name)}
+                {where_sql}
+                {order_sql}
+                LIMIT 10
+            """)
+            key_df = pd.read_sql(key_sql, engine, params=query_params)
+            if not key_df.empty:
+                return key_df.iloc[0]
 
     order_parts = []
     search_sql, exact_match_sql = build_product_search_sql(product_col, resolved_brand_col)
@@ -979,7 +1042,7 @@ def get_material_role_evidence(engine, source_id: Any, product_key: Any, ingredi
     })
 
 
-def get_product_data(product_name: str) -> Dict[str, Any]:
+def get_product_data(product_name: str, source_id: Any = None, product_key: Any = None) -> Dict[str, Any]:
     engine = get_engine()
 
     score_row = query_one_product(
@@ -988,6 +1051,8 @@ def get_product_data(product_name: str) -> Dict[str, Any]:
         product_name,
         product_col=TABLE_CONFIG["product_name_col"],
         brand_col=TABLE_CONFIG["brand_name_col"],
+        source_id=source_id,
+        product_key=product_key,
     )
 
     black_chin_row = query_one_product(
@@ -996,6 +1061,8 @@ def get_product_data(product_name: str) -> Dict[str, Any]:
         product_name,
         product_col=TABLE_CONFIG["risk_product_name_col"],
         brand_col=TABLE_CONFIG["brand_name_col"],
+        source_id=source_id,
+        product_key=product_key,
         extra_where="score_model_version LIKE :score_model_like",
         params={"score_model_like": TABLE_CONFIG["black_chin_score_model_like"]},
     )
@@ -1006,6 +1073,8 @@ def get_product_data(product_name: str) -> Dict[str, Any]:
         product_name,
         product_col=TABLE_CONFIG["risk_product_name_col"],
         brand_col=TABLE_CONFIG["brand_name_col"],
+        source_id=source_id,
+        product_key=product_key,
         extra_where="score_model_version LIKE :score_model_like",
         params={"score_model_like": TABLE_CONFIG["soft_stool_score_model_like"]},
     )
@@ -1292,8 +1361,8 @@ def build_risk_relative_position(row: Optional[pd.Series]) -> str:
     return "相对位置：暂无"
 
 
-def build_product_context(product_name: str) -> Dict[str, Any]:
-    data = get_product_data(product_name)
+def build_product_context(product_name: str, source_id: Any = None, product_key: Any = None) -> Dict[str, Any]:
+    data = get_product_data(product_name, source_id=source_id, product_key=product_key)
 
     score_row = data.get("score")
     black_chin_row = data.get("black_chin")
