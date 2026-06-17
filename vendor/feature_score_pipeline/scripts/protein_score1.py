@@ -55,6 +55,7 @@ SCORED_OUTPUT_COLUMNS = [
     "secondary_protein_form_score",
     "form_mix_complexity_score",
     "hydrolyzed_protein_relief_score",
+    "plant_protein_interference_norm",
     "plant_protein_interference_score",
     "protein_content_score",
     "protein_structure_score",
@@ -115,6 +116,17 @@ PLANT_PROTEIN_INTERFERENCE_MAP = {
     "3级｜多源植物蛋白补强型": 0.75,
     "4级｜豆类主导混合型植物蛋白": 1.0,
 }
+
+CONCENTRATED_PLANT_PROTEIN_TERMS = [
+    "玉米蛋白粉",
+    "大米蛋白粉",
+    "豌豆蛋白",
+    "马铃薯蛋白",
+    "小麦蛋白",
+    "谷朊粉",
+    "豆粕",
+    "大豆蛋白",
+]
 
 # 2.5 水解蛋白缓释分（减分项）
 # 越高表示越温和，对“配方负载分”有下拉作用
@@ -369,6 +381,21 @@ def infer_plant_protein_interference(row):
         return "无植物蛋白"
 
     label = normalize_text(row.get("plant_protein_label", ""))
+    labels = normalize_text(row.get("plant_protein_labels", ""))
+    if not label and labels:
+        tokens = [token for token in re.split(r"[、,，;；/\\s]+", labels) if token]
+        concentrated_count = sum(
+            1
+            for token in tokens
+            if any(term in token for term in CONCENTRATED_PLANT_PROTEIN_TERMS)
+        )
+        if concentrated_count >= 2:
+            return "3级｜多源植物蛋白补强型"
+        if concentrated_count == 1:
+            return "2级｜单一高浓缩型植物蛋白"
+        if tokens:
+            return "1级｜单一温和型植物蛋白"
+
     if not label or "无植物蛋白" in label:
         return "无植物蛋白"
     return label
