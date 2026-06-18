@@ -94,6 +94,179 @@ def _split_source_tokens(value: Any) -> list[str]:
     return [token.strip() for token in SPLIT_SOURCE_RE.split(text_value) if token.strip()]
 
 
+def _split_ingredient_tokens(value: Any) -> list[str]:
+    text_value = _clean_text(value)
+    if not text_value:
+        return []
+    tokens: list[str] = []
+    buffer: list[str] = []
+    depth = 0
+    for char in text_value:
+        if char in "(（[【":
+            depth += 1
+        elif char in ")）]】" and depth > 0:
+            depth -= 1
+        if char in "、,，;；\n" and depth == 0:
+            token = "".join(buffer).strip(" \t\r\n。.")
+            if token:
+                tokens.append(token)
+            buffer = []
+            continue
+        buffer.append(char)
+    token = "".join(buffer).strip(" \t\r\n。.")
+    if token:
+        tokens.append(token)
+    return tokens
+
+
+PROTEIN_EXPLICIT_MARKERS = (
+    "蛋白粉",
+    "蛋白质",
+    "乳清蛋白",
+    "血浆蛋白",
+    "血粉",
+    "水解蛋白",
+    "水解动物蛋白",
+    "水解植物蛋白",
+)
+PROTEIN_ANIMAL_MARKERS = (
+    "鸡",
+    "鸭",
+    "火鸡",
+    "鹅",
+    "鹌鹑",
+    "牛",
+    "羊",
+    "鹿",
+    "兔",
+    "猪",
+    "鱼",
+    "鳕",
+    "鲑",
+    "鲱",
+    "鲭",
+    "鲣",
+    "鲔",
+    "金枪",
+    "三文",
+    "沙丁",
+    "凤尾",
+    "鳀",
+    "虾",
+    "磷虾",
+    "贝",
+    "贻贝",
+    "蛋",
+)
+PROTEIN_FORM_MARKERS = (
+    "肉",
+    "肉粉",
+    "鲜肉",
+    "冻肉",
+    "冻干",
+    "肝",
+    "心",
+    "胗",
+    "肾",
+    "脾",
+    "肺",
+    "内脏",
+    "鱼粉",
+    "虾粉",
+    "磷虾粉",
+    "全蛋",
+    "蛋黄",
+    "蛋粉",
+    "水解",
+)
+DIRECT_AQUATIC_PROTEIN_MARKERS = (
+    "鱼",
+    "鳕",
+    "鲑",
+    "鲱",
+    "鲭",
+    "鲣",
+    "鲔",
+    "金枪",
+    "三文",
+    "沙丁",
+    "凤尾",
+    "鳀",
+    "虾",
+    "磷虾",
+    "贝",
+    "贻贝",
+)
+NON_PROTEIN_MARKERS = (
+    "油",
+    "脂肪",
+    "淀粉",
+    "甘薯",
+    "红薯",
+    "紫薯",
+    "马铃薯",
+    "木薯",
+    "南瓜",
+    "胡萝卜",
+    "苹果",
+    "梨",
+    "蔓越莓",
+    "蓝莓",
+    "海带",
+    "海藻",
+    "纤维",
+    "甜菜粕",
+    "车前子",
+    "菊苣",
+    "酵母",
+    "维生素",
+    "矿物质",
+    "牛磺酸",
+    "氯化",
+    "硫酸",
+    "磷酸",
+    "碳酸",
+)
+
+
+def _is_protein_ingredient(token: str) -> bool:
+    compact = re.sub(r"\s+", "", token)
+    if not compact:
+        return False
+    if any(marker in compact for marker in PROTEIN_EXPLICIT_MARKERS):
+        return True
+    if any(marker in compact for marker in NON_PROTEIN_MARKERS):
+        return False
+    if any(marker in compact for marker in DIRECT_AQUATIC_PROTEIN_MARKERS):
+        return True
+    has_animal = any(marker in compact for marker in PROTEIN_ANIMAL_MARKERS)
+    has_protein_form = any(marker in compact for marker in PROTEIN_FORM_MARKERS)
+    return has_animal and has_protein_form
+
+
+def _normalize_protein_source_details(ingredient_composition: Any, existing_details: Any) -> Optional[str]:
+    ingredient_tokens = _split_ingredient_tokens(ingredient_composition)
+    protein_tokens: list[str] = []
+    seen: set[str] = set()
+    for token in ingredient_tokens:
+        if not _is_protein_ingredient(token):
+            continue
+        dedupe_key = re.sub(r"[\s%％()（）,，、;；]+", "", token).lower()
+        if not dedupe_key or dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+        protein_tokens.append(token)
+    if protein_tokens:
+        return "、".join(protein_tokens)
+
+    fallback_tokens = [
+        token
+        for token in _split_ingredient_tokens(existing_details)
+        if _is_protein_ingredient(token)
+    ]
+    return "、".join(dict.fromkeys(fallback_tokens)) or None
+
+
 def _normalize_source_token(token: str) -> Optional[str]:
     cleaned = token.strip()
     if not cleaned:
@@ -245,11 +418,21 @@ def make_engine(args: argparse.Namespace) -> Engine:
     if args.dsn:
         return create_engine(args.dsn, future=True)
 
-    host = args.host or os.getenv("MYSQL_HOST") or "127.0.0.1"
-    port = int(args.port or os.getenv("MYSQL_PORT") or 3306)
-    user = args.user or os.getenv("MYSQL_USER")
-    password = args.password if args.password is not None else os.getenv("MYSQL_PASSWORD")
-    charset = args.charset or os.getenv("MYSQL_CHARSET") or "utf8mb4"
+    project_root = Path(__file__).resolve().parents[3]
+    if str(project_root) not in sys.path:
+        sys.path.insert(0, str(project_root))
+    try:
+        from app_config import get_feature_mysql_config
+
+        project_cfg = get_feature_mysql_config()
+    except Exception:
+        project_cfg = {}
+
+    host = args.host or os.getenv("MYSQL_HOST") or project_cfg.get("host") or "127.0.0.1"
+    port = int(args.port or os.getenv("MYSQL_PORT") or project_cfg.get("port") or 3306)
+    user = args.user or os.getenv("MYSQL_USER") or project_cfg.get("user")
+    password = args.password if args.password is not None else os.getenv("MYSQL_PASSWORD", project_cfg.get("password"))
+    charset = args.charset or os.getenv("MYSQL_CHARSET") or project_cfg.get("charset") or "utf8mb4"
 
     if not user:
         raise ValueError("missing MySQL user; pass --user or --dsn")
@@ -391,6 +574,7 @@ def load_rows(
       p.product_name,
       p.animal_sources,
       p.protein_source_details,
+      parsed.ingredient_composition,
       p.primary_meat_source_species,
       p.secondary_meat_source_species,
       p.primary_meat_source_type,
@@ -415,6 +599,46 @@ def load_rows(
       ON rg.source_id = p.source_id
      AND rg.rn = 1
     ORDER BY p.source_id ASC
+    """
+    with engine.connect() as conn:
+        return [dict(row) for row in conn.execute(text(sql)).mappings().all()]
+
+
+def load_existing_aggregate_rows(
+    engine: Engine,
+    *,
+    parsed_db: str,
+    parsed_table: str,
+    target_db: str,
+    target_table: str,
+) -> list[dict[str, Any]]:
+    sql = f"""
+    SELECT
+      t.source_id,
+      t.product_key,
+      t.guarantee_product_id,
+      t.brand_name AS brand,
+      t.product_name,
+      t.animal_sources,
+      t.protein_source_details,
+      parsed.ingredient_composition,
+      t.primary_meat_source_species,
+      t.secondary_meat_source_species,
+      t.primary_meat_source_type,
+      t.secondary_meat_source_type,
+      t.primary_meat_source_count AS feature_primary_meat_source_count,
+      t.secondary_meat_source_count AS feature_secondary_meat_source_count,
+      t.protein_source_origin,
+      t.plant_protein_labels,
+      t.guarantee_crude_protein_metric_name AS guarantee_metric_name,
+      t.guarantee_crude_protein_value AS guarantee_metric_value,
+      t.guarantee_crude_protein_unit AS guarantee_metric_unit
+    FROM {_fq(target_db, target_table)} t
+    INNER JOIN {_fq(parsed_db, parsed_table)} parsed
+      ON parsed.source_id = t.source_id
+     AND parsed.ingredient_composition IS NOT NULL
+     AND TRIM(parsed.ingredient_composition) <> ''
+    ORDER BY t.source_id ASC
     """
     with engine.connect() as conn:
         return [dict(row) for row in conn.execute(text(sql)).mappings().all()]
@@ -782,9 +1006,13 @@ def load_rows_from_parsed_incremental(
 def transform_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     for row in rows:
+        protein_source_details = _normalize_protein_source_details(
+            row.get("ingredient_composition"),
+            row.get("protein_source_details"),
+        )
         level1_categories, level2_sources = _classify_animal_sources(
             row.get("animal_sources"),
-            row.get("protein_source_details"),
+            protein_source_details,
         )
         primary_species = _clean_text(row.get("primary_meat_source_species"))
         secondary_species = _clean_text(row.get("secondary_meat_source_species"))
@@ -825,7 +1053,7 @@ def transform_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "animal_sources": _clean_text(row.get("animal_sources")),
                 "animal_source_level1_categories": level1_categories,
                 "animal_source_level2_sources": level2_sources,
-                "protein_source_details": _clean_text(row.get("protein_source_details")),
+                "protein_source_details": protein_source_details,
                 "primary_meat_source_species": primary_species,
                 "secondary_meat_source_species": secondary_species,
                 "primary_meat_source_type": primary_type,
@@ -963,6 +1191,7 @@ def print_preview(rows: list[dict[str, Any]], limit: int) -> None:
                     "animal_sources": row["animal_sources"],
                     "animal_source_level1_categories": row["animal_source_level1_categories"],
                     "animal_source_level2_sources": row["animal_source_level2_sources"],
+                    "protein_source_details": row["protein_source_details"],
                     "primary_meat_source_species": row["primary_meat_source_species"],
                     "secondary_meat_source_species": row["secondary_meat_source_species"],
                     "primary_meat_source_count": row["primary_meat_source_count"],
@@ -989,9 +1218,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--source-table", default="catfood_feature_protein_labels", help="source protein detail table")
     parser.add_argument(
         "--input-mode",
-        choices=["direct", "legacy-label-table"],
+        choices=["direct", "legacy-label-table", "normalize-existing"],
         default="direct",
-        help="direct reads new rows from catfood_ingredient_ocr_parsed; legacy-label-table reads catfood_feature_protein_labels",
+        help=(
+            "direct reads new OCR rows; legacy-label-table replaces from the old label table; "
+            "normalize-existing safely updates current aggregate rows from OCR ingredients"
+        ),
     )
     parser.add_argument("--parsed-db", default="csv_labeling", help="database containing catfood_ingredient_ocr_parsed")
     parser.add_argument("--parsed-table", default="catfood_ingredient_ocr_parsed", help="current parsed OCR table used to filter stale protein labels")
@@ -1040,7 +1272,7 @@ def main() -> int:
             limit=max(0, int(args.limit)),
             concurrency=max(1, int(args.concurrency)),
         )
-    else:
+    elif args.input_mode == "legacy-label-table":
         raw_rows = load_rows(
             engine,
             source_db=source_db,
@@ -1053,16 +1285,34 @@ def main() -> int:
             product_info_table=product_info_table,
             product_guarantee_table=product_guarantee_table,
         )
+    else:
+        raw_rows = load_existing_aggregate_rows(
+            engine,
+            parsed_db=parsed_db,
+            parsed_table=parsed_table,
+            target_db=target_db,
+            target_table=target_table,
+        )
     rows = transform_rows(raw_rows)
     summary = summarize(rows)
     summary.update(
         {
             "input_mode": args.input_mode,
-            "source": f"{parsed_db}.{parsed_table}" if args.input_mode == "direct" else f"{source_db}.{source_table}",
+            "source": (
+                f"{parsed_db}.{parsed_table}"
+                if args.input_mode == "direct"
+                else f"{target_db}.{target_table}+{parsed_db}.{parsed_table}"
+                if args.input_mode == "normalize-existing"
+                else f"{source_db}.{source_table}"
+            ),
             "parsed_filter": f"{parsed_db}.{parsed_table}",
             "feature": f"{feature_db}.{feature_table}",
             "target": f"{target_db}.{target_table}",
-            "write_mode": "append_new_source_ids" if args.input_mode == "direct" else "replace_all",
+            "write_mode": (
+                "replace_all"
+                if args.input_mode == "legacy-label-table"
+                else "upsert_without_delete"
+            ),
             "dry_run": bool(args.dry_run),
         }
     )
@@ -1078,7 +1328,7 @@ def main() -> int:
         target_table=target_table,
         rows=rows,
         keep_backup=bool(args.keep_backup),
-        replace_existing=args.input_mode != "direct",
+        replace_existing=args.input_mode == "legacy-label-table",
     )
     print(
         json.dumps(

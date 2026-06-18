@@ -1,5 +1,23 @@
 import React, { useEffect, useMemo, useState } from "react";
 
+type Product = {
+  value?: string;
+  option?: ProductOption;
+  brand: string;
+  name: string;
+  price: string;
+  origin: string;
+  selected?: boolean;
+  packageTone: string;
+  imageUrl?: string | null;
+  ingredients: string;
+  materialRoleEvidence?: MaterialRoleEvidence;
+  scores: Array<{ label: string; value: number }>;
+  risks: Array<{ label: string; value: number }>;
+  nutritionSummary: string;
+  riskSummary: string;
+};
+
 type CatProfile = {
   age: string;
   historyIssues: string[];
@@ -9,48 +27,31 @@ type CatProfile = {
 type ProfilePoint = {
   dimension: string;
   score: number | null;
-  level?: string;
-  type?: "pressure" | "protective" | "mixed";
-  summary?: string;
-  underlying_scores?: Array<{
-    field: string;
-    name: string;
-    score: number | null;
-    level?: string;
-    type?: string;
-    meaning?: string;
-  }>;
-  rule_explanations?: string[];
-};
-
-type ProfileDiff = {
-  dimension: string;
-  product_a_score: number | null;
-  product_b_score: number | null;
-  diff_b_minus_a: number | null;
-  type: "pressure" | "protective" | "mixed";
-  a_level: string;
-  b_level: string;
-  summary: string;
 };
 
 type FriendlyRow = {
   dimension: string;
-  current: string;
-  target: string;
-  interpretation: string;
   current_score: number | null;
   target_score: number | null;
 };
 
 type ProductInfo = {
   query: string;
+  source_id?: string | number | null;
   product_key?: string | null;
   name: string;
   brand_name: string;
   ingredient_composition: string;
+  material_role_evidence?: MaterialRoleEvidence;
   profile: ProfilePoint[];
-  baseline_profile: ProfilePoint[];
+};
+
+type MaterialRoleEvidence = {
+  raw_ingredient_text?: unknown;
+  protein_roles?: Record<string, unknown>;
+  protein_score_rules?: Record<string, unknown>;
+  fat_roles?: Record<string, unknown>;
+  fiber_carb_roles?: Record<string, unknown>;
 };
 
 type ProductOption = {
@@ -63,30 +64,59 @@ type ProductOption = {
   product_name: string;
   raw_title?: string | null;
   origin_type?: string | null;
-  brand_tier?: string | null;
-  source: "score_db" | "taobao" | "merged" | string;
-  source_item_id?: string | null;
-  source_url?: string | null;
-  price?: number | null;
   price_bucket?: string | null;
   price_band?: string | null;
-  food_taste?: string | null;
-  net_content?: string | null;
-  sold_text?: string | null;
   main_image_url?: string | null;
   main_images?: string[];
   compare_available: boolean;
   score_source_id?: string | number | null;
   display_text?: string | null;
-  function_tags?: Array<{ tag: string; display_tag?: string; level?: string; score?: number }>;
-  warning_tags?: Array<{ tag: string; level?: string }>;
-  quality_flags?: string[];
+};
+
+type CompareResult = {
+  current_food: ProductInfo;
+  target_food: ProductInfo;
+  friendly_rows: FriendlyRow[];
+  llm_context: unknown;
+};
+
+type AdviceTone = "positive" | "watch" | "caution" | "danger";
+
+type ChangeFoodAdvice = {
+  scenarios: Array<{
+    id: string;
+    tone: AdviceTone;
+    title: string;
+    recommendationLabel: string;
+    subtitle: string;
+    matchConditions: string[];
+    reasonSummary: string;
+    reasonEvidence: Array<{ label: string; currentValue: number; targetValue: number }>;
+    caution: string;
+    extraReason?: string | null;
+    warningSignal?: string | null;
+  }>;
+  transitionPlan: Array<{
+    period: string;
+    newFoodPercent: number;
+    oldFoodPercent: number;
+  }>;
+  disclaimer: string;
+};
+
+type CatFoodTask = {
+  id: string;
+  status: "pending" | "running" | "success" | "failed";
+  result?: {
+    compare?: CompareResult;
+  };
+  error_message?: string;
 };
 
 function priceLabel(option?: ProductOption) {
   if (!option) return "";
   if (option.price_band && option.price_band !== "未知") return option.price_band;
-  if (option.price_bucket && option.price_bucket !== "未知") return `${option.price_bucket}元/斤`;
+  if (option.price_bucket && option.price_bucket !== "未知") return option.price_bucket.includes("￥") ? option.price_bucket : option.price_bucket;
   return "";
 }
 
@@ -101,1490 +131,1379 @@ function findProductOption(options: ProductOption[], value: string) {
   });
 }
 
-type CompareResult = {
-  current_food: ProductInfo;
-  target_food: ProductInfo;
-  profile_diff: ProfileDiff[];
-  friendly_rows: FriendlyRow[];
-  core_diff_explanations: string[];
-  tag_diff_summary: unknown;
-  llm_context: unknown;
-};
+function profileScore(profile: ProfilePoint[] | undefined, dimension: string) {
+  const point = (profile || []).find((item) => item.dimension === dimension);
+  return point?.score === null || point?.score === undefined ? null : Number(point.score);
+}
 
-type UploadedImage = {
-  fileName: string;
-  previewUrl: string;
-  file: File;
-};
+function riskScore(rows: FriendlyRow[] | undefined, label: string, side: "current" | "target") {
+  const row = (rows || []).find((item) => item.dimension.includes(label));
+  const value = side === "current" ? row?.current_score : row?.target_score;
+  return value === null || value === undefined ? null : Number(value);
+}
 
-type MissingProductSubmission = UploadedImage & {
-  brandName: string;
-  productName: string;
-  imageId?: string;
-  orchestratorTaskId?: string;
-};
+function toneForIndex(index: number) {
+  return [
+    "from-sky-200 via-white to-blue-500",
+    "from-slate-100 via-white to-red-100",
+    "from-blue-100 via-white to-slate-300",
+    "from-slate-200 via-blue-100 to-slate-900",
+    "from-amber-100 via-white to-stone-400",
+  ][index % 5];
+}
 
-type CatFoodTask = {
-  id: string;
-  task_type: string;
-  status: "pending" | "running" | "success" | "failed";
-  progress: number;
-  error_message?: string;
-  result?: {
-    image_parse?: unknown;
-    compare?: CompareResult;
-    summary?: {
-      summary: string;
-      cached: boolean;
-      cache_key: string;
-    };
-  };
-  profile?: {
-    current_food?: string;
-    target_food?: string;
-    cat_profile?: CatProfile;
-  };
-  images: Array<{
-    id: string;
-    product_name?: string;
-    original_filename: string;
-    parse_status: "pending" | "running" | "success" | "failed";
-    parse_result?: {
-      message?: string;
-      file_name?: string;
-      product_name?: string;
-      sha256?: string;
-    };
-  }>;
-};
-
-type OrchestratorTask = {
-  id: string;
-  task_type: string;
-  task_status: string;
-  error_message?: string | null;
-  nodes: Array<{
-    node_code: string;
-    node_name: string;
-    node_status: string;
-    priority: number;
-    error_message?: string | null;
-  }>;
-};
-
-const CAT_AGE_OPTIONS = ["0～1年", "1年", "2年～3年", "3～6年", "6年以上"];
-
-const HISTORY_ISSUE_OPTIONS = [
-  "无明显历史问题",
-  "黑下巴",
-  "软便/拉稀",
-  "呕吐",
-  "泪痕",
-  "皮肤敏感",
-  "泌尿问题",
-  "挑食",
-  "肥胖/体重管理",
-  "疑似食物不耐受",
-];
-
-const RECENT_SYMPTOM_OPTIONS = [
-  "无明显异常",
-  "下巴出油",
-  "粉刺/黑下巴",
-  "软便",
-  "拉稀",
-  "呕吐",
-  "食欲下降",
-  "挑食",
-  "泪痕加重",
-  "便秘",
-];
-
-const DIMENSION_INTERPRETATION_CONFIG: Record<
-  string,
+const products: Product[] = [
   {
-    displayName: string;
-    type: "pressure" | "support" | "mixed";
-    highStructure?: string;
-    positiveMeaning?: string;
-    supportAbility?: string;
-    relatedView: string;
-    symptomImpact: string;
-  }
-> = {
-  蛋白质量: {
-    displayName: "蛋白质量支持",
-    type: "support",
-    supportAbility: "动物蛋白质量、来源清晰度和蛋白正向支持",
-    relatedView: "蛋白压力、软便标签和猫咪消化耐受",
-    symptomImpact: "蛋白质量支持更低时，肠胃敏感猫可能更需要观察软便、便臭、食欲波动和换粮适应情况。",
+    brand: "Ziwi Peak 巅峰",
+    name: "风干牛肉犬粮",
+    price: "￥300 - ￥600",
+    origin: "进口",
+    packageTone: "from-sky-200 via-white to-blue-500",
+    ingredients: "牛肉、牛内脏、牛心、牛骨、牛肝、牛血、海带、苹果、西瓜、亚麻籽、新西兰绿贻贝、菊苣纤维、海藻、维生素、矿物质等。",
+    scores: [
+      { label: "蛋白质量", value: 93 },
+      { label: "蛋白配方", value: 88 },
+      { label: "碳水负担", value: 28 },
+      { label: "脂肪负担", value: 72 },
+      { label: "纤维维护", value: 70 },
+      { label: "菌群友好", value: 62 },
+      { label: "皮肤保护", value: 79 },
+    ],
+    risks: [
+      { label: "黑下巴友好度", value: 48.6 },
+      { label: "软便友好度", value: 48.6 },
+    ],
+    nutritionSummary: "巅峰在蛋白质量、菌群支持与皮肤保护等维度表现优秀，整体营养强度高，适合体质良好、活力充沛的狗狗。",
+    riskSummary: "黑下巴风险与软便风险均为中等，处于可接受范围，适合作为长期主粮，但需留意皮肤体质。",
   },
-  蛋白压力: {
-    displayName: "蛋白消化压力",
-    type: "pressure",
-    highStructure: "蛋白来源复杂、适应压力更高的结构",
-    positiveMeaning: "蛋白结构更轻、换粮适应压力更低的方向",
-    relatedView: "软便风险、呕吐表现和历史食物不耐受",
-    symptomImpact: "蛋白消化压力更高时，食物不耐受、软便、拉稀、呕吐或换粮后食欲下降的猫需要重点观察。",
+  {
+    brand: "Royal Canin 皇家",
+    name: "中型犬成犬粮",
+    price: "￥200 - ￥400",
+    origin: "进口/国产",
+    packageTone: "from-slate-100 via-white to-red-100",
+    ingredients: "脱水禽肉、玉米、小麦、小麦粉、玉米粉、禽油、玉米蛋白粉、动物油脂、甜菜粕、鱼油、植物蛋白、矿物质、维生素、益生元等。",
+    scores: [
+      { label: "蛋白质量", value: 78 },
+      { label: "蛋白配方", value: 70 },
+      { label: "碳水负担", value: 62 },
+      { label: "脂肪负担", value: 58 },
+      { label: "纤维维护", value: 46 },
+      { label: "菌群友好", value: 55 },
+      { label: "皮肤保护", value: 60 },
+    ],
+    risks: [
+      { label: "黑下巴友好度", value: 48.6 },
+      { label: "软便友好度", value: 48.6 },
+    ],
+    nutritionSummary: "皇家营养较为均衡，各项指标处于中等水平，能满足中型犬日常营养需求。",
+    riskSummary: "黑下巴风险与软便风险均为中等，整体风险可控，适合大多数健康狗狗。",
   },
-  碳水负担: {
-    displayName: "碳水负担",
-    type: "pressure",
-    highStructure: "淀粉、豆类或薯类负担更突出的结构",
-    positiveMeaning: "碳水压力更轻、对软便和体重管理更友好的方向",
-    relatedView: "肠胃友好度、软便标签和体重管理目标",
-    symptomImpact: "碳水负担更高时，容易和软便、便便黏腻、体重管理压力、饭后腹胀感这类观察点相关。",
+  {
+    brand: "伯纳天纯",
+    name: "低敏鸭肉狗粮",
+    price: "￥180 - ￥350",
+    origin: "国产",
+    packageTone: "from-blue-100 via-white to-slate-300",
+    ingredients: "鸭肉、鸭肉粉、糙米、燕麦、鱼油、甜菜粕、酵母水解物、亚麻籽、益生元、维生素与矿物质。",
+    scores: [],
+    risks: [],
+    nutritionSummary: "",
+    riskSummary: "",
   },
-  脂肪负担: {
-    displayName: "脂肪负担",
-    type: "pressure",
-    highStructure: "油脂压力更突出的结构",
-    positiveMeaning: "油脂压力更轻、对下巴和脂肪消化观察更友好的方向",
-    relatedView: "黑下巴友好度、下巴出油和呕吐表现",
-    symptomImpact: "脂肪负担更高时，下巴出油、粉刺/黑下巴、脂肪消化不适、呕吐或便便偏油需要重点观察。",
+  {
+    brand: "Orijen 渴望",
+    name: "六种鱼全犬粮",
+    price: "￥400 - ￥750",
+    origin: "进口",
+    packageTone: "from-slate-200 via-blue-100 to-slate-900",
+    ingredients: "新鲜鱼、鱼粉、豆类、鱼油、南瓜、苹果、梨、蔓越莓、蓝莓、海藻、维生素与矿物质。",
+    scores: [],
+    risks: [],
+    nutritionSummary: "",
+    riskSummary: "",
   },
-  纤维缓冲: {
-    displayName: "纤维缓冲支持",
-    type: "support",
-    supportAbility: "便便成形、粪便骨架和肠道缓冲支持",
-    relatedView: "软便风险、便便状态和肠胃稳定性",
-    symptomImpact: "纤维缓冲更低时，软便、拉稀、便便不成形、便秘或换粮期肠胃波动可能更明显。",
+  {
+    brand: "ACANA 爱肯拿",
+    name: "幼犬成犬犬粮",
+    price: "￥220 - ￥420",
+    origin: "进口",
+    packageTone: "from-amber-100 via-white to-stone-400",
+    ingredients: "鸡肉、鱼肉、豆类、南瓜、苹果、梨、蔓越莓、草本植物、维生素与矿物质。",
+    scores: [],
+    risks: [],
+    nutritionSummary: "",
+    riskSummary: "",
   },
-  菌群支持: {
-    displayName: "菌群支持",
-    type: "support",
-    supportAbility: "肠道菌群底物、短链脂肪酸和肠道稳定支持",
-    relatedView: "软便风险、便便状态和换粮过渡期反应",
-    symptomImpact: "菌群支持更低时，换粮期软便、便臭、便便状态不稳定和肠胃恢复速度需要重点观察。",
-  },
-  皮肤保护: {
-    displayName: "皮肤保护支持",
-    type: "support",
-    supportAbility: "脂肪调节、抗氧化和皮肤稳定支持",
-    relatedView: "黑下巴友好度、下巴出油和泪痕表现",
-    symptomImpact: "皮肤保护支持更低时，下巴出油、黑下巴、皮肤敏感、泪痕或毛发状态需要结合日常表现观察。",
-  },
-};
+];
 
-function normalizeMultiSelect(options: string[], selected: string[], option: string) {
-  if (selected.includes(option)) {
-    const next = selected.filter((item) => item !== option);
-    return next.length ? next : [options[0]];
-  }
+const scoreDimensions = ["蛋白质量", "蛋白压力", "碳水负担", "脂肪负担", "纤维缓冲", "菌群支持", "皮肤保护"];
+const ORIJEN_PRODUCT_IMAGE = "/products/orijen-wild-reserve-kitten.png";
 
-  if (option.includes("无明显")) {
-    return [option];
+function productImageUrl(product: Product): string | null {
+  const identity = `${product.brand} ${product.name}`.toLowerCase();
+  if (identity.includes("渴望") || identity.includes("orijen")) {
+    return ORIJEN_PRODUCT_IMAGE;
   }
-
-  return [...selected.filter((item) => !item.includes("无明显")), option];
+  return product.imageUrl || null;
 }
 
-function formatScore(score: number | null | undefined) {
-  if (score === null || score === undefined || Number.isNaN(score)) return "暂无";
-  return Number(score).toFixed(1);
-}
-
-function getDiffLevel(absDelta: number) {
-  if (absDelta > 30) return "重点变化";
-  if (absDelta >= 15) return "明显变化";
-  return "非关键变化";
-}
-
-function diffTip(row: ProfileDiff, currentProductName: string, targetProductName: string) {
-  if (row.diff_b_minus_a === null || row.diff_b_minus_a === undefined) {
-    return "两款粮暂无足够数据进行比较。";
-  }
-
-  const delta = row.diff_b_minus_a;
-  const config = DIMENSION_INTERPRETATION_CONFIG[row.dimension] || {
-    displayName: row.dimension,
-    type: row.type === "pressure" ? "pressure" : row.type === "protective" ? "support" : "mixed",
-    highStructure: "该维度数值更高的结构",
-    positiveMeaning: "该维度数值更低的方向",
-    supportAbility: "该维度支持能力",
-    relatedView: "风险标签和猫咪需求",
-    symptomImpact: "这项变化需要结合猫咪近期症状、历史问题和实际换粮反应一起观察。",
+function optionToProduct(option: ProductOption, index: number, selected: boolean): Product {
+  return {
+    value: productOptionValue(option),
+    option,
+    brand: option.brand || "待确认",
+    name: option.product_name || option.label,
+    price: priceLabel(option) || "暂无",
+    origin: option.origin_type?.includes("进口") ? "进口" : option.origin_type?.includes("国产") ? "国产" : "待确认",
+    selected,
+    imageUrl: option.main_image_url || option.main_images?.[0] || null,
+    packageTone: toneForIndex(index),
+    ingredients: option.display_text || option.raw_title || "暂无原料信息",
+    materialRoleEvidence: undefined,
+    scores: [],
+    risks: [],
+    nutritionSummary: "",
+    riskSummary: "",
   };
-  const higherProduct = delta > 0 ? targetProductName : currentProductName;
-  const lowerProduct = delta > 0 ? currentProductName : targetProductName;
-  const absDelta = Math.abs(delta).toFixed(1);
+}
 
-  if (config.type === "pressure") {
-    return `${higherProduct} 的${config.displayName}比 ${lowerProduct} 高 ${absDelta} 分，整体更偏${config.highStructure}；${config.symptomImpact}`;
+function resultToProduct(
+  info: ProductInfo,
+  option: ProductOption | undefined,
+  rows: FriendlyRow[],
+  side: "current" | "target",
+  index: number,
+): Product {
+  const blackChin = riskScore(rows, "黑下巴", side);
+  const softStool = riskScore(rows, "软便", side) ?? riskScore(rows, "肠胃", side);
+  return {
+    value: option ? productOptionValue(option) : info.product_key || info.query,
+    option,
+    brand: info.brand_name || option?.brand || "待确认",
+    name: info.name || option?.product_name || info.query,
+    price: priceLabel(option) || "暂无",
+    origin: option?.origin_type?.includes("进口") ? "进口" : option?.origin_type?.includes("国产") ? "国产" : "待确认",
+    selected: true,
+    imageUrl: option?.main_image_url || option?.main_images?.[0] || null,
+    packageTone: toneForIndex(index),
+    ingredients: info.ingredient_composition || option?.display_text || "暂无原料信息",
+    materialRoleEvidence: info.material_role_evidence,
+    scores: scoreDimensions.map((label) => ({ label, value: profileScore(info.profile, label) ?? 0 })),
+    risks: [
+      { label: "黑下巴友好度", value: blackChin ?? 0 },
+      { label: "软便友好度", value: softStool ?? 0 },
+    ],
+    nutritionSummary: `${info.brand_name || option?.brand || "该产品"}的营养指标已完成结构化评估，可结合上方得分和原料内容判断是否适合当前宠物。`,
+    riskSummary: "黑下巴风险与软便风险均为全库相对倾向，建议结合宠物实际反馈和换粮观察期判断。",
+  };
+}
+
+function PackageImage({ product, large = false }: { product: Product; large?: boolean }) {
+  const imageUrl = productImageUrl(product);
+  if (imageUrl) {
+    return <img src={imageUrl} alt={`${product.brand} ${product.name}`} className="h-full w-full rounded-xl object-contain p-2" />;
   }
-
-  if (config.type === "support") {
-    return `${higherProduct} 的${config.displayName}比 ${lowerProduct} 高 ${absDelta} 分，${config.supportAbility}相对更突出；${config.symptomImpact}`;
-  }
-
-  return `${higherProduct} 在${config.displayName}上比 ${lowerProduct} 高 ${absDelta} 分；${config.symptomImpact}`;
-}
-
-function getRowDiffLevel(row: ProfileDiff) {
-  if (row.diff_b_minus_a === null || row.diff_b_minus_a === undefined) return "暂无数据";
-  return getDiffLevel(Math.abs(row.diff_b_minus_a));
-}
-
-function levelTone(value: string) {
-  if (value.includes("高") || value.includes("强") || value.includes("优于")) return "bg-emerald-50 text-emerald-700";
-  if (value.includes("低") || value.includes("弱") || value.includes("靠后")) return "bg-rose-50 text-rose-700";
-  return "bg-slate-100 text-slate-700";
-}
-
-function optionTone(value?: string | null) {
-  const text = value || "";
-  if (text.includes("国产")) return "bg-emerald-50 text-emerald-700";
-  if (text.includes("进口")) return "bg-blue-50 text-blue-700";
-  if (text.includes("80")) return "bg-orange-50 text-orange-700";
-  if (text.includes("慎选") || text.includes("未匹配") || text.includes("暂无评分")) return "bg-rose-50 text-rose-700";
-  return "bg-slate-100 text-slate-700";
-}
-
-function sourceLabel(source: string) {
-  if (source === "merged") return "已补淘宝信息";
-  if (source === "score_db") return "评分库";
-  if (source === "taobao") return "淘宝待评分";
-  return source;
-}
-
-function sourceTone(source: string) {
-  if (source === "merged") return "bg-indigo-50 text-indigo-700";
-  if (source === "score_db") return "bg-slate-100 text-slate-700";
-  return "bg-amber-50 text-amber-700";
-}
-
-function SectionTitle(props: { marker: string; title: string; hint?: string }) {
   return (
-    <div className="mb-4 flex flex-col gap-1 md:flex-row md:items-center md:gap-3">
-      <div className="flex items-center gap-2">
-        <span className="flex h-6 min-w-6 items-center justify-center rounded-md bg-slate-900 px-2 text-xs font-semibold text-white">
-          {props.marker}
-        </span>
-        <h2 className="text-base font-semibold text-slate-950">{props.title}</h2>
-      </div>
-      {props.hint && <p className="text-xs font-medium text-slate-500">{props.hint}</p>}
-    </div>
-  );
-}
-
-function productDisplayName(product?: ProductInfo) {
-  if (!product) return "";
-  return [product.brand_name, product.name].filter(Boolean).join(" ");
-}
-
-function MultiSelect(props: {
-  label: string;
-  description: string;
-  options: string[];
-  selected: string[];
-  onChange: (next: string[]) => void;
-}) {
-  return (
-    <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-      <div className="mb-4 flex items-start justify-between gap-3">
-        <div>
-          <div className="text-base font-semibold text-slate-950">{props.label}</div>
-          <p className="mt-1 text-sm leading-5 text-slate-500">{props.description}</p>
-        </div>
-        <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-600">
-          {props.selected.length} 项
-        </span>
-      </div>
-      <div className="flex flex-wrap gap-2">
-        {props.options.map((option) => {
-          const active = props.selected.includes(option);
-          return (
-            <button
-              key={option}
-              type="button"
-              onClick={() => props.onChange(normalizeMultiSelect(props.options, props.selected, option))}
-              className={`rounded-full border px-3 py-2 text-sm transition ${
-                active
-                  ? "border-slate-900 bg-slate-900 text-white"
-                  : "border-slate-200 bg-slate-50 text-slate-700 hover:border-slate-300 hover:bg-white"
-              }`}
-            >
-              {option}
-            </button>
-          );
-        })}
+    <div className={`relative h-full w-full overflow-hidden rounded-xl bg-gradient-to-br ${product.packageTone}`}>
+      <div className="absolute inset-x-7 bottom-5 h-6 rounded-full bg-amber-900/20 blur-md" />
+      <div className={`absolute left-1/2 top-1/2 flex -translate-x-1/2 -translate-y-1/2 flex-col items-center rounded-t-[28px] rounded-b-xl border border-white/80 bg-white/80 shadow-xl ${large ? "h-[132px] w-[92px] p-3" : "h-[118px] w-[78px] p-2"}`}>
+        <div className="h-3 w-12 rounded-full bg-indigo-200" />
+        <div className="mt-8 text-center text-[12px] font-semibold leading-4 text-indigo-700">{product.brand.split(" ")[0]}</div>
+        <div className="mt-auto h-9 w-16 rounded-[50%] bg-amber-700" />
       </div>
     </div>
   );
 }
 
-function InlineMultiSelect(props: {
-  label: string;
-  note: string;
-  options: string[];
-  selected: string[];
-  onChange: (next: string[]) => void;
-}) {
+function HeaderNav() {
+  const navItems = ["宠物墙", "换粮建议", "宠物医院", "宠物交配"];
   return (
-    <div className="flex min-w-0 flex-col gap-2 md:flex-row md:items-center">
-      <div className="shrink-0 text-sm font-semibold text-slate-950 md:w-32">
-        {props.label} <span className="ml-1 text-xs font-medium text-slate-400">（{props.note}）</span>
-      </div>
-      <div className="flex min-w-0 flex-wrap gap-2">
-        {props.options.map((option) => {
-          const active = props.selected.includes(option);
-          return (
-            <button
-              key={option}
-              type="button"
-              onClick={() => props.onChange(normalizeMultiSelect(props.options, props.selected, option))}
-              className={`inline-flex h-9 items-center rounded-full border px-4 text-xs font-medium transition ${
-                active
-                  ? "border-slate-700 bg-slate-800 text-white shadow-sm"
-                  : "border-slate-200 bg-white text-slate-500 hover:border-blue-200 hover:bg-blue-50"
-              }`}
-            >
-              {option}
-            </button>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
-function ProductCombobox(props: {
-  label: string;
-  value: string;
-  options: string[];
-  placeholder: string;
-  emptyText?: string;
-  onChange: (value: string) => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const [query, setQuery] = useState(props.value);
-
-  useEffect(() => {
-    setQuery(props.value);
-  }, [props.value]);
-
-  const filteredOptions = useMemo(() => {
-    const normalizedQuery = query.trim().toLowerCase();
-    if (!normalizedQuery) return props.options.slice(0, 30);
-    return props.options
-      .filter((option) => option.toLowerCase().includes(normalizedQuery))
-      .slice(0, 30);
-  }, [props.options, query]);
-
-  function selectOption(option: string) {
-    props.onChange(option);
-    setQuery(option);
-    setOpen(false);
-  }
-
-  return (
-    <div className="relative">
-      <label className="mb-1 block text-sm font-medium text-slate-700">{props.label}</label>
-      <input
-        value={query}
-        onFocus={() => setOpen(true)}
-        onChange={(event) => {
-          const next = event.target.value;
-          setQuery(next);
-          props.onChange(next);
-          setOpen(true);
-        }}
-        onBlur={() => {
-          window.setTimeout(() => setOpen(false), 120);
-        }}
-        className="h-[42px] w-full rounded-xl border border-slate-200 bg-white px-3 text-sm outline-none focus:border-slate-900"
-        placeholder={props.placeholder}
-      />
-
-      {open && (
-        <div className="absolute z-30 mt-2 max-h-80 w-full overflow-auto rounded-2xl border border-slate-200 bg-white p-2 shadow-xl">
-          {filteredOptions.length ? (
-            filteredOptions.map((option) => (
-              <button
-                key={option}
-                type="button"
-                onMouseDown={(event) => event.preventDefault()}
-                onClick={() => selectOption(option)}
-                className={`mb-1 w-full rounded-xl px-3 py-2 text-left text-sm ${
-                  option === props.value
-                    ? "bg-slate-900 text-white"
-                    : "text-slate-700 hover:bg-slate-50"
-                }`}
-              >
-                {option}
-              </button>
-            ))
-          ) : (
-            <div className="px-3 py-6 text-center text-sm text-slate-500">{props.emptyText || "没有匹配的产品"}</div>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function ProductPicker(props: {
-  label: string;
-  required?: boolean;
-  value: string;
-  options: ProductOption[];
-  loading: boolean;
-  onChange: (value: string, option?: ProductOption) => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const [query, setQuery] = useState("");
-  const [origin, setOrigin] = useState("全部");
-  const [priceBucket, setPriceBucket] = useState("全部");
-  const [onlyAvailable, setOnlyAvailable] = useState(true);
-
-  const selected = useMemo(() => findProductOption(props.options, props.value), [props.options, props.value]);
-
-  const filteredOptions = useMemo(() => {
-    const normalizedQuery = query.trim().toLowerCase();
-    return props.options
-      .filter((option) => {
-        if (onlyAvailable && !option.compare_available) return false;
-        if (origin !== "全部" && option.origin_type !== origin) return false;
-        if (priceBucket !== "全部" && option.price_bucket !== priceBucket) return false;
-        if (!normalizedQuery) return true;
-        const haystack = [
-          option.label,
-          option.brand,
-          option.product_name,
-          option.raw_title,
-          option.food_taste,
-          option.net_content,
-          option.display_text,
-        ]
-          .filter(Boolean)
-          .join(" ")
-          .toLowerCase();
-        return haystack.includes(normalizedQuery);
-      })
-      .slice(0, 40);
-  }, [onlyAvailable, origin, priceBucket, props.options, query]);
-
-  const filters = [
-    { value: "全部", setter: setOrigin, active: origin === "全部" },
-    { value: "国产品牌", label: "国产", setter: setOrigin, active: origin === "国产品牌" },
-    { value: "进口/国际品牌", label: "进口", setter: setOrigin, active: origin === "进口/国际品牌" },
-    { value: "<50", setter: setPriceBucket, active: priceBucket === "<50" },
-    { value: "50-80", setter: setPriceBucket, active: priceBucket === "50-80" },
-    { value: "80以上", setter: setPriceBucket, active: priceBucket === "80以上" },
-  ];
-
-  function selectOption(option: ProductOption) {
-    if (!option.compare_available) return;
-    props.onChange(productOptionValue(option), option);
-    setQuery("");
-    setOpen(false);
-  }
-
-  function clearSelection() {
-    props.onChange("");
-    setQuery("");
-    setOpen(false);
-  }
-
-  const displayValue = open ? query : selected?.label || props.value;
-
-  return (
-    <div className="relative">
-      <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-slate-950">
-        <span>{props.label}</span>
-        {props.required && (
-          <span className="rounded-md bg-rose-50 px-2 py-0.5 text-[11px] font-semibold text-rose-600">必选</span>
-        )}
-        <span className="inline-flex h-4 w-4 items-center justify-center rounded-full border border-slate-300 text-[10px] text-slate-400">i</span>
-      </div>
-
-      <div className="relative">
-        <span className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-lg text-slate-400">⌕</span>
-        <input
-          value={displayValue}
-          onFocus={() => setOpen(true)}
-          onChange={(event) => {
-            setQuery(event.target.value);
-            setOpen(true);
-          }}
-          onBlur={() => window.setTimeout(() => setOpen(false), 150)}
-          className="h-12 w-full rounded-xl border border-slate-200 bg-white pl-11 pr-20 text-sm font-medium text-slate-950 outline-none transition focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10"
-          placeholder="输入品牌或产品名"
-        />
-        {(selected || displayValue) && (
-          <button
-            type="button"
-            onMouseDown={(event) => event.preventDefault()}
-            onClick={clearSelection}
-            className="absolute right-12 top-1/2 -translate-y-1/2 text-lg text-slate-400 hover:text-slate-700"
-            aria-label="清空"
-          >
-            ×
-          </button>
-        )}
-        <button
-          type="button"
-          onMouseDown={(event) => event.preventDefault()}
-          onClick={() => setOpen((prev) => !prev)}
-          className="absolute right-4 top-1/2 -translate-y-1/2 text-lg text-slate-700"
-          aria-label="搜索"
-        >
-          ⌄
-        </button>
-      </div>
-
-      {open && (
-        <div className="absolute z-40 mt-2 w-full overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl">
-          <div className="border-b border-slate-100 p-3">
-            <div className="mb-3 flex items-center justify-between gap-3">
-              <div className="text-xs font-semibold text-slate-500">筛选产品目录</div>
-              <label className="flex items-center gap-2 text-xs text-slate-500">
-                <input
-                  type="checkbox"
-                  checked={onlyAvailable}
-                  onChange={(event) => setOnlyAvailable(event.target.checked)}
-                  className="h-3.5 w-3.5 rounded border-slate-300"
-                />
-                仅可对比
-              </label>
-            </div>
-            <div className="flex flex-wrap gap-2">
-              {filters.map((filter) => (
-                <button
-                  key={`${filter.value}-${filter.label || ""}`}
-                  type="button"
-                  onMouseDown={(event) => event.preventDefault()}
-                  onClick={() => filter.setter(filter.value)}
-                  className={`rounded-lg px-3 py-1.5 text-xs font-medium transition ${
-                    filter.active ? "bg-blue-600 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"
-                  }`}
-                >
-                  {filter.label || filter.value}
-                </button>
-              ))}
-            </div>
-          </div>
-          <div className="max-h-[360px] overflow-auto">
-            {props.loading ? (
-              <div className="px-4 py-8 text-center text-sm text-slate-500">正在加载产品目录...</div>
-            ) : filteredOptions.length ? (
-              filteredOptions.map((option) => {
-                const disabled = !option.compare_available;
-                return (
-                  <button
-                    key={option.catalog_key}
-                    type="button"
-                    disabled={disabled}
-                    onMouseDown={(event) => event.preventDefault()}
-                    onClick={() => selectOption(option)}
-                    className={`flex w-full items-center gap-3 border-b border-slate-100 px-4 py-3 text-left last:border-b-0 ${
-                      productOptionValue(option) === props.value ? "bg-blue-50" : "bg-white hover:bg-slate-50"
-                    } ${disabled ? "cursor-not-allowed opacity-60" : ""}`}
-                  >
-                    {option.main_image_url ? (
-                      <img src={option.main_image_url} alt="" className="h-12 w-12 shrink-0 rounded-full object-cover" />
-                    ) : (
-                      <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-blue-50 text-xs text-blue-400">·</div>
-                    )}
-                    <div className="min-w-0 flex-1">
-                      <div className="truncate text-sm font-semibold text-slate-950">{option.label}</div>
-                      <div className="mt-1 flex flex-wrap gap-1.5">
-                        <span className={`rounded-md px-2 py-0.5 text-[11px] font-medium ${optionTone(option.origin_type)}`}>
-                          {option.origin_type?.includes("进口") ? "进口" : option.origin_type?.includes("国产") ? "国产" : "待确认"}
-                        </span>
-                        {priceLabel(option) && (
-                          <span className="rounded-md bg-orange-50 px-2 py-0.5 text-[11px] font-medium text-orange-700">{priceLabel(option)}</span>
-                        )}
-                        {(option.function_tags || []).slice(0, 1).map((tag) => (
-                          <span key={`${option.catalog_key}-${tag.tag}`} className="rounded-md bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700">
-                            {tag.display_tag || tag.tag}
-                          </span>
-                        ))}
-                        {disabled && <span className="rounded-md bg-rose-50 px-2 py-0.5 text-[11px] font-medium text-rose-700">暂无评分</span>}
-                      </div>
-                    </div>
-                  </button>
-                );
-              })
-            ) : (
-              <div className="px-4 py-8 text-center text-sm text-slate-500">没有匹配的产品</div>
-            )}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function SelectedFoodSummary(props: {
-  label: string;
-  value: string;
-  option?: ProductOption;
-  accent: "blue" | "orange";
-}) {
-  const iconClass = props.accent === "blue" ? "border-blue-200 bg-blue-50 text-blue-600" : "border-orange-200 bg-orange-50 text-orange-600";
-  const title = props.option?.label || props.value || "未选择";
-  const brand = props.option?.brand || props.value.split(" ")[0] || "待选择";
-  const tags = [
-    `品牌：${brand}`,
-    props.option?.origin_type?.includes("进口") ? "进口" : props.option?.origin_type?.includes("国产") ? "国产" : "",
-    priceLabel(props.option),
-    ...(props.option?.function_tags || []).slice(0, 1).map((tag) => tag.display_tag || tag.tag),
-  ].filter(Boolean);
-
-  return (
-    <div className="flex min-w-0 items-center gap-3">
-      <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border ${iconClass}`}>
-        <span className="h-4 w-5 rounded-b-lg rounded-t-sm border-2 border-current" />
-      </div>
-      <div className="min-w-0">
-        <div className="flex min-w-0 items-center gap-2 text-sm">
-          <span className="shrink-0 font-semibold text-slate-700">{props.label}：</span>
-          <span className="truncate font-bold text-slate-950">{title}</span>
-        </div>
-        <div className="mt-1 flex min-w-0 flex-wrap gap-2">
-          {tags.length ? (
-            tags.map((tag) => (
-              <span key={tag} className="rounded-md bg-slate-100 px-2.5 py-1 text-[11px] font-medium text-slate-600">
-                {tag}
-              </span>
-            ))
-          ) : (
-            <span className="rounded-md bg-slate-100 px-2.5 py-1 text-[11px] font-medium text-slate-500">请选择产品</span>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function MissingProductUploadEntry(props: {
-  submitted?: MissingProductSubmission;
-  onOpen: () => void;
-  onRemove: () => void;
-}) {
-  return (
-    <div className="mt-5 rounded-2xl border border-slate-200 bg-slate-50 p-4">
-      <div className="flex flex-col justify-between gap-3 lg:flex-row lg:items-center">
-        <div>
-          <h3 className="font-semibold text-slate-950">产品库中不存在此商品？</h3>
-          <p className="mt-1 text-sm text-slate-500">
-            请上传需要分析的配料表图片。
-          </p>
-          {props.submitted && (
-            <div className="mt-3 flex flex-wrap items-center gap-2 text-sm text-slate-600">
-              <span className="rounded-full bg-white px-3 py-1">
-                品牌：{props.submitted.brandName}
-              </span>
-              <span className="rounded-full bg-white px-3 py-1">
-                产品：{props.submitted.productName}
-              </span>
-              <span className="rounded-full bg-white px-3 py-1">
-                图片：{props.submitted.fileName}
-              </span>
-              <button type="button" onClick={props.onRemove} className="text-xs text-slate-500 underline">
-                移除
-              </button>
-            </div>
-          )}
-        </div>
-        <button
-          type="button"
-          onClick={props.onOpen}
-          className="shrink-0 rounded-full bg-slate-900 px-5 py-2.5 text-sm font-medium text-white hover:bg-slate-800"
-        >
-          {props.submitted ? "重新提交图片" : "上传需要分析的图片"}
-        </button>
-      </div>
-    </div>
-  );
-}
-
-function MissingProductUploadModal(props: {
-  open: boolean;
-  brandOptions: string[];
-  onClose: () => void;
-  onSubmit: (submission: MissingProductSubmission) => void;
-}) {
-  const [brandName, setBrandName] = useState("");
-  const [productName, setProductName] = useState("");
-  const [image, setImage] = useState<UploadedImage | undefined>();
-
-  if (!props.open) return null;
-
-  function handleFile(file?: File) {
-    if (!file) return;
-    if (!file.type.startsWith("image/")) {
-      window.alert("请上传图片格式的配料表，例如 jpg、png、webp。");
-      return;
-    }
-    if (image?.previewUrl) URL.revokeObjectURL(image.previewUrl);
-    setImage({
-      fileName: file.name,
-      previewUrl: URL.createObjectURL(file),
-      file,
-    });
-  }
-
-  function handleClose() {
-    setBrandName("");
-    setProductName("");
-    if (image?.previewUrl) URL.revokeObjectURL(image.previewUrl);
-    setImage(undefined);
-    props.onClose();
-  }
-
-  function handleSubmit() {
-    if (!brandName.trim()) {
-      window.alert("请选择或输入品牌。");
-      return;
-    }
-    if (!productName.trim()) {
-      window.alert("请输入产品名称。");
-      return;
-    }
-    if (!image) {
-      window.alert("请上传需要分析的图片。");
-      return;
-    }
-    const normalizedBrand = brandName.trim();
-    const normalizedProduct = productName.trim();
-    const fullProductName = normalizedProduct.startsWith(normalizedBrand)
-      ? normalizedProduct
-      : `${normalizedBrand} ${normalizedProduct}`;
-    props.onSubmit({
-      brandName: normalizedBrand,
-      productName: fullProductName,
-      fileName: image.fileName,
-      previewUrl: image.previewUrl,
-      file: image.file,
-    });
-    setBrandName("");
-    setProductName("");
-    setImage(undefined);
-    props.onClose();
-  }
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
-      <div className="w-full max-w-xl rounded-3xl bg-white p-6 shadow-xl">
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <h3 className="text-lg font-semibold text-slate-950">上传需要分析的图片</h3>
-            <p className="mt-1 text-sm leading-6 text-slate-500">
-              当产品库中不存在该商品时，填写产品名称并上传配料表图片。
-            </p>
-          </div>
-          <button type="button" onClick={handleClose} className="rounded-full bg-slate-100 px-3 py-1 text-sm text-slate-600">
-            关闭
-          </button>
-        </div>
-
-        <div className="mt-5">
-          <ProductCombobox
-            label="品牌"
-            value={brandName}
-            options={props.brandOptions}
-            placeholder="输入品牌名搜索，例如 好主人、皇家、GO!"
-            emptyText="没有匹配的品牌，可直接输入新品牌"
-            onChange={setBrandName}
-          />
-        </div>
-
-        <div className="mt-4">
-          <label className="mb-1 block text-sm font-medium text-slate-700">产品名称</label>
-          <input
-            value={productName}
-            onChange={(event) => setProductName(event.target.value)}
-            className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-slate-900"
-            placeholder="请输入产品名，例如 金装无谷成猫粮 鸡鱼配方"
-          />
-        </div>
-
-        <div className="mt-5">
-          <label className="mb-1 block text-sm font-medium text-slate-700">配料表图片</label>
-          <label className="flex min-h-44 cursor-pointer flex-col items-center justify-center rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-center text-sm text-slate-500 hover:bg-slate-100">
-            <input
-              type="file"
-              accept="image/*"
-              className="hidden"
-              onChange={(event) => {
-                handleFile(event.target.files?.[0]);
-                event.currentTarget.value = "";
-              }}
-            />
-            {image ? (
-              <span>已选择：{image.fileName}</span>
-            ) : (
-              <span>点击选择图片，支持 jpg、png、webp</span>
-            )}
-          </label>
-          {image && (
-            <img
-              src={image.previewUrl}
-              alt="配料表预览"
-              className="mt-3 max-h-64 w-full rounded-2xl bg-slate-50 object-contain"
-            />
-          )}
-        </div>
-
-        <div className="mt-6 flex justify-end gap-3">
-          <button
-            type="button"
-            onClick={handleClose}
-            className="rounded-full border border-slate-200 px-5 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
-          >
-            取消
-          </button>
-          <button
-            type="button"
-            onClick={handleSubmit}
-            className="rounded-full bg-slate-900 px-5 py-2 text-sm font-medium text-white hover:bg-slate-800"
-          >
-            提交
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function TaskStatusPanel(props: { title: string; task: CatFoodTask | null; error: string; loading: boolean }) {
-  const task = props.task;
-  return (
-    <div className="mt-5 rounded-2xl border border-slate-200 bg-slate-50 p-4">
-      <div className="flex flex-col justify-between gap-3 md:flex-row md:items-center">
-        <div>
-          <div className="text-sm font-semibold text-slate-800">{props.title}</div>
-          <p className="mt-1 text-sm text-slate-500">
-            {task
-              ? `任务 ${task.id.slice(0, 8)}｜${task.status}｜进度 ${task.progress}%`
-              : "尚未创建任务。"}
-          </p>
-        </div>
-        <span className="rounded-full bg-white px-3 py-1 text-xs font-semibold text-slate-600">
-          {props.loading ? "处理中" : task ? task.task_type : "未创建"}
-        </span>
-      </div>
-      {task && (
-        <div className="mt-3 h-2 overflow-hidden rounded-full bg-white">
-          <div
-            className="h-full rounded-full bg-slate-900 transition-all"
-            style={{ width: `${Math.max(0, Math.min(100, task.progress || 0))}%` }}
-          />
-        </div>
-      )}
-      {task?.images?.length ? (
-        <div className="mt-3 space-y-2">
-          {task.images.map((image) => (
-            <div key={image.id} className="rounded-xl bg-white px-3 py-2 text-xs leading-5 text-slate-600">
-              <span className="font-semibold text-slate-800">{image.original_filename}</span>
-              <span> ｜解析状态：{image.parse_status}</span>
-              {image.parse_result?.message && <span> ｜{image.parse_result.message}</span>}
-            </div>
-          ))}
-        </div>
-      ) : null}
-      {(props.error || task?.error_message) && (
-        <div className="mt-3 rounded-xl bg-rose-50 px-3 py-2 text-sm text-rose-700">
-          {props.error || task?.error_message}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function OrchestratorStatusPanel(props: { title: string; task: OrchestratorTask | null }) {
-  const task = props.task;
-  if (!task) return null;
-
-  return (
-    <div className="mt-3 rounded-2xl border border-slate-200 bg-white p-4">
-      <div className="flex flex-col justify-between gap-2 md:flex-row md:items-center">
-        <div>
-          <div className="text-sm font-semibold text-slate-800">{props.title}</div>
-          <p className="mt-1 text-xs text-slate-500">
-            编排任务 {task.id.slice(0, 8)}｜{task.task_type}｜{task.task_status}
-          </p>
-        </div>
-        <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600">
-          {task.nodes.length} 个节点
-        </span>
-      </div>
-      <div className="mt-3 grid gap-2 md:grid-cols-2">
-        {task.nodes.map((node) => (
-          <div key={node.node_code} className="rounded-xl bg-slate-50 px-3 py-2 text-xs leading-5 text-slate-600">
-            <div className="font-semibold text-slate-800">{node.node_name}</div>
-            <div>
-              {node.node_code} ｜ {node.node_status}
-            </div>
-            {node.error_message && <div className="text-rose-600">{node.error_message}</div>}
-          </div>
-        ))}
-      </div>
-      {task.error_message && (
-        <div className="mt-3 rounded-xl bg-rose-50 px-3 py-2 text-sm text-rose-700">
-          {task.error_message}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function RadarChart(props: { title: string; profile: ProfilePoint[]; baseline?: ProfilePoint[]; color: string }) {
-  const size = 340;
-  const center = size / 2;
-  const radius = 112;
-  const profile = props.profile.filter((item) => item.score !== null && item.score !== undefined);
-
-  const axisPoints = profile.map((item, index) => {
-    const angle = (Math.PI * 2 * index) / profile.length - Math.PI / 2;
-    const x = center + Math.cos(angle) * radius;
-    const y = center + Math.sin(angle) * radius;
-    const labelX = center + Math.cos(angle) * (radius + 30);
-    const labelY = center + Math.sin(angle) * (radius + 30);
-    const valueRadius = radius * Math.max(0, Math.min(100, Number(item.score))) / 100;
-    return {
-      ...item,
-      scoreValue: Number(item.score),
-      angle,
-      x,
-      y,
-      labelX,
-      labelY,
-      valueX: center + Math.cos(angle) * valueRadius,
-      valueY: center + Math.sin(angle) * valueRadius,
-      scoreLabelX: center + Math.cos(angle) * (valueRadius + 18),
-      scoreLabelY: center + Math.sin(angle) * (valueRadius + 18),
-    };
-  });
-
-  const polygon = axisPoints.map((point) => `${point.valueX},${point.valueY}`).join(" ");
-  const baselineMap = new Map((props.baseline || []).map((item) => [item.dimension, item.score]));
-  const baselinePointObjects = axisPoints
-    .map((point, index) => {
-      const score = baselineMap.get(point.dimension);
-      if (score === null || score === undefined || Number.isNaN(Number(score))) return null;
-      const angle = (Math.PI * 2 * index) / axisPoints.length - Math.PI / 2;
-      const valueRadius = radius * Math.max(0, Math.min(100, Number(score))) / 100;
-      return {
-        dimension: point.dimension,
-        score: Number(score),
-        x: center + Math.cos(angle) * valueRadius,
-        y: center + Math.sin(angle) * valueRadius,
-        labelX: center + Math.cos(angle) * (valueRadius + 10),
-        labelY: center + Math.sin(angle) * (valueRadius + 10),
-      };
-    })
-    .filter(Boolean);
-  const baselinePoints = baselinePointObjects.map((point) => `${point?.x},${point?.y}`);
-  const baselinePolygon =
-    baselinePoints.length === axisPoints.length ? [...baselinePoints, baselinePoints[0]].join(" ") : "";
-  const gridLevels = [0.25, 0.5, 0.75, 1];
-  const hasData = axisPoints.length >= 3;
-
-  return (
-    <div className="rounded-2xl border border-slate-200 bg-white p-4">
-      <div className="mb-3 flex items-center justify-between gap-3">
-        <h3 className="font-semibold text-slate-950">{props.title}</h3>
-        <div className="flex items-center gap-2">
-          <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs text-slate-600">0-100</span>
-          <span className="inline-flex items-center gap-1 text-xs text-slate-500">
-            <span className="h-px w-5 border-t border-dashed border-slate-400" />
-            基线
-          </span>
-        </div>
-      </div>
-
-      {!hasData ? (
-        <div className="flex h-[340px] items-center justify-center rounded-xl bg-slate-50 text-sm text-slate-500">
-          暂无足够 score 数据生成雷达图
-        </div>
-      ) : (
-        <svg viewBox={`0 0 ${size} ${size}`} className="h-[340px] w-full">
-          {gridLevels.map((level) => {
-            const points = axisPoints
-              .map((_, index) => {
-                const angle = (Math.PI * 2 * index) / axisPoints.length - Math.PI / 2;
-                return `${center + Math.cos(angle) * radius * level},${center + Math.sin(angle) * radius * level}`;
-              })
-              .join(" ");
-            return <polygon key={level} points={points} fill="none" stroke="#e2e8f0" strokeWidth="1" />;
+    <header className="fixed inset-x-0 top-0 z-50 h-[72px] border-b border-[#D9E0EE] bg-white shadow-[0_3px_14px_rgba(30,41,59,0.06)]">
+      <div className="grid h-full grid-cols-[280px_minmax(0,1fr)_180px] items-center px-10 2xl:grid-cols-[280px_minmax(0,1fr)_200px]">
+        <div className="text-[32px] font-extrabold leading-none text-[#3F35FF]">宠析</div>
+        <nav className="flex h-full justify-center gap-16 text-[16px] font-semibold text-[#172033]">
+          {navItems.map((item) => {
+            const active = item === "换粮建议";
+            return (
+            <a key={item} href="#" className={`relative flex h-full items-center ${active ? "text-[#3F35FF]" : ""}`}>
+              {item}
+              {active && <span className="absolute bottom-0 left-1/2 h-1 w-18 -translate-x-1/2 rounded-t-full bg-[#3F35FF]" />}
+            </a>
+            );
           })}
-
-          {axisPoints.map((point) => (
-            <line key={point.dimension} x1={center} y1={center} x2={point.x} y2={point.y} stroke="#e2e8f0" />
-          ))}
-
-          <polygon points={polygon} fill={props.color} fillOpacity="0.18" stroke={props.color} strokeWidth="2" />
-          {baselinePolygon && (
-            <polygon points={baselinePolygon} fill="none" stroke="#64748b" strokeDasharray="5 5" strokeWidth="2" />
-          )}
-          {baselinePointObjects.map((point) =>
-            point ? (
-              <text
-                key={`${point.dimension}-baseline-score`}
-                x={point.labelX}
-                y={point.labelY}
-                textAnchor={point.labelX < center - 6 ? "end" : point.labelX > center + 6 ? "start" : "middle"}
-                dominantBaseline="middle"
-                className="fill-slate-500 text-[10px]"
-              >
-                {formatScore(point.score)}
-              </text>
-            ) : null
-          )}
-          {axisPoints.map((point) => (
-            <g key={point.dimension}>
-              <circle cx={point.valueX} cy={point.valueY} r="4" fill={props.color} />
-              <text
-                x={point.scoreLabelX}
-                y={point.scoreLabelY}
-                textAnchor={point.scoreLabelX < center - 6 ? "end" : point.scoreLabelX > center + 6 ? "start" : "middle"}
-                dominantBaseline="middle"
-                className="text-[12px] font-bold"
-                fill={props.color}
-              >
-                {formatScore(point.scoreValue)}
-              </text>
-              <text
-                x={point.labelX}
-                y={point.labelY}
-                textAnchor={point.labelX < center - 10 ? "end" : point.labelX > center + 10 ? "start" : "middle"}
-                dominantBaseline="middle"
-                className="fill-slate-600 text-[11px]"
-              >
-                {point.dimension}
-              </text>
-            </g>
-          ))}
-        </svg>
-      )}
-    </div>
+        </nav>
+        <div className="flex justify-end">
+          <button type="button" className="flex items-center gap-2 text-[14px] font-medium text-[#172033]">
+            <span className="flex h-8 w-8 items-center justify-center rounded-full border border-[#CBD5E1] bg-[#F3F5FF] text-[#94A3B8]">●</span>
+            login in
+          </button>
+        </div>
+      </div>
+    </header>
   );
 }
 
-function focusIcon(dimension: string) {
-  if (dimension.includes("蛋白")) return "♙";
-  if (dimension.includes("脂肪") || dimension.includes("黑下巴")) return "◉";
-  if (dimension.includes("肠胃") || dimension.includes("纤维") || dimension.includes("菌群")) return "♧";
-  if (dimension.includes("Omega") || dimension.includes("皮肤")) return "⌘";
-  return "◎";
-}
+function PetInfoIcon({ type }: { type: "breed" | "age" | "food" | "issue" }) {
+  const commonProps = {
+    className: "h-4 w-4",
+    viewBox: "0 0 24 24",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: 1.8,
+    strokeLinecap: "round" as const,
+    strokeLinejoin: "round" as const,
+    "aria-hidden": true,
+  };
 
-function dimensionHelpText(dimension: string) {
-  if (dimension.includes("蛋白质量")) {
-    return "指标解释：衡量蛋白来源质量、动物蛋白优势和蛋白正向支持，不等同于蛋白压力低。\n得分因子：动物蛋白占优程度、肉源/动物来源清晰度、主要蛋白形态（鲜肉、冻肉、肉粉、水解蛋白等）、植物蛋白干扰程度、粗蛋白含量适配度。";
+  if (type === "breed") {
+    return (
+      <svg {...commonProps}>
+        <circle cx="7.5" cy="8" r="1.7" />
+        <circle cx="12" cy="6" r="1.7" />
+        <circle cx="16.5" cy="8" r="1.7" />
+        <circle cx="18.5" cy="12" r="1.5" />
+        <path d="M8.1 13.1c1.1-1.8 2.3-2.7 3.9-2.7s2.8.9 3.9 2.7c1.4 2.4-.1 4.9-2.6 4.1a4.2 4.2 0 0 0-2.6 0c-2.5.8-4-1.7-2.6-4.1Z" />
+      </svg>
+    );
   }
-  if (dimension.includes("蛋白压力")) {
-    return "指标解释：衡量蛋白结构是否复杂、偏重，以及可能带来的消化适应压力。分数越高，代表蛋白压力越高。\n得分因子：肉源复杂度、主要蛋白形态、次要蛋白形态、蛋白形式混合复杂度、水解蛋白缓释作用、植物蛋白干扰、蛋白含量结构负载。";
+  if (type === "age") {
+    return (
+      <svg {...commonProps}>
+        <rect x="4" y="5.5" width="16" height="14" rx="2.5" />
+        <path d="M8 3.5v4M16 3.5v4M4 10h16" />
+        <path d="M8 13h3M8 16h5" />
+      </svg>
+    );
   }
-  if (dimension.includes("碳水")) {
-    return "指标解释：衡量淀粉、豆类、薯类、谷物等碳水结构带来的负担。分数越高，代表碳水压力越重。\n得分因子：淀粉/碳水原料类别、原料基础负担强度、配料表顺位权重、精制淀粉/粉类/薯类/谷物/豆类等命中情况。";
+  if (type === "food") {
+    return (
+      <svg {...commonProps}>
+        <path d="M5 10.5h14l-1.3 6.2a2 2 0 0 1-2 1.6H8.3a2 2 0 0 1-2-1.6L5 10.5Z" />
+        <path d="M4 10.5h16M8 7.5c1.1-1.2 2.3-1.8 4-1.8s2.9.6 4 1.8" />
+      </svg>
+    );
   }
-  if (dimension.includes("脂肪")) {
-    return "指标解释：衡量油脂结构、脂肪消化负担和脂肪酸失衡压力。分数越高，越需要关注下巴出油、黑下巴、呕吐或便便偏油。\n得分因子：动物脂肪负载、植物脂肪干扰、Omega-6 偏强与 Omega-3 缓冲不足、脂肪来源复杂度。";
-  }
-  if (dimension.includes("纤维")) {
-    return "指标解释：衡量纤维是否能帮助便便成形、粪便骨架和肠道缓冲，而不是只看粗纤维含量。分数越高，代表纤维缓冲支持越好。\n得分因子：便便成形支持、粪便骨架支持、肠道刺激缓冲、纤维功能标签、发酵性、溶解性、原料类别和配料顺位权重。";
-  }
-  if (dimension.includes("菌群") || dimension.includes("肠胃")) {
-    return "指标解释：衡量配方对肠道菌群底物和菌群代谢环境的支持。分数越高，代表菌群支持越充分，但仍需结合发酵压力观察。\n得分因子：供菌底物、短链脂肪酸/菌群代谢支持、益生元功能、发酵性、菌群相关原料类别和配料顺位权重。";
-  }
-  if (dimension.includes("皮肤") || dimension.includes("Omega")) {
-    return "指标解释：衡量配方对脂肪调节、氧化压力缓冲和皮肤毛发稳定的支持。分数越高，代表皮肤保护方向越强。\n得分因子：抗氧化支持、微量营养素支持、Omega-3 支持、Omega-6 偏强的扣分影响、鱼油/海洋脂肪酸等皮肤相关脂肪来源。";
-  }
-  return "指标解释：该分数用于比较两款粮在对应配方结构方向上的相对表现，仅作选粮参考。\n得分因子：由对应原料结构、功能标签和配料顺位权重综合判断。";
-}
-
-function MetricHelpIcon(props: { dimension: string }) {
   return (
-    <span className="group/help relative inline-flex shrink-0">
+    <svg {...commonProps}>
+      <circle cx="12" cy="12" r="8.5" />
+      <path d="M12 7.5v5.5M12 16.5h.01" />
+    </svg>
+  );
+}
+
+function FavoriteIcon({ selected = false, className = "h-5 w-5" }: { selected?: boolean; className?: string }) {
+  return (
+    <svg
+      className={className}
+      viewBox="0 0 24 24"
+      fill={selected ? "currentColor" : "none"}
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1.1-1.1a5.5 5.5 0 0 0-7.8 7.8l1.1 1.1L12 21l7.8-7.5 1.1-1.1a5.5 5.5 0 0 0-.1-7.8Z" />
+    </svg>
+  );
+}
+
+function ChevronDownIcon({ className = "h-4 w-4" }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="m7 10 5 5 5-5" />
+    </svg>
+  );
+}
+
+function EmptyCompareIcon() {
+  return (
+    <svg className="h-12 w-12" viewBox="0 0 48 48" fill="none" aria-hidden="true">
+      <rect x="7" y="9" width="24" height="29" rx="5" fill="white" stroke="currentColor" strokeWidth="2" />
+      <rect x="12" y="14" width="14" height="11" rx="2" fill="currentColor" opacity=".14" />
+      <path d="M12 30h14M12 34h9" stroke="currentColor" strokeWidth="2" strokeLinecap="round" opacity=".65" />
+      <path d="M38.7 20.2a5.1 5.1 0 0 0-7.2 0l-.7.8-.8-.8a5.1 5.1 0 0 0-7.2 7.2l.8.8 7.2 6.9 7.1-6.9.8-.8a5.1 5.1 0 0 0 0-7.2Z" fill="white" stroke="currentColor" strokeWidth="2" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function SidebarToggleIcon({ collapsed }: { collapsed: boolean }) {
+  return (
+    <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M4 6h16M4 12h16M4 18h16" />
+      <path d={collapsed ? "m14 9 3 3-3 3" : "m10 9-3 3 3 3"} />
+    </svg>
+  );
+}
+
+function PetSidebar({ collapsed, onToggle }: { collapsed: boolean; onToggle: () => void }) {
+  const petRows = [
+    ["breed", "品种", "布偶"],
+    ["age", "年龄", "3岁"],
+    ["food", "主食", "皇家"],
+    ["issue", "问题", "无"],
+  ] as const;
+  return (
+    <aside className={`scrollbar-none fixed bottom-0 left-0 top-[72px] z-40 overflow-y-auto ${collapsed ? "w-[72px] px-3" : "w-[280px] px-5 max-[1599px]:w-[260px] max-[1365px]:w-[240px]"} border-r border-[#D9E0EE] bg-white py-8 shadow-[4px_0_14px_rgba(30,41,59,0.04)] transition-[width,padding] duration-300`}>
       <button
         type="button"
-        aria-label={`${props.dimension}说明`}
-        className="flex h-4 w-4 items-center justify-center rounded-full border border-slate-300 bg-white text-[10px] font-bold leading-none text-slate-400 shadow-sm transition hover:border-blue-300 hover:bg-blue-50 hover:text-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
+        onClick={onToggle}
+        title={collapsed ? "展开侧边栏" : "收起侧边栏"}
+        aria-label={collapsed ? "展开侧边栏" : "收起侧边栏"}
+        className={`mb-6 flex h-10 items-center rounded-xl text-[14px] font-medium text-[#4B5563] transition hover:bg-[#F3F5FF] hover:text-[#3F35FF] ${collapsed ? "w-full justify-center" : "w-full gap-3 px-3"}`}
       >
-        ?
+        <SidebarToggleIcon collapsed={collapsed} />
+        {!collapsed && <span>收起侧边栏</span>}
       </button>
-      <span className="pointer-events-none absolute left-0 top-6 z-30 w-80 whitespace-pre-line rounded-xl border border-slate-200 bg-white px-3 py-2 text-left text-xs font-normal leading-5 text-slate-600 opacity-0 shadow-xl shadow-slate-900/10 transition group-hover/help:opacity-100 group-focus-within/help:opacity-100">
-        <span className="mb-1 block font-semibold text-slate-900">{props.dimension}</span>
-        {dimensionHelpText(props.dimension)}
-      </span>
-    </span>
-  );
-}
 
-function FocusBarComparison(props: {
-  currentProfile: ProfilePoint[];
-  targetProfile: ProfilePoint[];
-  currentName: string;
-  targetName: string;
-}) {
-  const targetPointByDimension = new Map(props.targetProfile.map((point) => [point.dimension, point]));
-  const rows = props.currentProfile
-    .filter((point) => {
-      const targetPoint = targetPointByDimension.get(point.dimension);
-      return (
-        point.score !== null &&
-        point.score !== undefined &&
-        targetPoint?.score !== null &&
-        targetPoint?.score !== undefined
-      );
-    })
-    .map((point) => ({
-      dimension: point.dimension,
-      currentScore: Number(point.score),
-      targetScore: Number(targetPointByDimension.get(point.dimension)?.score),
-    }))
-    .slice(0, 7);
-
-  return (
-    <div className="rounded-2xl border border-slate-200 bg-white p-4">
-      <div className="mb-3 flex justify-end">
-        <div className="flex flex-wrap items-center gap-4 text-xs font-medium text-slate-500">
-          <span className="inline-flex items-center gap-1">
-            <span className="h-2 w-2 rounded-full bg-blue-600" />
-            {props.currentName}
-          </span>
-          <span className="inline-flex items-center gap-1">
-            <span className="h-2 w-2 rounded-full bg-emerald-500" />
-            {props.targetName}
-          </span>
-          <span>0–100 分</span>
-        </div>
-      </div>
-
-      {rows.length ? (
-        <div className="space-y-3">
-          {rows.map((row) => {
-            const currentScore = Math.max(0, Math.min(100, row.currentScore));
-            const targetScore = Math.max(0, Math.min(100, row.targetScore));
-            return (
-              <div key={row.dimension} className="grid gap-2 md:grid-cols-[170px_1fr_1fr] md:items-center">
-                <div className="flex min-w-0 items-center gap-2 text-xs font-medium text-slate-700">
-                  <span className="text-slate-400">{focusIcon(row.dimension)}</span>
-                  <span className="truncate">{row.dimension}</span>
-                  <MetricHelpIcon dimension={row.dimension} />
-                </div>
-                <div className="flex items-center gap-2">
-                  <div className="h-2.5 flex-1 overflow-hidden rounded-full bg-slate-100">
-                    <div className="h-full rounded-full bg-blue-600" style={{ width: `${currentScore}%` }} />
-                  </div>
-                  <span className="w-8 text-right text-xs font-medium text-slate-700">{formatScore(currentScore)}</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <div className="h-2.5 flex-1 overflow-hidden rounded-full bg-slate-100">
-                    <div className="h-full rounded-full bg-emerald-500" style={{ width: `${targetScore}%` }} />
-                  </div>
-                  <span className="w-8 text-right text-xs font-medium text-slate-700">{formatScore(targetScore)}</span>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      ) : (
-        <div className="rounded-xl bg-slate-50 px-4 py-6 text-center text-sm text-slate-500">
-          暂无足够分数生成侧重点对比。
-        </div>
-      )}
-    </div>
-  );
-}
-
-function keyChangeSummary(row: ProfileDiff, currentName: string, targetName: string) {
-  if (row.diff_b_minus_a === null || row.diff_b_minus_a === undefined) return row.summary || "该维度暂无足够数据。";
-  const config = DIMENSION_INTERPRETATION_CONFIG[row.dimension];
-  const delta = row.diff_b_minus_a;
-  const higher = delta > 0 ? targetName : currentName;
-  const lower = delta > 0 ? currentName : targetName;
-  const displayName = config?.displayName || row.dimension;
-  const absDelta = Math.abs(delta).toFixed(0);
-  if ((config?.type || row.type) === "pressure") {
-    return `${displayName}：${higher} 比 ${lower} 高 ${absDelta} 分，需要结合猫咪耐受观察。`;
-  }
-  return `${displayName}：${higher} 比 ${lower} 高 ${absDelta} 分，相关支持表现更突出。`;
-}
-
-function KeyChangeSummary(props: {
-  rows: ProfileDiff[];
-  currentName: string;
-  targetName: string;
-}) {
-  const rows = props.rows.slice(0, 4);
-
-  return (
-    <div className="rounded-2xl border border-slate-200 bg-white p-4">
-      <h3 className="mb-3 text-sm font-semibold text-slate-950">关键变化总结</h3>
-      {rows.length ? (
-        <div className="space-y-3">
-          {rows.map((row) => {
-            const isPositive =
-              row.diff_b_minus_a !== null &&
-              row.diff_b_minus_a !== undefined &&
-              ((row.type === "pressure" && row.diff_b_minus_a < 0) || (row.type !== "pressure" && row.diff_b_minus_a > 0));
-            return (
-              <div key={row.dimension} className="flex gap-2 text-sm leading-5 text-slate-700">
-                <span
-                  className={`mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full border text-[10px] ${
-                    isPositive ? "border-emerald-300 bg-emerald-50 text-emerald-600" : "border-rose-300 bg-rose-50 text-rose-600"
-                  }`}
-                >
-                  {isPositive ? "↑" : "!"}
+      {!collapsed && <section>
+        <h2 className="mb-5 flex items-center gap-3 text-[18px] font-bold text-[#172033]"><span className="text-[#3F35FF]">▧</span>宠物档案</h2>
+        <div className="rounded-2xl border border-[#E5E9F5] bg-white p-5 shadow-[0_8px_24px_rgba(30,41,59,0.06)]">
+          <div className="space-y-5">
+            {petRows.map(([icon, label, value]) => (
+              <div key={label} className="flex items-center justify-between gap-4 text-[14px]">
+                <span className="flex items-center gap-3 font-medium text-[#4B5563]">
+                  <span className="flex h-8 w-8 items-center justify-center rounded-full bg-[#F3F5FF] text-[#3F35FF]">
+                    <PetInfoIcon type={icon} />
+                  </span>
+                  {label}
                 </span>
-                <span>{keyChangeSummary(row, props.currentName, props.targetName)}</span>
+                <span className="max-w-[112px] truncate text-right font-semibold text-[#172033]" title={value}>{value}</span>
               </div>
-            );
-          })}
+            ))}
+          </div>
         </div>
-      ) : (
-        <div className="rounded-xl bg-slate-50 px-4 py-6 text-center text-sm text-slate-500">
-          两款粮暂无明显关键变化。
+      </section>}
+
+      {!collapsed && <section className="mt-8">
+        <h2 className="mb-5 flex items-center gap-3 text-[18px] font-bold text-[#172033]"><span className="text-[#3F35FF]">☏</span>联系方式</h2>
+        <div className="space-y-4 rounded-2xl border border-[#E5E9F5] bg-white p-5 text-[13px] font-medium text-[#4B5563] shadow-[0_8px_24px_rgba(30,41,59,0.06)]">
+          <div className="flex items-center gap-3"><span className="text-[#94A3B8]">⌕</span>400-888-1234</div>
+          <div className="flex items-center gap-3"><span className="text-[#94A3B8]">✉</span>service@chongxi.com</div>
+          <div className="flex items-center gap-3"><span className="text-[#94A3B8]">◴</span>工作日 9:00 - 18:00</div>
         </div>
-      )}
-    </div>
+      </section>}
+
+      {!collapsed && <section className="mt-8">
+        <h2 className="mb-5 flex items-center gap-3 text-[18px] font-bold text-[#172033]"><span className="text-[#3F35FF]">▣</span>留言板</h2>
+        <div className="flex h-[220px] flex-col items-center justify-center rounded-2xl border border-[#E5E9F5] bg-white text-center text-[13px] font-normal leading-6 text-[#7A8499] shadow-[0_8px_24px_rgba(30,41,59,0.06)]">
+          <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-slate-100 text-2xl text-slate-300">✎</div>
+          在这里记录宠物的饮食反馈、<br />身体状况或其他备注...
+        </div>
+      </section>}
+    </aside>
   );
 }
 
-function dimensionMeta(dimension: string) {
-  if (dimension.includes("黑下巴")) {
-    return {
-      icon: "◉",
-      tone: "bg-rose-50 text-rose-600",
-      description: "反映配方对黑下巴问题的潜在影响",
-    };
-  }
-  if (dimension.includes("肠胃")) {
-    return {
-      icon: "♨",
-      tone: "bg-orange-50 text-orange-600",
-      description: "反映配方对肠胃健康的潜在影响",
-    };
-  }
-  if (dimension.includes("适口")) {
-    return {
-      icon: "▱",
-      tone: "bg-slate-100 text-slate-500",
-      description: "反映猫咪对口味和适口性的潜在接受度",
-    };
-  }
-  if (dimension.includes("皮肤")) {
-    return {
-      icon: "✦",
-      tone: "bg-emerald-50 text-emerald-600",
-      description: "反映配方对皮肤和毛发状态的潜在影响",
-    };
-  }
-  return {
-    icon: "◎",
-    tone: "bg-blue-50 text-blue-600",
-    description: "反映该维度在整体产品池中的相对表现",
-  };
-}
-
-function scoreLevelLabel(score: number | null | undefined) {
-  if (score === null || score === undefined || Number.isNaN(Number(score))) return "暂无数据";
-  if (Number(score) >= 66) return "中高";
-  if (Number(score) >= 40) return "中等";
-  return "偏低";
-}
-
-function scorePositionLabel(score: number | null | undefined) {
-  if (score === null || score === undefined || Number.isNaN(Number(score))) return "暂无足够数据支持横向评估";
-  if (Number(score) >= 66) return "处于中游偏上";
-  if (Number(score) >= 40) return "低于多数产品";
-  return "处于靠后位置";
-}
-
-function DimensionScoreBlock(props: {
-  label: string;
-  name: string;
-  score: number | null;
-  accent: "blue" | "green";
-}) {
-  const hasData = props.score !== null && props.score !== undefined && !Number.isNaN(Number(props.score));
-  const score = hasData ? Math.max(0, Math.min(100, Number(props.score))) : 0;
-  const accentClass = props.accent === "blue" ? "text-blue-600" : "text-emerald-600";
-  const barClass = props.accent === "blue" ? "bg-blue-600" : "bg-emerald-500";
-  const badgeClass = hasData && score >= 66 ? "bg-emerald-50 text-emerald-700" : hasData ? "bg-rose-50 text-rose-600" : "bg-slate-100 text-slate-500";
-
-  return (
-    <div className="min-w-0">
-      <div className="mb-2 flex min-w-0 items-center gap-2 text-xs">
-        <span className={`shrink-0 font-semibold ${accentClass}`}>{props.label}</span>
-        <span className="text-slate-300">|</span>
-        <span className="truncate font-medium text-slate-500">{props.name}</span>
-      </div>
-      {hasData ? (
-        <>
-          <div className="flex items-center gap-2">
-            <span className="text-base font-semibold leading-none text-slate-950">{Number(props.score).toFixed(1)}</span>
-            <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${badgeClass}`}>{scoreLevelLabel(props.score)}</span>
-          </div>
-          <div className="mt-2 text-xs font-medium text-slate-500">{scorePositionLabel(props.score)}</div>
-          <div className="mt-2.5 h-1.5 overflow-hidden rounded-full bg-slate-100">
-            <div className={`h-full rounded-full ${barClass}`} style={{ width: `${score}%` }} />
-          </div>
-          <div className="mt-2 flex justify-between text-xs font-medium text-slate-500">
-            <span>低</span>
-            <span>中</span>
-            <span>高</span>
-          </div>
-        </>
-      ) : (
-        <div className="rounded-xl bg-slate-50 px-4 py-5 text-xs font-medium text-slate-500">
-          暂无数据
-          <div className="mt-2 text-xs font-normal">当前暂无足够数据支持横向评估</div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function DimensionComparisonPanel(props: {
-  rows: FriendlyRow[];
-  currentName: string;
-  targetName: string;
+function SearchFilterBar(props: {
+  brandQuery: string;
+  productQuery: string;
+  priceFilter: string;
+  originFilter: string;
+  onBrandQueryChange: (value: string) => void;
+  onProductQueryChange: (value: string) => void;
+  onPriceFilterChange: (value: string) => void;
+  onOriginFilterChange: (value: string) => void;
 }) {
   return (
-    <section className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
-      <div className="mb-3 flex flex-col justify-end gap-3 md:flex-row md:items-center">
-        <div className="flex flex-wrap items-center gap-4 text-xs font-normal text-slate-500">
-          <span className="inline-flex items-center gap-1.5"><span className="flex h-4 w-4 items-center justify-center rounded-full bg-emerald-50 text-xs text-emerald-600">↑</span>对比粮更优</span>
-          <span className="inline-flex items-center gap-1.5"><span className="h-3 w-3 rounded-full bg-blue-100 ring-4 ring-blue-50" />当前粮更优</span>
-          <span className="inline-flex items-center gap-1.5"><span className="h-3 w-3 rounded-full bg-slate-300 ring-4 ring-slate-100" />两者接近</span>
-          <span className="inline-flex items-center gap-1.5"><span className="h-3 w-3 rounded-full bg-orange-100 ring-4 ring-orange-50" />暂无数据</span>
-        </div>
-      </div>
-
-      <div className="space-y-3">
-        {props.rows.map((row) => {
-          const meta = dimensionMeta(row.dimension);
-          const currentScore = row.current_score;
-          const targetScore = row.target_score;
-          const hasBoth = currentScore !== null && currentScore !== undefined && targetScore !== null && targetScore !== undefined;
-          const diff = hasBoth ? Number(targetScore) - Number(currentScore) : null;
-          const status =
-            diff === null
-              ? { label: "暂无数据", tone: "bg-slate-100 text-slate-500", icon: "−", text: "暂不支持该维度横向评估" }
-              : Math.abs(diff) < 5
-                ? { label: "两者接近", tone: "bg-slate-100 text-slate-600", icon: "−", text: `两款粮在${row.dimension}上表现接近。` }
-                : diff > 0
-                  ? { label: "对比粮更优", tone: "bg-emerald-50 text-emerald-700", icon: "↑", text: `对比粮领先 ${Math.abs(diff).toFixed(1)} 分，在产品库中更靠前，${row.dimension}优势更明显。` }
-                  : { label: "当前粮更优", tone: "bg-blue-50 text-blue-700", icon: "↑", text: `当前粮领先 ${Math.abs(diff).toFixed(1)} 分，在${row.dimension}上优势更明显。` };
-
-          return (
-            <div key={row.dimension} className="grid overflow-hidden rounded-2xl border border-slate-200 bg-white lg:grid-cols-[250px_1fr_1fr_250px]">
-              <div className="flex items-center gap-3 border-b border-slate-100 bg-slate-50/40 p-4 lg:border-b-0 lg:border-r">
-                <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-base ${meta.tone}`}>{meta.icon}</div>
-                <div>
-                  <div className="text-sm font-semibold text-slate-950">{row.dimension}</div>
-                  <div className="mt-1.5 text-xs leading-5 text-slate-500">{meta.description}</div>
-                </div>
-              </div>
-              <div className="border-b border-slate-100 p-4 lg:border-b-0 lg:border-r">
-                <DimensionScoreBlock label="当前粮" name={props.currentName} score={currentScore} accent="blue" />
-              </div>
-              <div className="relative border-b border-slate-100 p-4 lg:border-b-0 lg:border-r">
-                <span className="absolute -left-3.5 top-1/2 hidden h-7 w-7 -translate-y-1/2 items-center justify-center rounded-full bg-slate-100 text-[11px] font-semibold text-slate-500 lg:flex">VS</span>
-                <DimensionScoreBlock label="对比粮" name={props.targetName} score={targetScore} accent="green" />
-              </div>
-              <div className="flex items-center justify-between gap-3 p-4">
-                <div>
-                  <span className={`rounded-lg px-2.5 py-1 text-xs font-semibold ${status.tone}`}>{status.label}</span>
-                  <div className="mt-3 text-xs leading-5 text-slate-600">{status.text}</div>
-                </div>
-                <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full border text-base ${status.tone}`}>{status.icon}</span>
-              </div>
-            </div>
-          );
-        })}
-      </div>
-
-      <div className="mt-4 flex items-center gap-3 rounded-xl border border-blue-100 bg-blue-50 px-4 py-3 text-xs leading-5 text-slate-600">
-        <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-blue-500 text-[10px] font-bold text-white">i</span>
-        <span><span className="font-semibold text-slate-800">说明</span>　以上结果基于产品库样本数据进行风险换算和横向排序，仅作为参考，不代表绝对结论，建议结合猫咪个体情况综合评估。</span>
+    <section className="min-h-[56px] rounded-xl border border-[#E5E9F5] bg-white px-5 py-2 shadow-[0_8px_24px_rgba(30,41,59,0.04)]">
+      <div className="grid h-full grid-cols-[1fr_1.15fr_1.1fr_0.9fr_auto] items-center gap-5 max-[1399px]:grid-cols-2">
+        <label className="grid grid-cols-[64px_1fr] items-center gap-2 text-[14px] font-semibold text-[#172033]">
+          品牌名
+          <input value={props.brandQuery} onChange={(event) => props.onBrandQueryChange(event.target.value)} placeholder="请输入品牌名" className="h-9 min-w-0 rounded-lg border border-[#E5E9F5] bg-white px-4 text-[14px] font-normal text-[#172033] outline-none placeholder:font-normal placeholder:text-[#A0A8BA]" />
+        </label>
+        <label className="grid grid-cols-[64px_1fr] items-center gap-2 text-[14px] font-semibold text-[#172033]">
+          产品名
+          <input value={props.productQuery} onChange={(event) => props.onProductQueryChange(event.target.value)} placeholder="请输入产品名" className="h-9 min-w-0 rounded-lg border border-[#E5E9F5] bg-white px-4 text-[14px] font-normal text-[#172033] outline-none placeholder:font-normal placeholder:text-[#A0A8BA]" />
+        </label>
+        <label className="grid grid-cols-[64px_1fr] items-center gap-2 text-[14px] font-semibold text-[#172033]">
+          价格带
+          <select value={props.priceFilter} onChange={(event) => props.onPriceFilterChange(event.target.value)} className="h-9 min-w-0 rounded-lg border border-[#E5E9F5] bg-white px-4 text-[14px] font-normal text-[#7A8499] outline-none">
+            {["全部", "<50", "50-80", "80以上", "未知"].map((item) => <option key={item} value={item}>{item === "全部" ? "请选择价格带" : item}</option>)}
+          </select>
+        </label>
+        <label className="grid grid-cols-[80px_1fr] items-center gap-2 text-[14px] font-semibold text-[#172033]">
+          进口/国产
+          <select value={props.originFilter} onChange={(event) => props.onOriginFilterChange(event.target.value)} className="h-9 min-w-0 rounded-lg border border-[#E5E9F5] bg-white px-4 text-[14px] font-normal text-[#7A8499] outline-none">
+            {["全部", "进口/国际品牌", "国产品牌"].map((item) => <option key={item} value={item}>{item === "全部" ? "全部" : item.replace("/国际品牌", "")}</option>)}
+          </select>
+        </label>
+        <button type="button" className="h-9 rounded-[10px] bg-[#3F35FF] px-9 text-[14px] font-semibold text-white shadow-[0_8px_24px_rgba(63,53,255,0.22)] max-[1399px]:col-span-2">搜索</button>
       </div>
     </section>
   );
 }
 
-function ProductIngredientCard(props: {
-  label: string;
-  product: ProductInfo;
-  option?: ProductOption;
-}) {
-  const [expanded, setExpanded] = useState(false);
-  const ingredientText = props.product.ingredient_composition || "暂无原始配料信息";
-  const collapsedText = ingredientText.length > 150 ? `${ingredientText.slice(0, 150)}...` : ingredientText;
-  const brand = props.product.brand_name || props.option?.brand || "待确认";
-  const origin = props.option?.origin_type?.includes("进口")
-    ? "进口品牌"
-    : props.option?.origin_type?.includes("国产")
-      ? "国产品牌"
-      : "";
-  const price = priceLabel(props.option);
-  const meta = [`品牌：${brand}`, origin, price].filter(Boolean);
-
+function ProductInfoRows({ product, className = "" }: { product: Product; className?: string }) {
   return (
-    <div className="rounded-2xl border border-slate-200 bg-white p-4">
-      <div className="text-sm font-bold leading-snug text-slate-950">
-        {props.label}｜{productDisplayName(props.product)}
+    <div className={`grid grid-rows-[20px_40px_20px_20px] gap-2.5 leading-5 ${className}`}>
+      {[
+        ["品牌名", product.brand],
+        ["产品名", product.name],
+        ["价格带", product.price],
+        ["进口/国产", product.origin],
+      ].map(([label, value]) => (
+        <div key={label} className="grid grid-cols-[66px_minmax(0,1fr)] items-start gap-3">
+          <span className="text-[12px] font-normal text-[#7A8499]">{label}</span>
+          <span
+            className={
+              label === "价格带"
+                ? "truncate text-[14px] font-semibold text-[#172033]"
+                : label === "产品名"
+                  ? "overflow-hidden text-[13px] font-medium text-[#172033] [display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:2]"
+                  : "truncate text-[13px] font-medium text-[#172033]"
+            }
+            title={value}
+          >
+            {value}
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function ProductCatalogCard({ product, onSelect }: { product: Product; onSelect?: (product: Product) => void }) {
+  const className = `relative min-w-[230px] max-w-[250px] flex-1 rounded-2xl border bg-white p-3 text-left shadow-[0_6px_18px_rgba(30,41,59,0.05)] transition ${onSelect ? "hover:-translate-y-0.5 hover:shadow-[0_10px_24px_rgba(30,41,59,0.09)]" : ""} ${product.selected ? "border-[#4B4BFF] ring-2 ring-[#4B4BFF]/10" : "border-[#E5E9F5]"}`;
+  const content = (
+    <>
+      <span className={`absolute right-4 top-3 z-10 flex h-9 w-9 items-center justify-center rounded-full border bg-white/90 shadow-sm ${product.selected ? "border-[#FFD7DA] text-[#FF4D4F]" : "border-[#E5E9F5] text-[#655BFF]"}`}>
+        <FavoriteIcon selected={product.selected} />
+      </span>
+      <div className="h-[150px] overflow-hidden rounded-xl border border-[#EDF0F7] bg-gradient-to-br from-[#F7F9FF] via-white to-[#EEF3FF]">
+        <PackageImage product={product} />
       </div>
-      <div className="mt-2 flex flex-wrap items-center gap-2 text-xs font-medium text-slate-500">
-        {meta.map((item, index) => (
-          <React.Fragment key={item}>
-            {index > 0 && <span className="text-slate-300">|</span>}
-            <span>{item}</span>
-          </React.Fragment>
+      <ProductInfoRows product={product} className="mt-4 px-1 pb-1" />
+    </>
+  );
+
+  if (onSelect) {
+    return (
+      <button type="button" onClick={() => onSelect(product)} className={className}>
+        {content}
+      </button>
+    );
+  }
+  return <div className={className}>{content}</div>;
+}
+
+function ProductCarousel(props: {
+  products: Product[];
+  onSelect: (product: Product) => void;
+  loading: boolean;
+  error: string;
+}) {
+  return (
+    <section className="relative rounded-2xl border border-[#E5E9F5] bg-white px-10 py-4 shadow-[0_8px_24px_rgba(30,41,59,0.04)]">
+      <button type="button" className="absolute left-4 top-1/2 flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full border border-[#E5E9F5] bg-white text-[#4B4BFF] shadow-sm">‹</button>
+      <div className="scrollbar-none flex gap-5 overflow-x-auto px-6">
+        {props.loading && <div className="py-20 text-[14px] font-normal text-[#7A8499]">正在加载产品库...</div>}
+        {props.error && <div className="py-20 text-[14px] font-medium text-[#FF4D4F]">{props.error}</div>}
+        {!props.loading && !props.error && props.products.map((product) => (
+          <ProductCatalogCard key={product.brand + product.name} product={product} onSelect={props.onSelect} />
         ))}
       </div>
-      <div className="mt-3 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
-        <div className="mb-1 text-xs font-bold text-slate-700">原始配料信息</div>
-        <div className="text-xs leading-5 text-slate-600">
-          {expanded ? ingredientText : collapsedText}
+      <button type="button" className="absolute right-4 top-1/2 flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full border border-[#E5E9F5] bg-white text-[#4B4BFF] shadow-sm">›</button>
+    </section>
+  );
+}
+
+function SelectedCompareBar(props: {
+  selectedCount: number;
+  loading: boolean;
+  summaryLoading: boolean;
+  canCompare: boolean;
+  hasResult: boolean;
+  onAddProduct: () => void;
+  onCompare: () => void;
+  onSummary: () => void;
+}) {
+  return (
+    <section className="grid grid-cols-[minmax(0,1fr)_auto_auto_auto] items-center gap-4 max-[1399px]:grid-cols-[minmax(0,1fr)_auto]">
+      <div className="flex h-[48px] items-center justify-between rounded-xl border border-[#E5E9F5] bg-white px-5 shadow-[0_8px_24px_rgba(30,41,59,0.04)]">
+        <div className="flex items-center gap-3 text-[#172033]">
+          <span className="flex h-7 w-7 items-center justify-center rounded-full bg-[#F3F2FF] text-[#3F35FF]">
+            <FavoriteIcon className="h-4 w-4" />
+          </span>
+          <span className="text-[16px] font-semibold">已选内容（{props.selectedCount}）</span>
+          <span className="ml-3 text-[14px] font-normal text-[#8A94A8]">
+            {props.loading
+              ? "正在生成对比"
+              : props.selectedCount >= 2
+                ? "已准备好对比"
+                : props.selectedCount === 0
+                  ? "还未选择任何产品，快去收藏喜欢的产品吧"
+                  : "请选择 2 个产品"}
+          </span>
         </div>
-        {ingredientText.length > 150 && (
-          <button
-            type="button"
-            onClick={() => setExpanded((prev) => !prev)}
-            className="mx-auto mt-2 block text-xs font-medium text-blue-600 hover:text-blue-500"
-          >
-            {expanded ? "收起" : "展开全部"}⌄
-          </button>
-        )}
+        <span className="text-[#4B4BFF]"><ChevronDownIcon /></span>
+      </div>
+      <button type="button" onClick={props.onAddProduct} className="h-10 rounded-[10px] border border-[#4B4BFF] px-8 text-[14px] font-semibold text-[#3F35FF]">＋ 没找到？添加产品</button>
+      {props.hasResult ? (
+        <>
+          <button type="button" onClick={props.onSummary} disabled={props.summaryLoading} className="h-10 rounded-[10px] border border-[#4B4BFF] px-8 text-[14px] font-semibold text-[#3F35FF] disabled:cursor-not-allowed disabled:opacity-50">▣ {props.summaryLoading ? "生成中" : "换粮总结"}</button>
+          <button type="button" className="h-10 rounded-[10px] bg-[#3F35FF] px-8 text-[14px] font-semibold text-white shadow-[0_8px_24px_rgba(63,53,255,0.22)]">⌄ 收起对比 ⌃</button>
+        </>
+      ) : (
+        <button
+          type="button"
+          onClick={props.onCompare}
+          disabled={!props.canCompare || props.loading}
+          className="h-10 rounded-[10px] bg-[#3F35FF] px-10 text-[14px] font-semibold text-white shadow-[0_8px_24px_rgba(63,53,255,0.22)] disabled:cursor-not-allowed disabled:bg-[#E8EBF2] disabled:text-[#B4BCD0] disabled:shadow-none"
+        >
+          {props.loading ? "对比中" : "对比一下"}
+        </button>
+      )}
+    </section>
+  );
+}
+
+type AddProductFormState = {
+  brandName: string;
+  productName: string;
+  image: File | null;
+};
+
+function AddProductModal(props: {
+  open: boolean;
+  onClose: () => void;
+}) {
+  const [form, setForm] = useState<AddProductFormState>({ brandName: "", productName: "", image: null });
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState("");
+  const [success, setSuccess] = useState("");
+
+  useEffect(() => {
+    if (!props.open) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !submitting) props.onClose();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [props.open, props.onClose, submitting]);
+
+  function resetAndClose() {
+    if (submitting) return;
+    setForm({ brandName: "", productName: "", image: null });
+    setError("");
+    setSuccess("");
+    props.onClose();
+  }
+
+  async function waitForImageParse(taskId: string) {
+    for (let index = 0; index < 20; index += 1) {
+      const response = await fetch(`/api/cat-food/tasks/${taskId}`);
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "产品解析状态加载失败");
+      if (data.task?.status === "failed") throw new Error(data.task.error_message || "产品资料解析失败");
+      if (data.task?.status === "success") return data.task;
+      await new Promise((resolve) => window.setTimeout(resolve, 500));
+    }
+    return null;
+  }
+
+  async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const brandName = form.brandName.trim();
+    const productName = form.productName.trim();
+    if (!brandName) {
+      setError("请填写品牌名。");
+      return;
+    }
+    if (!productName) {
+      setError("请填写产品名。");
+      return;
+    }
+    if (!form.image) {
+      setError("请上传清晰的猫粮包装或配料表图片。");
+      return;
+    }
+    if (!form.image.type.startsWith("image/")) {
+      setError("仅支持 JPG、PNG、WEBP 等图片格式。");
+      return;
+    }
+    if (form.image.size > 10 * 1024 * 1024) {
+      setError("图片大小不能超过 10MB。");
+      return;
+    }
+
+    setSubmitting(true);
+    setError("");
+    setSuccess("");
+    try {
+      const taskResponse = await fetch("/api/cat-food/tasks", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          task_type: "image_parse",
+          current_food: `${brandName} ${productName}`,
+          notes: "用户从猫粮对比页提交的新产品",
+        }),
+      });
+      const taskData = await taskResponse.json();
+      if (!taskResponse.ok) throw new Error(taskData.error || "产品任务创建失败");
+      const taskId = taskData.task?.id;
+      if (!taskId) throw new Error("产品任务创建失败：缺少任务编号");
+
+      const uploadBody = new FormData();
+      uploadBody.append("brand_name", brandName);
+      uploadBody.append("product_name", productName);
+      uploadBody.append("image", form.image);
+      const uploadResponse = await fetch(`/api/cat-food/tasks/${taskId}/images`, {
+        method: "POST",
+        body: uploadBody,
+      });
+      const uploadData = await uploadResponse.json();
+      if (!uploadResponse.ok) throw new Error(uploadData.error || "产品图片上传失败");
+
+      const parsedTask = await waitForImageParse(taskId);
+      setSuccess(
+        parsedTask
+          ? "提交成功。产品资料已完成初步入库，待营养指标审核完成后会进入可对比产品库。"
+          : "提交成功。产品资料正在后台解析，可稍后在产品库中搜索。",
+      );
+    } catch (submitError) {
+      setError(submitError instanceof Error ? submitError.message : "产品提交失败");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  if (!props.open) return null;
+
+  return (
+    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-[#172033]/45 px-4 py-8 backdrop-blur-[2px]" role="dialog" aria-modal="true" aria-labelledby="add-product-title">
+      <div className="max-h-full w-full max-w-[620px] overflow-y-auto rounded-2xl border border-[#E1E6F0] bg-white shadow-[0_24px_80px_rgba(23,32,51,0.24)]">
+        <div className="flex items-start justify-between gap-4 border-b border-[#EDF0F7] px-6 py-5">
+          <div>
+            <h2 id="add-product-title" className="text-[20px] font-bold text-[#172033]">添加产品</h2>
+            <p className="mt-1 text-[12px] leading-5 text-[#7A8499]">提交产品名称和包装或配料表图片，我们会先完成资料解析，再生成可用于对比的营养指标。</p>
+          </div>
+          <button type="button" onClick={resetAndClose} disabled={submitting} aria-label="关闭" className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[#F3F5FA] text-[20px] text-[#657087] hover:bg-[#E9EDF5] disabled:cursor-not-allowed">×</button>
+        </div>
+
+        <form onSubmit={handleSubmit} className="space-y-5 px-6 py-5">
+          <div className="grid gap-4 sm:grid-cols-2">
+            <label className="space-y-2">
+              <span className="text-[13px] font-semibold text-[#253047]">品牌名 <i className="not-italic text-[#FF4D4F]">*</i></span>
+              <input
+                value={form.brandName}
+                onChange={(event) => setForm((value) => ({ ...value, brandName: event.target.value }))}
+                disabled={submitting || Boolean(success)}
+                maxLength={100}
+                placeholder="例如：皇家"
+                className="h-11 w-full rounded-xl border border-[#DDE3EE] px-4 text-[14px] text-[#172033] outline-none transition focus:border-[#5145FF] focus:ring-4 focus:ring-[#5145FF]/10 disabled:bg-[#F6F7FA]"
+              />
+            </label>
+            <label className="space-y-2">
+              <span className="text-[13px] font-semibold text-[#253047]">产品名 <i className="not-italic text-[#FF4D4F]">*</i></span>
+              <input
+                value={form.productName}
+                onChange={(event) => setForm((value) => ({ ...value, productName: event.target.value }))}
+                disabled={submitting || Boolean(success)}
+                maxLength={200}
+                placeholder="例如：K36 室内成猫粮"
+                className="h-11 w-full rounded-xl border border-[#DDE3EE] px-4 text-[14px] text-[#172033] outline-none transition focus:border-[#5145FF] focus:ring-4 focus:ring-[#5145FF]/10 disabled:bg-[#F6F7FA]"
+              />
+            </label>
+          </div>
+
+          <label className="block space-y-2">
+            <span className="text-[13px] font-semibold text-[#253047]">产品图片 <i className="not-italic text-[#FF4D4F]">*</i></span>
+            <span className={`flex min-h-[132px] cursor-pointer flex-col items-center justify-center rounded-xl border border-dashed px-5 py-5 text-center transition ${form.image ? "border-[#867EFF] bg-[#F7F6FF]" : "border-[#C9D1DF] bg-[#FAFBFD] hover:border-[#867EFF] hover:bg-[#F8F7FF]"} ${submitting || success ? "pointer-events-none opacity-70" : ""}`}>
+              <input
+                type="file"
+                accept="image/jpeg,image/png,image/webp"
+                className="sr-only"
+                disabled={submitting || Boolean(success)}
+                onChange={(event) => setForm((value) => ({ ...value, image: event.target.files?.[0] || null }))}
+              />
+              <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#EEEAFE] text-[22px] text-[#5145FF]">＋</span>
+              <span className="mt-3 text-[13px] font-semibold text-[#35415A]">{form.image ? form.image.name : "点击上传包装正面或配料表图片"}</span>
+              <span className="mt-1 text-[11px] text-[#8A94A8]">{form.image ? `${(form.image.size / 1024 / 1024).toFixed(2)} MB` : "支持 JPG、PNG、WEBP，单张不超过 10MB"}</span>
+            </span>
+          </label>
+
+          <div className="rounded-xl bg-[#F4F7FC] px-4 py-3 text-[12px] leading-5 text-[#657087]">
+            图片越清晰，品牌、产品名、保证值及配料表识别越准确。新产品必须完成评分审核后才能参与两款粮对比。
+          </div>
+
+          {error && <div className="rounded-xl border border-[#FFD4D6] bg-[#FFF1F2] px-4 py-3 text-[12px] font-medium text-[#D93B3E]">{error}</div>}
+          {success && <div className="rounded-xl border border-[#CDEAC8] bg-[#F1FAEF] px-4 py-3 text-[12px] font-medium leading-5 text-[#34822C]">{success}</div>}
+
+          <div className="flex justify-end gap-3 border-t border-[#EDF0F7] pt-5">
+            <button type="button" onClick={resetAndClose} disabled={submitting} className="h-10 rounded-xl border border-[#DDE3EE] px-6 text-[13px] font-semibold text-[#59657A] disabled:cursor-not-allowed">
+              {success ? "完成" : "取消"}
+            </button>
+            {!success && (
+              <button type="submit" disabled={submitting} className="h-10 min-w-[132px] rounded-xl bg-[#4034E8] px-6 text-[13px] font-semibold text-white shadow-[0_8px_20px_rgba(64,52,232,0.22)] disabled:cursor-not-allowed disabled:bg-[#AAA5E8]">
+                {submitting ? "正在提交..." : "提交产品"}
+              </button>
+            )}
+          </div>
+        </form>
       </div>
     </div>
   );
 }
 
-export default function CatFoodComparePage() {
+function EmptyComparePanel({ selectedCount }: { selectedCount: number }) {
+  return (
+    <section className="flex min-h-[300px] flex-col items-center justify-center rounded-2xl border border-dashed border-[#DDE4F2] bg-white text-center">
+      <div className="mb-5 flex h-20 w-20 items-center justify-center rounded-2xl bg-[#F3F2FF] text-[#6F63FF]">
+        <EmptyCompareIcon />
+      </div>
+      <div className="text-[16px] font-semibold text-[#172033]">{selectedCount ? `已选择 ${selectedCount} 个产品` : "暂未选择产品"}</div>
+      <div className="mt-3 text-[14px] font-normal text-[#7A8499]">点击商品卡片右上角收藏，将产品加入对比</div>
+    </section>
+  );
+}
+
+type IngredientRole = {
+  name: string;
+  tags: string[];
+  tone: "blue" | "violet" | "orange" | "green" | "cyan";
+};
+
+function parseMaybeJson(value: unknown): unknown {
+  if (typeof value !== "string") return value;
+  const text = value.trim();
+  if (!text || !["[", "{"].includes(text[0])) return value;
+  try {
+    return JSON.parse(text);
+  } catch {
+    return value;
+  }
+}
+
+function collectIngredientNames(value: unknown): string[] {
+  const parsed = parseMaybeJson(value);
+  if (parsed === null || parsed === undefined || parsed === "") return [];
+  if (Array.isArray(parsed)) return parsed.flatMap(collectIngredientNames);
+  if (typeof parsed === "object") {
+    const record = parsed as Record<string, unknown>;
+    for (const key of ["ingredient_name", "name", "ingredient", "standard_name"]) {
+      if (record[key]) return collectIngredientNames(record[key]);
+    }
+    return Object.values(record).flatMap(collectIngredientNames);
+  }
+  return String(parsed)
+    .split(/[、,，;；|/\n]+/)
+    .map((item) => item.trim())
+    .filter((item) => item && !["暂无", "无", "none", "null"].includes(item.toLowerCase()));
+}
+
+function uniqueIngredients(values: string[], limit = 8): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const value of values) {
+    const cleaned = value.replace(/^[\[\]{}"'：:\s]+|[\[\]{}"'：:\s]+$/g, "").trim();
+    if (!cleaned || seen.has(cleaned)) continue;
+    seen.add(cleaned);
+    result.push(cleaned);
+    if (result.length >= limit) break;
+  }
+  return result;
+}
+
+function fiberIngredients(evidence?: MaterialRoleEvidence): string[] {
+  const fiber = evidence?.fiber_carb_roles || {};
+  const feature = parseMaybeJson(fiber.ingredient_feature_json);
+  if (!feature || typeof feature !== "object" || Array.isArray(feature)) return [];
+  const record = feature as Record<string, unknown>;
+  const subtypeTags = parseMaybeJson(record.ingredient_subtype_tags);
+  if (subtypeTags && typeof subtypeTags === "object" && !Array.isArray(subtypeTags)) {
+    return uniqueIngredients(Object.values(subtypeTags as Record<string, unknown>).flatMap(collectIngredientNames));
+  }
+  const detail = parseMaybeJson(record.ingredient_tag_detail);
+  if (detail && typeof detail === "object" && !Array.isArray(detail)) {
+    return uniqueIngredients(Object.keys(detail as Record<string, unknown>));
+  }
+  return [];
+}
+
+function buildIngredientRoles(evidence?: MaterialRoleEvidence): IngredientRole[] {
+  const protein = evidence?.protein_roles || {};
+  const proteinScoreRules = evidence?.protein_score_rules || {};
+  const fat = evidence?.fat_roles || {};
+  const fiber = evidence?.fiber_carb_roles || {};
+  const standardizedAnimalSources = uniqueIngredients([
+    ...collectIngredientNames(protein.animal_source_level2_sources),
+    ...collectIngredientNames(proteinScoreRules.animal_source_level2_sources),
+  ]);
+  const fallbackAnimalSources = uniqueIngredients([
+    ...collectIngredientNames(protein.animal_sources),
+    ...collectIngredientNames(proteinScoreRules.animal_sources),
+    ...collectIngredientNames(protein.primary_meat_source_species),
+    ...collectIngredientNames(protein.secondary_meat_source_species),
+  ]);
+  const plantProteinSources = uniqueIngredients([
+    ...collectIngredientNames(protein.plant_protein_labels),
+    ...collectIngredientNames(proteinScoreRules.plant_protein_labels),
+  ]);
+  const proteinTags = uniqueIngredients([
+    ...(standardizedAnimalSources.length ? standardizedAnimalSources : fallbackAnimalSources),
+    ...plantProteinSources,
+  ]);
+  const starchTags = uniqueIngredients(collectIngredientNames(fiber.starch_ingredients_json));
+  const fatTags = uniqueIngredients(collectIngredientNames(fat.fat_sources));
+  const fiberTags = fiberIngredients(evidence);
+  const protectionTags = uniqueIngredients([
+    ...collectIngredientNames(fat.antioxidant_sources),
+    ...collectIngredientNames(fat.micronutrient_sources),
+    ...collectIngredientNames(fat.omega3_sources),
+  ]);
+  return [
+    { name: "蛋白来源", tags: proteinTags, tone: "blue" },
+    { name: "碳水和淀粉来源", tags: starchTags, tone: "violet" },
+    { name: "脂肪来源", tags: fatTags, tone: "orange" },
+    { name: "肠道支持和纤维缓冲", tags: fiberTags, tone: "green" },
+    { name: "抗氧化与皮肤屏障支持", tags: protectionTags, tone: "cyan" },
+  ];
+}
+
+const nutritionFallbacks: Record<string, number> = {
+  蛋白质量: 84,
+  纤维缓冲: 14.24,
+  菌群支持: 0.32,
+  皮肤保护: 17.9,
+  蛋白压力: 21,
+  碳水负担: 75.6,
+  脂肪负担: 50.8,
+};
+
+function SectionTitle({ icon, children, info = false }: { icon: string; children: React.ReactNode; info?: boolean }) {
+  return (
+    <h3 className="mb-2 flex items-center gap-2 text-[16px] font-bold text-[#172033]">
+      <span className="flex h-8 w-8 items-center justify-center rounded-full bg-[#EEF6E9] text-[16px] text-[#4B962F]">{icon}</span>
+      <span>{children}</span>
+      {info && <span className="flex h-5 w-5 items-center justify-center rounded-full border border-[#AAB5CA] text-[11px] font-semibold text-[#8A94A8]">i</span>}
+    </h3>
+  );
+}
+
+function ProductInfoPanel({ product }: { product: Product }) {
+  const rows = [
+    ["品牌名", product.brand],
+    ["产品名", product.name],
+    ["价格带", product.price],
+    ["进口/国产", product.origin],
+  ];
+  return (
+    <section className="h-[360px] rounded-2xl border border-[#E5E9F5] bg-white p-3 shadow-[0_8px_22px_rgba(30,41,59,0.05)]">
+      <div className="relative h-[150px] overflow-hidden rounded-xl bg-[#F5F7FF]">
+        <PackageImage product={product} />
+        <span className="absolute right-3 top-3 flex h-10 w-10 items-center justify-center rounded-full border border-[#FFD7DA] bg-white/95 text-[#FF4D4F] shadow-sm">
+          <FavoriteIcon selected className="h-5 w-5" />
+        </span>
+      </div>
+      <div className="mt-3">
+        {rows.map(([label, value], index) => (
+          <div key={label} className={`grid min-h-[45px] grid-cols-[72px_minmax(0,1fr)] items-center gap-3 px-1 ${index < rows.length - 1 ? "border-b border-[#EDF0F5]" : ""}`}>
+            <span className="text-[12px] font-normal text-[#7A8499]">{label}</span>
+            <span className={`${label === "价格带" ? "text-[14px] font-semibold" : "text-[13px] font-medium"} overflow-hidden text-ellipsis text-[#172033] [display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:2]`} title={value}>
+              {value}
+            </span>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function IngredientPreviewPanel({ product }: { product: Product }) {
+  const evidenceText = product.materialRoleEvidence?.raw_ingredient_text;
+  const ingredients = product.ingredients && product.ingredients !== "暂无原料信息"
+    ? product.ingredients
+    : typeof evidenceText === "string" && evidenceText.trim()
+      ? evidenceText
+      : "暂无原料信息";
+  return (
+    <section className="rounded-2xl border border-[#E8EDF6] bg-white px-4 py-3 shadow-[0_6px_18px_rgba(30,41,59,0.04)]">
+      <SectionTitle icon="🌿">原料预览</SectionTitle>
+      <div className="rounded-xl border border-[#DCE9D2] bg-gradient-to-r from-[#F8FAF3] to-[#F3F7ED] px-4 py-2 text-[12px] font-normal leading-5 text-[#374151]">
+        {ingredients}
+      </div>
+    </section>
+  );
+}
+
+function IngredientRolePanel({ product }: { product: Product }) {
+  const tones = {
+    blue: ["bg-[#EAF3FF] text-[#176DFF]", "border-[#DCEAFF] bg-[#F6F9FF]"],
+    violet: ["bg-[#F1ECFF] text-[#7447FF]", "border-[#E8E0FF] bg-[#FAF8FF]"],
+    orange: ["bg-[#FFF0E5] text-[#F97316]", "border-[#FFE2CC] bg-[#FFF9F4]"],
+    green: ["bg-[#EDF7E8] text-[#409624]", "border-[#DCEED3] bg-[#F8FCF5]"],
+    cyan: ["bg-[#E8F7F7] text-[#168A91]", "border-[#D7EEEE] bg-[#F6FBFB]"],
+  } as const;
+  const roles = buildIngredientRoles(product.materialRoleEvidence);
+  return (
+    <section className="rounded-2xl border border-[#E8EDF6] bg-white px-4 py-3 shadow-[0_6px_18px_rgba(30,41,59,0.04)]">
+      <SectionTitle icon="✣">原材料营养角色分类</SectionTitle>
+      <div className="grid grid-cols-2 gap-2">
+        {roles.map((role, index) => {
+          const [badgeClass, rowClass] = tones[role.tone];
+          return (
+            <div key={role.name} className={`rounded-xl border px-3 py-2 ${index === roles.length - 1 ? "col-span-2" : ""} ${rowClass}`}>
+              <div className="mb-1 flex items-center gap-2">
+                <span className={`flex h-6 w-6 items-center justify-center rounded-full text-[10px] font-bold ${badgeClass}`}>{String(index + 1).padStart(2, "0")}</span>
+                <span className="text-[12px] font-semibold text-[#35415A]">{role.name}</span>
+              </div>
+              <div className="flex flex-wrap gap-1 pl-8">
+                {role.tags.length
+                  ? role.tags.map((tag) => <span key={tag} className="rounded-md border border-current/10 bg-white/70 px-2 py-0.5 text-[10px] font-medium leading-3 text-[#59657A]">{tag}</span>)
+                  : <span className="text-[10px] font-normal text-[#9AA3B4]">暂无识别结果</span>}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+function NutritionMetricCard({ label, value, kind }: { label: string; value: number; kind: "positive" | "negative" }) {
+  const positive = kind === "positive";
+  return (
+    <div className={`flex min-h-[50px] items-center justify-between gap-2 rounded-lg border px-2 py-1.5 ${positive ? "border-[#D7EBD0] bg-white" : "border-[#F4DDC8] bg-white"}`}>
+      <div className="flex items-center gap-2">
+        <span className={`flex h-6 w-6 items-center justify-center rounded-md text-[13px] ${positive ? "bg-[#EEF8EA] text-[#409624]" : "bg-[#FFF1E6] text-[#F97316]"}`}>
+          {positive ? "＋" : "−"}
+        </span>
+        <span className="text-[11px] font-medium text-[#4B5563]">{label}</span>
+      </div>
+      <div className={`text-[16px] font-semibold leading-none ${positive ? "text-[#245E35]" : "text-[#9A4A16]"}`}>{value}</div>
+    </div>
+  );
+}
+
+function NutritionScorePanel({ product }: { product: Product }) {
+  const scoreValue = (label: string) => product.scores.find((score) => score.label === label)?.value ?? nutritionFallbacks[label];
+  const positiveLabels = ["蛋白质量", "纤维缓冲", "菌群支持", "皮肤保护"];
+  const negativeLabels = ["蛋白压力", "碳水负担", "脂肪负担"];
+  return (
+    <section className="h-full overflow-hidden rounded-2xl border border-[#E8EDF6] bg-white p-2 shadow-[0_6px_18px_rgba(30,41,59,0.04)]">
+      <SectionTitle icon="✣" info>营养得分</SectionTitle>
+      <div className="grid grid-cols-2 gap-2">
+        <div className="rounded-lg border border-[#D8EACA] bg-[#F7FBF3] p-2">
+          <div className="mb-1.5 inline-flex items-center gap-1 rounded-full bg-[#EAF6E4] px-2 py-0.5 text-[10px] font-semibold text-[#3E8B2B]">
+            <span>＋</span> 加分项
+          </div>
+          <div className="grid grid-cols-4 gap-1">
+            {positiveLabels.map((label) => <NutritionMetricCard key={label} label={label} value={scoreValue(label)} kind="positive" />)}
+          </div>
+        </div>
+        <div className="rounded-lg border border-[#F3DCC4] bg-[#FFF8F1] p-2">
+          <div className="mb-1.5 inline-flex items-center gap-1 rounded-full bg-[#FFF0E1] px-2 py-0.5 text-[10px] font-semibold text-[#E66A15]">
+            <span>−</span> 减分项
+          </div>
+          <div className="grid grid-cols-3 gap-1">
+            {negativeLabels.map((label) => <NutritionMetricCard key={label} label={label} value={scoreValue(label)} kind="negative" />)}
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function ProductAnalysisCard({ product }: { product: Product }) {
+  return (
+    <article className="min-w-[1120px] rounded-2xl border border-[#DDE5F3] bg-white p-4 shadow-[0_10px_28px_rgba(30,41,59,0.06)]">
+      <div className="grid grid-cols-[260px_minmax(0,1fr)] items-start gap-4 max-[1439px]:grid-cols-[240px_minmax(0,1fr)]">
+        <ProductInfoPanel product={product} />
+        <div className="space-y-2">
+          <IngredientPreviewPanel product={product} />
+          <IngredientRolePanel product={product} />
+        </div>
+      </div>
+    </article>
+  );
+}
+
+function CompareResultSection({ products }: { products: Product[] }) {
+  return (
+    <section className="scrollbar-none space-y-4 overflow-x-auto">
+      {products.map((product) => <ProductAnalysisCard key={product.brand + product.name} product={product} />)}
+    </section>
+  );
+}
+
+const comparisonChartDimensions = [
+  {
+    label: "蛋白质量",
+    type: "positive",
+    explanation: "衡量蛋白来源质量、动物蛋白优势和蛋白正向支持，不等同于蛋白压力低。",
+    factors: "动物蛋白占优程度、肉源或动物来源清晰度、主要蛋白形态（鲜肉、冻肉、肉粉、水解蛋白等）、植物蛋白干扰程度、粗蛋白含量适配度。",
+  },
+  {
+    label: "纤维缓冲",
+    type: "positive",
+    explanation: "衡量纤维结构是否有助于便便成形并提供肠道缓冲，不只看粗纤维总量。",
+    factors: "纤维来源多样性、可溶与不可溶纤维搭配、粪便骨架支持、肠道刺激缓冲能力、粗纤维含量适配度。",
+  },
+  {
+    label: "菌群支持",
+    type: "positive",
+    explanation: "衡量供菌底物和菌群代谢支持是否平衡；供菌原料多不代表一定更稳定。",
+    factors: "益生元及供菌底物、短链脂肪酸代谢支持、发酵稳定性、底物数量与结构、过量发酵压力。",
+  },
+  {
+    label: "皮肤保护",
+    type: "positive",
+    explanation: "衡量脂肪调节、皮肤屏障稳定和氧化压力缓冲方面的配方支持。",
+    factors: "Omega 脂肪酸来源、抗氧化支持、微量营养素、脂肪调节原料、皮肤屏障相关营养支持。",
+  },
+  {
+    label: "蛋白压力",
+    type: "pressure",
+    explanation: "衡量蛋白来源和蛋白结构的复杂程度，以及可能带来的消化和换粮适应压力。",
+    factors: "肉源数量、蛋白来源复杂度、多肉源叠加、植物蛋白或豆类参与、主要蛋白形态、蛋白结构负载。",
+  },
+  {
+    label: "碳水负担",
+    type: "pressure",
+    explanation: "衡量淀粉、豆类和薯类等碳水结构的配方压力，不代表保证值中的直接碳水含量。",
+    factors: "淀粉原料占比与排序、豆类和薯类参与、碳水来源复杂度、发酵压力、软便相关结构风险。",
+  },
+  {
+    label: "脂肪负担",
+    type: "pressure",
+    explanation: "衡量油脂结构和脂肪消化压力，分数越高越需要关注皮脂、黑下巴和脂肪适应情况。",
+    factors: "油脂来源与数量、动物脂肪参与、粗脂肪含量适配度、脂肪来源复杂度、脂肪消化和皮脂压力。",
+  },
+] as const;
+
+function chartProductName(info: ProductInfo) {
+  return [info.brand_name, info.name].filter(Boolean).join(" ") || info.query;
+}
+
+function NutritionBurdenComparisonChart({ result }: { result: CompareResult }) {
+  const [selectedMetric, setSelectedMetric] = useState<(typeof comparisonChartDimensions)[number]["label"]>("蛋白质量");
+  const width = 1160;
+  const height = 430;
+  const margin = { top: 58, right: 28, bottom: 72, left: 62 };
+  const plotWidth = width - margin.left - margin.right;
+  const plotHeight = height - margin.top - margin.bottom;
+  const zeroY = margin.top + plotHeight / 2;
+  const yForValue = (value: number) => zeroY - (value / 100) * (plotHeight / 2);
+  const groupWidth = plotWidth / comparisonChartDimensions.length;
+  const barWidth = Math.min(30, groupWidth * 0.23);
+  const currentName = chartProductName(result.current_food);
+  const targetName = chartProductName(result.target_food);
+  const ticks = [100, 75, 50, 25, 0, -25, -50, -75, -100];
+  const selectedMetricInfo = comparisonChartDimensions.find((item) => item.label === selectedMetric) || comparisonChartDimensions[0];
+
+  const series = comparisonChartDimensions.map((dimension) => {
+    const currentRaw = profileScore(result.current_food.profile, dimension.label) ?? 0;
+    const targetRaw = profileScore(result.target_food.profile, dimension.label) ?? 0;
+    const direction = dimension.type === "pressure" ? -1 : 1;
+    return {
+      ...dimension,
+      current: Math.max(-100, Math.min(100, currentRaw * direction)),
+      target: Math.max(-100, Math.min(100, targetRaw * direction)),
+    };
+  });
+
+  return (
+    <section className="overflow-hidden rounded-2xl border border-[#E1E6F0] bg-white shadow-[0_8px_24px_rgba(30,41,59,0.05)]">
+      <div className="flex flex-wrap items-start justify-between gap-4 px-5 pb-1 pt-5">
+        <div>
+          <h2 className="flex items-center gap-3 text-[20px] font-bold text-[#172033]">
+            <span className="text-[#5145FF]">✦</span>
+            营养支持与配方负担对比
+            <span className="flex h-5 w-5 items-center justify-center rounded-full border border-[#AAB5CA] text-[11px] font-semibold text-[#8A94A8]">i</span>
+          </h2>
+          <p className="mt-2 text-[12px] text-[#667189]">上方为营养支持项，越高越好；下方为配方负担项，越接近 0 压力越轻。</p>
+        </div>
+        <div className="flex flex-wrap gap-6 pt-2 text-[12px] font-medium text-[#4B5563]">
+          <span className="flex items-center gap-2"><i className="h-3.5 w-3.5 rounded-[3px] bg-[#1677FF]" />{currentName}</span>
+          <span className="flex items-center gap-2"><i className="h-3.5 w-3.5 rounded-[3px] bg-[#FF7900]" />{targetName}</span>
+        </div>
+      </div>
+
+      <div className="overflow-x-auto px-3">
+        <svg viewBox={`0 0 ${width} ${height}`} className="min-w-[900px] w-full" role="img" aria-label={`${currentName}与${targetName}营养支持及配方负担柱状对比图`}>
+          {ticks.map((tick) => {
+            const y = yForValue(tick);
+            return (
+              <g key={tick}>
+                <line
+                  x1={margin.left}
+                  x2={width - margin.right}
+                  y1={y}
+                  y2={y}
+                  stroke={tick === 0 ? "#7F899D" : "#DCE2EC"}
+                  strokeWidth={tick === 0 ? 1.5 : 1}
+                  strokeDasharray={tick === 0 ? undefined : "4 4"}
+                />
+                <text x={margin.left - 12} y={y + 4} textAnchor="end" fontSize="12" fill="#516078">{tick}</text>
+              </g>
+            );
+          })}
+          <text
+            x="18"
+            y={margin.top + plotHeight / 2}
+            transform={`rotate(-90 18 ${margin.top + plotHeight / 2})`}
+            textAnchor="middle"
+            fontSize="12"
+            fontWeight="600"
+            fill="#35415A"
+          >
+            得分（分值）
+          </text>
+
+          {series.map((item, index) => {
+            const centerX = margin.left + groupWidth * index + groupWidth / 2;
+            const bars = [
+              { key: "current", value: item.current, x: centerX - barWidth - 3, color: "#1677FF" },
+              { key: "target", value: item.target, x: centerX + 3, color: "#FF7900" },
+            ];
+            return (
+              <g key={item.label}>
+                {bars.map((bar) => {
+                  const valueY = yForValue(bar.value);
+                  const y = Math.min(zeroY, valueY);
+                  const barHeight = Math.max(1, Math.abs(zeroY - valueY));
+                  const labelY = bar.value >= 0 ? y - 8 : y + barHeight + 17;
+                  return (
+                    <g key={bar.key}>
+                      <rect x={bar.x} y={y} width={barWidth} height={barHeight} rx="4" fill={bar.color} />
+                      <text x={bar.x + barWidth / 2} y={labelY} textAnchor="middle" fontSize="12" fontWeight="600" fill={bar.color}>
+                        {bar.value.toFixed(1)}
+                      </text>
+                    </g>
+                  );
+                })}
+                <g
+                  role="button"
+                  tabIndex={0}
+                  aria-label={`查看${item.label}解释`}
+                  className="cursor-pointer outline-none"
+                  onClick={() => setSelectedMetric(item.label)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") setSelectedMetric(item.label);
+                  }}
+                >
+                  <rect
+                    x={centerX - groupWidth / 2 + 5}
+                    y={height - 57}
+                    width={groupWidth - 10}
+                    height="32"
+                    rx="8"
+                    fill={selectedMetric === item.label ? "#F0EEFF" : "transparent"}
+                  />
+                  <text
+                    x={centerX - 5}
+                    y={height - 35}
+                    textAnchor="middle"
+                    fontSize="13"
+                    fontWeight="600"
+                    fill={selectedMetric === item.label ? "#4034E8" : "#35415A"}
+                  >
+                    {item.label}
+                  </text>
+                  <circle cx={centerX + 34} cy={height - 40} r="7" fill="none" stroke={selectedMetric === item.label ? "#5145FF" : "#9AA5B7"} strokeWidth="1" />
+                  <text x={centerX + 34} y={height - 37} textAnchor="middle" fontSize="9" fontWeight="700" fill={selectedMetric === item.label ? "#5145FF" : "#7A8499"}>i</text>
+                </g>
+              </g>
+            );
+          })}
+        </svg>
+      </div>
+
+      <div className="mx-5 mb-3 rounded-xl border border-[#DDE3EF] bg-white px-5 py-4 shadow-[0_4px_14px_rgba(30,41,59,0.04)]">
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+          <h3 className="text-[16px] font-bold text-[#253047]">{selectedMetricInfo.label}</h3>
+          <span className={`rounded-full px-2.5 py-1 text-[11px] font-semibold ${selectedMetricInfo.type === "pressure" ? "bg-[#FFF0E2] text-[#E66A15]" : "bg-[#EAF7E7] text-[#3E942F]"}`}>
+            {selectedMetricInfo.type === "pressure" ? "配方负担项 · 越低越好" : "营养支持项 · 越高越好"}
+          </span>
+        </div>
+        <div className="grid gap-2 text-[13px] leading-6 text-[#536078]">
+          <p><strong className="font-semibold text-[#35415A]">指标解释：</strong>{selectedMetricInfo.explanation}</p>
+          <p><strong className="font-semibold text-[#35415A]">得分因子：</strong>{selectedMetricInfo.factors}</p>
+        </div>
+      </div>
+
+      <div className="mx-5 mb-4 flex items-start gap-2 rounded-lg border border-[#E2E8F5] bg-[#F3F6FC] px-4 py-2.5 text-[12px] leading-5 text-[#59657A]">
+        <span className="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full border border-[#1677FF] text-[10px] font-bold text-[#1677FF]">i</span>
+        <span>说明：上方为营养支持项；下方为配方负担项。负担项柱子越短、越接近 0，代表配方压力越轻。</span>
+      </div>
+    </section>
+  );
+}
+
+const adviceToneStyles: Record<AdviceTone, {
+  dot: string;
+  tag: string;
+  check: string;
+  accent: string;
+}> = {
+  positive: {
+    dot: "bg-[#2E9B2D]",
+    tag: "bg-[#EAF7E7] text-[#3E942F]",
+    check: "border-[#72C56A] text-[#3E942F]",
+    accent: "text-[#2E9B2D]",
+  },
+  watch: {
+    dot: "bg-[#1677FF]",
+    tag: "bg-[#EAF3FF] text-[#1677FF]",
+    check: "border-[#65A8FF] text-[#1677FF]",
+    accent: "text-[#1677FF]",
+  },
+  caution: {
+    dot: "bg-[#FF7900]",
+    tag: "bg-[#FFF0E2] text-[#F36D00]",
+    check: "border-[#FFAA61] text-[#F36D00]",
+    accent: "text-[#F36D00]",
+  },
+  danger: {
+    dot: "bg-[#FF4D4F]",
+    tag: "bg-[#FFEDEE] text-[#E83C3F]",
+    check: "border-[#FF8B8D] text-[#E83C3F]",
+    accent: "text-[#E83C3F]",
+  },
+};
+
+function AdviceHeader() {
+  return (
+    <div className="flex flex-wrap items-center gap-x-5 gap-y-2 border-b border-[#EDF0F7] px-5 py-4">
+      <div className="flex items-center gap-3">
+        <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-[#F0EEFF] text-[#5145FF]">✦</span>
+        <h2 className="text-[20px] font-bold text-[#172033]">AI 换粮建议</h2>
+      </div>
+      <p className="text-[13px] text-[#7A8499]">基于两款粮的营养得分、原料结构及风险标签，结合猫咪不同健康状态给出分场景建议。</p>
+    </div>
+  );
+}
+
+function ScenarioAdviceCard({ scenario, index }: { scenario: ChangeFoodAdvice["scenarios"][number]; index: number }) {
+  const tone = adviceToneStyles[scenario.tone];
+  return (
+    <article className="rounded-2xl border border-[#E6EAF3] bg-white p-4 shadow-[0_5px_18px_rgba(30,41,59,0.04)]">
+      <div className="mb-4 flex items-start gap-3">
+        <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-[15px] font-bold text-white ${tone.dot}`}>{index + 1}</span>
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <h3 className="text-[18px] font-bold text-[#172033]">{scenario.title}</h3>
+            <span className={`rounded-md px-2 py-1 text-[12px] font-semibold ${tone.tag}`}>{scenario.recommendationLabel}</span>
+          </div>
+          <p className="mt-1 text-[13px] leading-5 text-[#657087]">{scenario.subtitle}</p>
+        </div>
+      </div>
+
+      <div className="grid gap-3 xl:grid-cols-[0.95fr_1.15fr_0.95fr]">
+        <section className="rounded-xl border border-[#E6EAF3] p-4">
+          <h4 className="mb-3 text-[13px] font-bold text-[#253047]">匹配条件</h4>
+          <div className="space-y-2">
+            {scenario.matchConditions.map((condition) => (
+              <div key={condition} className="flex items-start gap-2 text-[12px] leading-5 text-[#59657A]">
+                <span className={`mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full border text-[10px] ${tone.check}`}>✓</span>
+                <span>{condition}</span>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        <div className="space-y-3">
+          <section className="rounded-xl border border-[#E6EAF3] p-4">
+            <h4 className="mb-2 text-[13px] font-bold text-[#253047]">推荐理由</h4>
+            <p className="text-[12px] leading-6 text-[#59657A]">{scenario.reasonSummary}</p>
+            <div className="mt-3 space-y-2">
+              {scenario.reasonEvidence.map((evidence) => (
+                <div key={evidence.label} className="grid grid-cols-[92px_1fr] items-center text-[12px]">
+                  <span className={`font-semibold ${tone.accent}`}>→　{evidence.label}</span>
+                  <span className="font-medium text-[#35415A]">{evidence.currentValue.toFixed(1)}　→　{evidence.targetValue.toFixed(1)}</span>
+                </div>
+              ))}
+            </div>
+          </section>
+          {scenario.extraReason && (
+            <section className="rounded-xl border border-[#E5E9F5] bg-[#F8FAFD] p-4">
+              <h4 className="mb-2 text-[13px] font-bold text-[#35415A]">谨慎原因</h4>
+              <p className="text-[12px] leading-6 text-[#657087]">{scenario.extraReason}</p>
+            </section>
+          )}
+        </div>
+
+        <div className="space-y-3">
+          <section className="rounded-xl border border-[#FFE1C5] bg-[#FFF8F1] p-4">
+            <h4 className="mb-2 flex items-center gap-2 text-[13px] font-bold text-[#F36D00]"><span>●</span> 注意事项</h4>
+            <p className="text-[12px] leading-6 text-[#7B5A43]">{scenario.caution}</p>
+          </section>
+          {scenario.warningSignal && (
+            <section className="rounded-xl border border-[#FFD4D6] bg-[#FFF1F2] p-4">
+              <h4 className="mb-2 flex items-center gap-2 text-[13px] font-bold text-[#E83C3F]"><span>♟</span> 警示信号</h4>
+              <p className="text-[12px] leading-6 text-[#805356]">{scenario.warningSignal}</p>
+            </section>
+          )}
+        </div>
+      </div>
+    </article>
+  );
+}
+
+function TransitionPlanPanel({ steps }: { steps: ChangeFoodAdvice["transitionPlan"] }) {
+  return (
+    <section className="border-t border-[#E8E6FF] bg-gradient-to-r from-[#F7F6FF] to-[#F3F6FF] px-5 py-4">
+      <div className="mb-3 flex flex-wrap items-center gap-4">
+        <h3 className="flex items-center gap-2 text-[16px] font-bold text-[#4034E8]"><span>⌘</span> 换粮过渡建议</h3>
+        <p className="text-[12px] text-[#6F7890]">建议用 7–10 天完成换粮，循序渐进，降低肠道应激反应。</p>
+      </div>
+      <div className="grid gap-3 md:grid-cols-4">
+        {steps.map((step) => (
+          <div key={step.period} className="rounded-xl border border-[#E3E3F8] bg-white px-4 py-3 text-center shadow-sm">
+            <div className="text-[13px] font-bold text-[#4034E8]">{step.period}</div>
+            <div className="mt-2 text-[12px] leading-5 text-[#59657A]">新粮　{step.newFoodPercent}%<br />旧粮　{step.oldFoodPercent}%</div>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function DisclaimerBar({ text }: { text: string }) {
+  return <div className="border-t border-[#EDF0F7] px-5 py-3 text-[11px] text-[#8A94A8]">ⓘ　{text}</div>;
+}
+
+function ChangeFoodAdvicePanel({ advice }: { advice: ChangeFoodAdvice }) {
+  return (
+    <section className="overflow-hidden rounded-2xl border border-[#E1E5F0] bg-white shadow-[0_8px_24px_rgba(30,41,59,0.05)]">
+      <AdviceHeader />
+      <div className="space-y-3 p-4">
+        {advice.scenarios.map((scenario, index) => <ScenarioAdviceCard key={scenario.id} scenario={scenario} index={index} />)}
+      </div>
+      <TransitionPlanPanel steps={advice.transitionPlan} />
+      <DisclaimerBar text={advice.disclaimer} />
+    </section>
+  );
+}
+
+function CatFoodComparePage() {
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [productOptions, setProductOptions] = useState<ProductOption[]>([]);
-  const [brandOptions, setBrandOptions] = useState<string[]>([]);
   const [productsLoading, setProductsLoading] = useState(true);
   const [productsError, setProductsError] = useState("");
   const [currentFood, setCurrentFood] = useState("");
   const [targetFood, setTargetFood] = useState("");
-  const [catProfile, setCatProfile] = useState<CatProfile>({
-    age: "3～6年",
-    historyIssues: ["无明显历史问题"],
-    recentSymptoms: ["无明显异常"],
-  });
+  const [brandQuery, setBrandQuery] = useState("渴望");
+  const [productQuery, setProductQuery] = useState("");
+  const [priceFilter, setPriceFilter] = useState("全部");
+  const [originFilter, setOriginFilter] = useState("全部");
+  const [task, setTask] = useState<CatFoodTask | null>(null);
   const [compareResult, setCompareResult] = useState<CompareResult | null>(null);
   const [compareLoading, setCompareLoading] = useState(false);
   const [compareError, setCompareError] = useState("");
-  const [summary, setSummary] = useState("");
+  const [summary, setSummary] = useState<ChangeFoodAdvice | null>(null);
   const [summaryLoading, setSummaryLoading] = useState(false);
   const [summaryError, setSummaryError] = useState("");
-  const [summaryCached, setSummaryCached] = useState(false);
-  const [missingProductModalOpen, setMissingProductModalOpen] = useState(false);
-  const [missingProductSubmission, setMissingProductSubmission] = useState<MissingProductSubmission | undefined>();
-  const [task, setTask] = useState<CatFoodTask | null>(null);
-  const [taskError, setTaskError] = useState("");
-  const [imageTask, setImageTask] = useState<CatFoodTask | null>(null);
-  const [imageOrchestratorTask, setImageOrchestratorTask] = useState<OrchestratorTask | null>(null);
-  const [imageTaskError, setImageTaskError] = useState("");
-  const [imageUploading, setImageUploading] = useState(false);
+  const [addProductOpen, setAddProductOpen] = useState(false);
+  const [lastCompareKey, setLastCompareKey] = useState("");
+  const catProfile: CatProfile = {
+    age: "3岁",
+    historyIssues: ["无明显历史问题"],
+    recentSymptoms: ["无明显异常"],
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -1592,55 +1511,54 @@ export default function CatFoodComparePage() {
       setProductsLoading(true);
       setProductsError("");
       try {
-        const [productsResponse, brandsResponse] = await Promise.all([
-          fetch("/api/cat-food-compare/product-options?limit=500"),
-          fetch("/api/cat-food-compare/brands"),
-        ]);
-        const data = await productsResponse.json();
-        if (!productsResponse.ok) throw new Error(data.error || "产品库加载失败");
-        const brandsData = await brandsResponse.json();
-        if (!brandsResponse.ok) throw new Error(brandsData.error || "品牌库加载失败");
+        const response = await fetch("/api/cat-food-compare/product-options?limit=500");
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || "产品库加载失败");
         if (cancelled) return;
-        const nextProducts = data.items || [];
+        const nextProducts = (data.items || []).filter((item: ProductOption) => item.compare_available);
         setProductOptions(nextProducts);
-        setBrandOptions(brandsData.brands || []);
       } catch (error) {
-        if (!cancelled) {
-          setProductsError(error instanceof Error ? error.message : "产品库加载失败");
-        }
+        if (!cancelled) setProductsError(error instanceof Error ? error.message : "产品库加载失败");
       } finally {
         if (!cancelled) setProductsLoading(false);
       }
     }
-    loadProducts();
+    void loadProducts();
     return () => {
       cancelled = true;
     };
   }, []);
 
-  const canCompare = currentFood && targetFood && currentFood !== targetFood && !compareLoading;
+  const selectedCurrentFood = useMemo(() => findProductOption(productOptions, currentFood), [currentFood, productOptions]);
+  const selectedTargetFood = useMemo(() => findProductOption(productOptions, targetFood), [targetFood, productOptions]);
+  const selectedCount = [selectedCurrentFood, selectedTargetFood].filter(Boolean).length;
+  const canCompare = Boolean(currentFood && targetFood && currentFood !== targetFood && selectedCurrentFood && selectedTargetFood);
 
-  function handleCurrentFoodChange(value: string) {
-    setCurrentFood(value);
-    setTask(null);
-    setCompareResult(null);
-    setSummary("");
-  }
+  const filteredOptions = useMemo(() => {
+    const brandText = brandQuery.trim().toLowerCase();
+    const productText = productQuery.trim().toLowerCase();
+    return productOptions
+      .filter((option) => option.compare_available)
+      .filter((option) => {
+        if (brandText && ![option.brand, option.raw_brand, option.label].filter(Boolean).join(" ").toLowerCase().includes(brandText)) return false;
+        if (
+          productText &&
+          ![option.product_name, option.raw_title, option.label, option.display_text]
+            .filter(Boolean)
+            .join(" ")
+            .toLowerCase()
+            .includes(productText)
+        ) return false;
+        if (priceFilter !== "全部" && option.price_bucket !== priceFilter) return false;
+        if (originFilter !== "全部" && option.origin_type !== originFilter) return false;
+        return true;
+      })
+      .slice(0, 5);
+  }, [brandQuery, originFilter, priceFilter, productOptions, productQuery]);
 
-  function handleTargetFoodChange(value: string) {
-    setTargetFood(value);
-    setTask(null);
-    setCompareResult(null);
-    setSummary("");
-  }
-
-  function removeMissingProductSubmission() {
-    if (missingProductSubmission?.previewUrl) {
-      URL.revokeObjectURL(missingProductSubmission.previewUrl);
-    }
-    setMissingProductSubmission(undefined);
-    setImageOrchestratorTask(null);
-  }
+  const carouselProducts = filteredOptions.length
+    ? filteredOptions.map((option, index) => optionToProduct(option, index, productOptionValue(option) === currentFood || productOptionValue(option) === targetFood))
+    : products;
 
   function taskPayload() {
     return {
@@ -1661,7 +1579,6 @@ export default function CatFoodComparePage() {
 
   async function createTaskIfNeeded() {
     if (task?.id) return task;
-    setTaskError("");
     const response = await fetch("/api/cat-food/tasks", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -1673,114 +1590,41 @@ export default function CatFoodComparePage() {
     return data.task as CatFoodTask;
   }
 
-  async function fetchTask(taskId: string, onTask: (task: CatFoodTask) => void = setTask) {
+  async function fetchTask(taskId: string) {
     const response = await fetch(`/api/cat-food/tasks/${taskId}`);
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || "任务状态加载失败");
-    onTask(data.task);
+    setTask(data.task);
     return data.task as CatFoodTask;
   }
 
-  async function waitForTask(
-    taskId: string,
-    pickCompareResult: boolean,
-    onTask: (task: CatFoodTask) => void = setTask,
-  ) {
+  async function waitForCompareTask(taskId: string) {
     for (let index = 0; index < 60; index += 1) {
-      const nextTask = await fetchTask(taskId, onTask);
-      if (nextTask.status === "failed") {
-        throw new Error(nextTask.error_message || "任务执行失败");
-      }
-      if (nextTask.status === "success") {
-        if (pickCompareResult && nextTask.result?.compare) {
-          return nextTask;
-        }
-        if (!pickCompareResult) return nextTask;
-      }
+      const nextTask = await fetchTask(taskId);
+      if (nextTask.status === "failed") throw new Error(nextTask.error_message || "任务执行失败");
+      if (nextTask.status === "success" && nextTask.result?.compare) return nextTask;
       await new Promise((resolve) => window.setTimeout(resolve, 1000));
     }
-    throw new Error("任务仍在处理中，请稍后刷新任务状态。");
-  }
-
-  async function handleMissingProductSubmit(submission: MissingProductSubmission) {
-    setImageUploading(true);
-    setImageTaskError("");
-    try {
-      const createResponse = await fetch("/api/cat-food/tasks", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          task_type: "image_parse",
-          cat_profile: catProfile,
-          notes: submission.productName,
-        }),
-      });
-      const createData = await createResponse.json();
-      if (!createResponse.ok) throw new Error(createData.error || "图片任务创建失败");
-      const currentTask = createData.task as CatFoodTask;
-      setImageTask(currentTask);
-
-      const form = new FormData();
-      form.append("image", submission.file);
-      form.append("brand_name", submission.brandName);
-      form.append("product_name", submission.productName);
-      const response = await fetch(`/api/cat-food/tasks/${currentTask.id}/images`, {
-        method: "POST",
-        body: form,
-      });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || "图片上传失败");
-      setImageTask(data.task);
-      setImageOrchestratorTask(data.orchestrator_task || null);
-      setMissingProductSubmission({
-        ...submission,
-        imageId: data.image?.id,
-        orchestratorTaskId: data.orchestrator_task?.id,
-      });
-      await waitForTask(currentTask.id, false, setImageTask);
-    } catch (error) {
-      setImageTaskError(error instanceof Error ? error.message : "图片上传失败");
-    } finally {
-      setImageUploading(false);
-    }
+    throw new Error("任务仍在处理中，请稍后刷新。");
   }
 
   async function handleCompare() {
-    if (!canCompare) return;
+    if (!canCompare || compareLoading) return;
     setCompareLoading(true);
     setCompareError("");
-    setSummary("");
+    setSummary(null);
     setSummaryError("");
-    setSummaryCached(false);
     try {
       const currentTask = await createTaskIfNeeded();
       const response = await fetch(`/api/cat-food/tasks/${currentTask.id}/compare`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          current_food: selectedCurrentFood?.label || currentFood,
-          target_food: selectedTargetFood?.label || targetFood,
-          current_display_brand: selectedCurrentFood?.brand || "",
-          current_display_name: selectedCurrentFood?.product_name || "",
-          target_display_brand: selectedTargetFood?.brand || "",
-          target_display_name: selectedTargetFood?.product_name || "",
-          current_source_id: selectedCurrentFood?.score_source_id || "",
-          target_source_id: selectedTargetFood?.score_source_id || "",
-          current_product_key: selectedCurrentFood?.product_key || "",
-          target_product_key: selectedTargetFood?.product_key || "",
-          cat_profile: catProfile,
-          missing_product_upload: missingProductSubmission
-            ? {
-                product_name: missingProductSubmission.productName,
-                file_name: missingProductSubmission.fileName,
-              }
-            : null,
-        }),
+        body: JSON.stringify(taskPayload()),
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || "对比任务启动失败");
       setTask(data.task);
-      const finishedTask = await waitForTask(currentTask.id, true);
+      const finishedTask = await waitForCompareTask(currentTask.id);
       setCompareResult(finishedTask.result?.compare || null);
     } catch (error) {
       setCompareError(error instanceof Error ? error.message : "对比数据生成失败");
@@ -1794,8 +1638,6 @@ export default function CatFoodComparePage() {
     if (!compareResult) return;
     setSummaryLoading(true);
     setSummaryError("");
-    setSummary("");
-    setSummaryCached(false);
     try {
       const currentTask = await createTaskIfNeeded();
       const response = await fetch(`/api/cat-food/tasks/${currentTask.id}/summary`, {
@@ -1804,21 +1646,12 @@ export default function CatFoodComparePage() {
         body: JSON.stringify({
           llm_context: compareResult.llm_context,
           friendly_rows: compareResult.friendly_rows,
-          cat_profile: {
-            ...catProfile,
-            missing_product_upload: missingProductSubmission
-              ? {
-                  product_name: missingProductSubmission.productName,
-                  file_name: missingProductSubmission.fileName,
-                }
-              : null,
-          },
+          cat_profile: catProfile,
         }),
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || "大模型总结生成失败");
-      setSummary(data.summary || "");
-      setSummaryCached(Boolean(data.cached));
+      setSummary(data.advice || null);
     } catch (error) {
       setSummaryError(error instanceof Error ? error.message : "大模型总结生成失败");
     } finally {
@@ -1826,211 +1659,77 @@ export default function CatFoodComparePage() {
     }
   }
 
-  const selectedCurrentFood = useMemo(() => findProductOption(productOptions, currentFood), [currentFood, productOptions]);
-  const selectedTargetFood = useMemo(() => findProductOption(productOptions, targetFood), [targetFood, productOptions]);
-  const keyProfileDiff = useMemo(() => {
-    return (compareResult?.profile_diff || []).filter((row) => {
-      if (row.diff_b_minus_a === null || row.diff_b_minus_a === undefined) return false;
-      return Math.abs(row.diff_b_minus_a) >= 15;
-    });
-  }, [compareResult]);
+  function handleSelectProduct(product: Product) {
+    if (!product.value) return;
+    if (product.value === currentFood) {
+      setCurrentFood("");
+    } else if (product.value === targetFood) {
+      setTargetFood("");
+    } else if (!currentFood) {
+      setCurrentFood(product.value);
+    } else {
+      setTargetFood(product.value);
+    }
+    setTask(null);
+    setCompareResult(null);
+    setSummary(null);
+    setCompareError("");
+    setLastCompareKey("");
+  }
+
+  const resultProducts = compareResult
+    ? [
+        resultToProduct(compareResult.current_food, selectedCurrentFood, compareResult.friendly_rows, "current", 0),
+        resultToProduct(compareResult.target_food, selectedTargetFood, compareResult.friendly_rows, "target", 1),
+      ]
+    : products.slice(0, 2);
 
   return (
-    <div className="min-h-screen bg-[#f5f8ff] px-5 py-6 text-slate-900">
-      <div className="mx-auto max-w-[1840px] space-y-4">
-        <header className="flex flex-col justify-between gap-4 md:flex-row md:items-start">
-          <div>
-            <h1 className="text-[28px] font-bold tracking-tight text-slate-950">猫粮对比分析</h1>
-            <p className="mt-2 text-sm font-medium text-slate-500">
-              分析当前粮和对比粮的配方差异，帮你找到更适合猫咪的主粮
-            </p>
-          </div>
-          <button
-            type="button"
-            onClick={() => setMissingProductModalOpen(true)}
-            className="inline-flex items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white px-5 py-2.5 text-sm font-semibold text-blue-600 shadow-sm hover:border-blue-200 hover:bg-blue-50"
-          >
-            <span className="inline-flex h-4 w-4 items-center justify-center rounded-full border border-blue-500 text-[10px]">i</span>
-            不知道粮名？ 上传配料表图片分析
-          </button>
-        </header>
-
-        <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
-          <div className="grid gap-5 lg:grid-cols-[0.9fr_1fr_1.1fr]">
-            <div>
-              <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-slate-950">
-                <span className="text-blue-600">♣</span>
-                <span>猫龄</span>
-              </div>
-              <select
-                value={catProfile.age}
-                onChange={(event) => setCatProfile((prev) => ({ ...prev, age: event.target.value }))}
-                className="h-12 w-full rounded-xl border border-slate-200 bg-white px-4 text-sm font-medium text-slate-950 outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10"
-              >
-                {CAT_AGE_OPTIONS.map((age) => (
-                  <option key={age} value={age}>
-                    {age}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <ProductPicker
-              label="当前粮"
-              required
-              value={currentFood}
-              options={productOptions}
-              loading={productsLoading}
-              onChange={handleCurrentFoodChange}
+    <div className="min-h-screen overflow-x-hidden bg-[#F8FAFF]">
+      <HeaderNav />
+      <div className="pt-[72px]">
+        <PetSidebar collapsed={sidebarCollapsed} onToggle={() => setSidebarCollapsed((value) => !value)} />
+        <main className={`min-w-0 px-8 py-6 transition-[margin] duration-300 max-[1599px]:px-6 ${sidebarCollapsed ? "ml-[72px]" : "ml-[280px] max-[1599px]:ml-[260px] max-[1365px]:ml-[240px]"}`}>
+          <div className="mx-auto max-w-[1500px] space-y-4">
+            <SearchFilterBar
+              brandQuery={brandQuery}
+              productQuery={productQuery}
+              priceFilter={priceFilter}
+              originFilter={originFilter}
+              onBrandQueryChange={setBrandQuery}
+              onProductQueryChange={setProductQuery}
+              onPriceFilterChange={setPriceFilter}
+              onOriginFilterChange={setOriginFilter}
             />
-
-            <ProductPicker
-              label="对比粮"
-              required
-              value={targetFood}
-              options={productOptions}
-              loading={productsLoading}
-              onChange={handleTargetFoodChange}
+            <ProductCarousel products={carouselProducts} onSelect={handleSelectProduct} loading={productsLoading} error={productsError} />
+            <SelectedCompareBar
+              selectedCount={selectedCount}
+              loading={compareLoading}
+              summaryLoading={summaryLoading}
+              canCompare={canCompare}
+              hasResult={Boolean(compareResult)}
+              onAddProduct={() => setAddProductOpen(true)}
+              onCompare={handleCompare}
+              onSummary={handleGenerateSummary}
             />
+            {compareError && <div className="rounded-xl bg-rose-50 px-4 py-3 text-[13px] font-medium text-[#FF4D4F]">{compareError}</div>}
+            {compareResult ? (
+              <>
+                <CompareResultSection products={resultProducts} />
+                <NutritionBurdenComparisonChart result={compareResult} />
+              </>
+            ) : (
+              <EmptyComparePanel selectedCount={selectedCount} />
+            )}
+            {summaryError && <div className="rounded-xl bg-rose-50 px-4 py-3 text-[13px] font-medium text-[#FF4D4F]">{summaryError}</div>}
+            {summary && <ChangeFoodAdvicePanel advice={summary} />}
+            <div className="pb-6 text-[12px] font-normal text-[#7A8499]">ⓘ　以上信息基于公开资料与营养标准整理，仅供参考，建议结合宠物实际情况与医生建议。</div>
           </div>
-
-          {productsLoading && <div className="mt-4 text-sm text-slate-500">正在加载产品库...</div>}
-          {productsError && (
-            <div className="mt-4 rounded-2xl bg-rose-50 p-4 text-sm text-rose-700">{productsError}</div>
-          )}
-
-          {missingProductSubmission && (
-            <div className="mt-3 flex flex-wrap items-center gap-2 rounded-2xl bg-slate-50 px-4 py-3 text-sm text-slate-600">
-              <span className="rounded-lg bg-white px-3 py-1">品牌：{missingProductSubmission.brandName}</span>
-              <span className="rounded-lg bg-white px-3 py-1">产品：{missingProductSubmission.productName}</span>
-              <span className="rounded-lg bg-white px-3 py-1">图片：{missingProductSubmission.fileName}</span>
-              <button type="button" onClick={removeMissingProductSubmission} className="text-xs text-slate-500 underline">移除</button>
-            </div>
-          )}
-
-          <div className="mt-5 grid gap-4 border-t border-slate-100 pt-4 xl:grid-cols-[1fr_auto] xl:items-center">
-            <div className="space-y-3">
-              <InlineMultiSelect
-                label="历史问题"
-                note="可多选"
-                options={HISTORY_ISSUE_OPTIONS}
-                selected={catProfile.historyIssues}
-                onChange={(historyIssues) => setCatProfile((prev) => ({ ...prev, historyIssues }))}
-              />
-              <InlineMultiSelect
-                label="近期症状"
-                note="可多选"
-                options={RECENT_SYMPTOM_OPTIONS}
-                selected={catProfile.recentSymptoms}
-                onChange={(recentSymptoms) => setCatProfile((prev) => ({ ...prev, recentSymptoms }))}
-              />
-            </div>
-            <button
-              type="button"
-              disabled={!canCompare}
-              onClick={handleCompare}
-              className="h-12 shrink-0 rounded-xl bg-blue-600 px-9 text-sm font-bold text-white shadow-lg shadow-blue-600/25 hover:bg-blue-500 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:shadow-none"
-            >
-              {compareLoading ? "正在分析..." : "开始分析 →"}
-            </button>
-          </div>
-
-          {compareError && (
-            <div className="mt-4 rounded-2xl bg-rose-50 p-4 text-sm text-rose-700">{compareError}</div>
-          )}
-        </section>
-
-        {compareResult && (
-          <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
-            <div className="mb-4 flex flex-col gap-2 md:flex-row md:items-center">
-              <h2 className="text-lg font-bold text-slate-950">分析结果</h2>
-              <a
-                href="/consumer/recommendation-engine"
-                className="text-left text-sm font-medium text-blue-600 hover:text-blue-500"
-              >
-                这两款都不合适？试试智能推荐 →
-              </a>
-            </div>
-
-            <section className="mt-4">
-              <SectionTitle marker="A" title="原材料展示" hint="查看两款粮的基础信息和原始配料内容" />
-              <div className="grid gap-4 lg:grid-cols-2">
-                <ProductIngredientCard label="当前粮" product={compareResult.current_food} option={selectedCurrentFood} />
-                <ProductIngredientCard label="对比粮" product={compareResult.target_food} option={selectedTargetFood} />
-              </div>
-            </section>
-
-            <section className="mt-4 grid gap-4 lg:grid-cols-2">
-              <div className="lg:col-span-2">
-                <SectionTitle
-                  marker="B"
-                  title="两款粮侧重点"
-                  hint="基于营养保证值，做进一步细拆。综合原材料的属性以及出现的位置给出得分，不等同于兽医诊断或国标营养保证值。"
-                />
-              </div>
-              <FocusBarComparison
-                currentProfile={compareResult.current_food.profile}
-                targetProfile={compareResult.target_food.profile}
-                currentName={productDisplayName(compareResult.current_food)}
-                targetName={productDisplayName(compareResult.target_food)}
-              />
-              <KeyChangeSummary
-                rows={keyProfileDiff}
-                currentName={productDisplayName(compareResult.current_food)}
-                targetName={productDisplayName(compareResult.target_food)}
-              />
-            </section>
-
-            <section className="mt-4">
-              <SectionTitle marker="C" title="潜在风险对比" hint="基于产品库横向位置，识别两款粮在常见风险维度上的差异" />
-              <DimensionComparisonPanel
-                rows={compareResult.friendly_rows}
-                currentName={productDisplayName(compareResult.current_food)}
-                targetName={productDisplayName(compareResult.target_food)}
-              />
-            </section>
-
-            <section className="mt-4">
-              <div className="flex flex-col justify-between gap-3 md:flex-row md:items-start">
-                <SectionTitle marker="D" title="换粮建议" hint="综合配方差异、潜在风险和猫咪情况生成建议" />
-                <button
-                  type="button"
-                  disabled={summaryLoading}
-                  onClick={handleGenerateSummary}
-                  className="h-10 shrink-0 rounded-xl bg-blue-600 px-5 text-sm font-bold text-white shadow-lg shadow-blue-600/20 hover:bg-blue-500 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:shadow-none"
-                >
-                  {summaryLoading ? "正在生成..." : "生成换粮建议"}
-                </button>
-              </div>
-              <div className="rounded-2xl border border-slate-200 bg-white p-5">
-
-                {summaryError && (
-                  <div className="mt-4 rounded-2xl bg-rose-50 p-4 text-sm text-rose-700">{summaryError}</div>
-                )}
-
-                {summary ? (
-                  <div className="mt-5 whitespace-pre-wrap rounded-3xl border border-slate-200 bg-white p-6 text-sm leading-7 text-slate-700 shadow-sm">
-                    {summary}
-                  </div>
-                ) : (
-                  <div className="mt-5 rounded-2xl bg-slate-50 p-5 text-sm leading-6 text-slate-600">
-                    点击“生成换粮建议”后，大模型会围绕两款粮各有优势、整体产品池表现、换到对比粮可能改善什么和怎么选进行总结。
-                  </div>
-                )}
-              </div>
-            </section>
-          </section>
-        )}
+        </main>
       </div>
-      <MissingProductUploadModal
-        open={missingProductModalOpen}
-        brandOptions={brandOptions}
-        onClose={() => setMissingProductModalOpen(false)}
-        onSubmit={(submission) => {
-          removeMissingProductSubmission();
-          void handleMissingProductSubmit(submission);
-        }}
-      />
+      <AddProductModal open={addProductOpen} onClose={() => setAddProductOpen(false)} />
     </div>
   );
 }
+
+export default CatFoodComparePage;

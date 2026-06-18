@@ -477,6 +477,7 @@ def _clean_derived_product_name(value: Optional[str]) -> Optional[str]:
     out = _normalize_product_text(value)
     if not out:
         return None
+    out = re.sub(r"[\s_-]+\d{8,14}$", "", out).strip()
     out = out.strip(" \n\r\t-_·•:：,，。()（）[]【】")
     out = re.sub(r"^猫粮(?=[\u4e00-\u9fffA-Za-z0-9])", "", out)
     out = out.strip(" \n\r\t-_·•:：,，。()（）[]【】")
@@ -569,6 +570,12 @@ def _derive_brand_product_from_image_name(
         brand = _clean_derived_product_name(match.group(1))
         product_name = _clean_derived_product_name(match.group(2))
         return brand, product_name
+    match = re.match(r"^([\u4e00-\u9fffA-Za-z0-9·!]{2,16})\s+(.+)$", stem)
+    if match:
+        brand = _clean_derived_product_name(match.group(1))
+        product_name = _clean_derived_product_name(match.group(2))
+        if brand and product_name:
+            return brand, product_name
     return None, None
 
 
@@ -618,6 +625,8 @@ def _merge_brand_product_from_image_name(
         brand = _derive_brand_from_product_name(product_name, brand_candidates)
     if (not product_name) or _looks_weak_product_name(product_name):
         product_name = derived_product_name or product_name
+    elif derived_brand and derived_product_name and brand == derived_brand and derived_product_name not in product_name:
+        product_name = derived_product_name
     return brand, product_name
 
 
@@ -758,7 +767,13 @@ def _is_ingredient_tail_label_line(line: str) -> bool:
     compact = re.sub(r"\s+", "", _normalize(line)).lower()
     if not compact:
         return False
-    return any(compact == re.sub(r"\s+", "", label).lower() for label in INGREDIENT_TAIL_LABELS)
+    for label in INGREDIENT_TAIL_LABELS:
+        label_compact = re.sub(r"\s+", "", label).lower()
+        if compact == label_compact:
+            return True
+        if compact.startswith((f"{label_compact}:", f"{label_compact}：")):
+            return True
+    return False
 
 
 def _extract_single(lines: Sequence[str], labels: Sequence[str]) -> Optional[str]:
@@ -1204,32 +1219,38 @@ def parse_ocr_json_fields(ocr_json_text: str) -> Dict[str, Optional[str]]:
     if _looks_weak_product_name(product_name):
         product_name = _extract_product_name_from_packaging_lines(lines) or product_name
 
-    ingredient_candidates: List[str] = []
+    explicit_candidates: List[str] = []
+    fallback_candidates: List[str] = []
     c1 = _extract_block_from_full_text(full_text, INGREDIENT_LABELS)
     if c1:
-        ingredient_candidates.append(c1)
+        explicit_candidates.append(c1)
     c2 = _extract_multiline(lines, INGREDIENT_LABELS)
     if c2:
-        ingredient_candidates.append(c2)
+        explicit_candidates.append(c2)
     # 英文标签只做兜底，避免优先命中英文营销文案
     c3 = _extract_block_from_full_text(full_text, INGREDIENT_LABELS_FALLBACK)
     if c3:
-        ingredient_candidates.append(c3)
+        fallback_candidates.append(c3)
     c4 = _extract_multiline(lines, INGREDIENT_LABELS_FALLBACK)
     if c4:
-        ingredient_candidates.append(c4)
+        fallback_candidates.append(c4)
     c5 = _extract_implicit_ingredient_composition(lines)
     if c5:
-        ingredient_candidates.append(c5)
+        fallback_candidates.append(c5)
 
     ingredient_composition = None
-    cleaned_candidates: List[str] = []
-    for candidate in ingredient_candidates:
+    cleaned_explicit_candidates: List[str] = []
+    cleaned_fallback_candidates: List[str] = []
+    for candidate, target in [
+        *[(item, cleaned_explicit_candidates) for item in explicit_candidates],
+        *[(item, cleaned_fallback_candidates) for item in fallback_candidates],
+    ]:
         cleaned_candidate = _trim_ingredient_tail(candidate)
         cleaned_candidate = _normalize_ingredient_text(cleaned_candidate)
         cleaned_candidate = clean_ingredient_composition_text(cleaned_candidate)
         if _is_usable_ingredient_composition(cleaned_candidate):
-            cleaned_candidates.append(str(cleaned_candidate))
+            target.append(str(cleaned_candidate))
+    cleaned_candidates = cleaned_explicit_candidates or cleaned_fallback_candidates
     if cleaned_candidates:
         ingredient_composition = max(
             cleaned_candidates,

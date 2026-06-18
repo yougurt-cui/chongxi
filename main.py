@@ -118,7 +118,7 @@ def _load_recommendation_app():
     return recommendation_app
 
 
-SUMMARY_PROMPT_VERSION = "cat-food-compare-summary-v19"
+SUMMARY_PROMPT_VERSION = "cat-food-change-advice-v20"
 SUMMARY_FIXED_DISCLAIMER = (
     "评分为自研配方模型，仅用于两款横向对比，不等同 GB/T31217、AAFCO 实测营养值；"
     "风险标签为全库配方与喂养反馈下的相对倾向，非诊断。"
@@ -430,19 +430,23 @@ def _build_cat_food_compare_response(payload: dict) -> dict:
     return {
         "current_food": {
             "query": current_query,
+            "source_id": compare_app.make_json_safe(current_product.get("source_id")),
             "product_key": current_product.get("product_key"),
             "name": current_product["name"],
             "brand_name": current_product["brand_name"],
             "ingredient_composition": current_product.get("ingredient_composition") or "",
+            "material_role_evidence": compare_app.make_json_safe(current_product.get("material_role_evidence") or {}),
             "profile": _profile_records(current_product),
             "baseline_profile": _baseline_records(current_product),
         },
         "target_food": {
             "query": target_query,
+            "source_id": compare_app.make_json_safe(target_product.get("source_id")),
             "product_key": target_product.get("product_key"),
             "name": target_product["name"],
             "brand_name": target_product["brand_name"],
             "ingredient_composition": target_product.get("ingredient_composition") or "",
+            "material_role_evidence": compare_app.make_json_safe(target_product.get("material_role_evidence") or {}),
             "profile": _profile_records(target_product),
             "baseline_profile": _baseline_records(target_product),
         },
@@ -1206,6 +1210,361 @@ def _generate_cat_food_summary(payload: dict) -> dict:
     return {"summary": summary, "cached": False, "cache_key": cache_key}
 
 
+CHANGE_FOOD_ADVICE_SCHEMA = {
+    "type": "object",
+    "required": ["scenarios"],
+    "additionalProperties": False,
+    "properties": {
+        "scenarios": {
+            "type": "array",
+            "minItems": 3,
+            "maxItems": 3,
+            "items": {
+                "type": "object",
+                "required": ["id", "subtitle", "reasonSummary", "caution"],
+                "additionalProperties": False,
+                "properties": {
+                    "id": {"type": "string"},
+                    "subtitle": {"type": "string"},
+                    "reasonSummary": {"type": "string"},
+                    "caution": {"type": "string"},
+                    "extraReason": {"type": ["string", "null"]},
+                    "warningSignal": {"type": ["string", "null"]},
+                },
+            },
+        },
+    },
+}
+
+
+def _score_map(context: dict, product_key: str) -> dict[str, float]:
+    product = context.get(product_key) if isinstance(context.get(product_key), dict) else {}
+    result: dict[str, float] = {}
+    for row in product.get("profile") or []:
+        if not isinstance(row, dict) or row.get("score") is None:
+            continue
+        try:
+            result[str(row.get("dimension") or "").strip()] = round(float(row["score"]), 1)
+        except (TypeError, ValueError):
+            continue
+    return result
+
+
+def _metric_evidence(
+    current_scores: dict[str, float],
+    target_scores: dict[str, float],
+    dimensions: list[str],
+) -> list[dict[str, Any]]:
+    evidence = []
+    for dimension in dimensions:
+        if dimension not in current_scores or dimension not in target_scores:
+            continue
+        evidence.append({
+            "label": dimension,
+            "currentValue": current_scores[dimension],
+            "targetValue": target_scores[dimension],
+        })
+    return evidence
+
+
+def _build_change_food_rule_scenarios(context: dict, cat_profile: dict) -> list[dict[str, Any]]:
+    current_scores = _score_map(context, "product_a")
+    target_scores = _score_map(context, "product_b")
+    history_issues = [str(item) for item in cat_profile.get("historyIssues") or []]
+    recent_symptoms = [str(item) for item in cat_profile.get("recentSymptoms") or []]
+    no_obvious_issue = not any(
+        item and "无明显" not in item and item != "无"
+        for item in history_issues + recent_symptoms
+    )
+
+    protein_better = (
+        target_scores.get("蛋白质量", -1) > current_scores.get("蛋白质量", -1)
+        and target_scores.get("蛋白压力", 101) < current_scores.get("蛋白压力", 101)
+    )
+    skin_better = target_scores.get("皮肤保护", -1) > current_scores.get("皮肤保护", -1)
+    gut_support_weaker = (
+        target_scores.get("纤维缓冲", 101) < current_scores.get("纤维缓冲", 101)
+        or target_scores.get("菌群支持", 101) < current_scores.get("菌群支持", 101)
+    )
+
+    return [
+        {
+            "id": "daily_stability",
+            "tone": "positive",
+            "title": "日常稳定 / 无明显问题",
+            "recommendationLabel": "可优先考虑",
+            "matchConditions": [
+                "近期无明显软便、呕吐",
+                "无反复黑下巴 / 下巴出油",
+                "换粮接受度尚可",
+                "希望降低配方压力",
+            ] if no_obvious_issue else [
+                "当前主要症状已稳定",
+                "换粮接受度尚可",
+                "希望提高蛋白质量",
+                "可以完成渐进换粮",
+            ],
+            "reasonEvidence": _metric_evidence(
+                current_scores,
+                target_scores,
+                ["蛋白质量", "蛋白压力", "碳水负担"],
+            ),
+            "ruleFacts": {
+                "proteinDirectionImproved": protein_better,
+                "noObviousIssue": no_obvious_issue,
+            },
+        },
+        {
+            "id": "black_chin",
+            "tone": "watch",
+            "title": "黑下巴 / 下巴出油",
+            "recommendationLabel": "更适合作为观察方向",
+            "matchConditions": [
+                "下巴容易出油、有黑下巴反复",
+                "吃油脂复杂的粮后下巴更敏感",
+                "毛发或皮肤状态不稳定",
+                "愿意记录换粮后的皮肤变化",
+            ],
+            "reasonEvidence": _metric_evidence(
+                current_scores,
+                target_scores,
+                ["皮肤保护", "脂肪负担", "蛋白压力"],
+            ),
+            "ruleFacts": {"skinProtectionImproved": skin_better},
+        },
+        {
+            "id": "sensitive_transition",
+            "tone": "caution",
+            "title": "软便 / 玻璃胃 / 换粮敏感",
+            "recommendationLabel": "需要谨慎试喂",
+            "matchConditions": [
+                "换粮容易软便",
+                "前段成形、后段偏软",
+                "便臭明显或排便不稳定",
+                "吃纤维较少的粮容易不稳定",
+            ],
+            "reasonEvidence": _metric_evidence(
+                current_scores,
+                target_scores,
+                ["纤维缓冲", "菌群支持", "蛋白压力"],
+            ),
+            "ruleFacts": {"gutSupportWeaker": gut_support_weaker},
+        },
+    ]
+
+
+def _extract_json_object(text: str) -> dict:
+    cleaned = (text or "").strip()
+    if cleaned.startswith("```"):
+        cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned)
+        cleaned = re.sub(r"\s*```$", "", cleaned)
+    try:
+        value = json.loads(cleaned)
+    except json.JSONDecodeError:
+        match = re.search(r"\{.*\}", cleaned, flags=re.S)
+        if not match:
+            raise ValueError("大模型未返回有效 JSON。")
+        value = json.loads(match.group(0))
+    if not isinstance(value, dict):
+        raise ValueError("大模型返回值必须是 JSON 对象。")
+    return value
+
+
+def _validate_ai_generated_advice(value: dict, expected_ids: list[str]) -> dict:
+    if set(value) != {"scenarios"} or not isinstance(value.get("scenarios"), list):
+        raise ValueError("AI 换粮建议未通过 JSON Schema 校验：根对象字段不合法。")
+    rows = value["scenarios"]
+    if len(rows) != len(expected_ids):
+        raise ValueError("AI 换粮建议未通过 JSON Schema 校验：场景数量不正确。")
+    allowed = {"id", "subtitle", "reasonSummary", "caution", "extraReason", "warningSignal"}
+    required = {"id", "subtitle", "reasonSummary", "caution"}
+    normalized = []
+    for index, row in enumerate(rows):
+        if not isinstance(row, dict) or not required.issubset(row) or not set(row).issubset(allowed):
+            raise ValueError("AI 换粮建议未通过 JSON Schema 校验：场景字段不合法。")
+        if row.get("id") != expected_ids[index]:
+            raise ValueError("AI 换粮建议未通过 JSON Schema 校验：场景 ID 不匹配。")
+        for key in required - {"id"}:
+            if not isinstance(row.get(key), str) or not row[key].strip():
+                raise ValueError(f"AI 换粮建议未通过 JSON Schema 校验：{key} 不能为空。")
+        for key in ("extraReason", "warningSignal"):
+            if key in row and row[key] is not None and not isinstance(row[key], str):
+                raise ValueError(f"AI 换粮建议未通过 JSON Schema 校验：{key} 类型不正确。")
+        normalized.append({
+            "id": row["id"],
+            "subtitle": row["subtitle"].strip(),
+            "reasonSummary": row["reasonSummary"].strip(),
+            "caution": row["caution"].strip(),
+            "extraReason": (row.get("extraReason") or "").strip() or None,
+            "warningSignal": (row.get("warningSignal") or "").strip() or None,
+        })
+    return {"scenarios": normalized}
+
+
+def _generate_cat_food_summary(payload: dict) -> dict:
+    context = payload.get("llm_context")
+    friendly_rows = payload.get("friendly_rows") or []
+    cat_profile = payload.get("cat_profile") or {}
+    if not isinstance(context, dict):
+        raise ValueError("缺少大模型上下文。")
+
+    compare_app = _load_compare_app()
+    product_a = context.get("product_a", {})
+    product_b = context.get("product_b", {})
+    current_product_name = _compact_product_name(product_a, "当前粮")
+    target_product_name = _compact_product_name(product_b, "目标粮")
+    rule_scenarios = _build_change_food_rule_scenarios(context, cat_profile)
+    expected_ids = [row["id"] for row in rule_scenarios]
+    _, base_input_hash = _summary_cache_key(context, friendly_rows)
+    input_hash = task_store.stable_hash({
+        "base_input_hash": base_input_hash,
+        "cat_profile": cat_profile,
+        "rule_scenarios": rule_scenarios,
+    })
+    cache_key = f"{SUMMARY_PROMPT_VERSION}:{input_hash}"
+    cached = task_store.get_cached_llm_result(cache_key)
+    if cached:
+        try:
+            cached_value = _validate_ai_generated_advice(
+                json.loads(cached["result_text"]),
+                expected_ids,
+            )
+            return _assemble_change_food_advice(
+                rule_scenarios,
+                cached_value,
+                True,
+                cache_key,
+                current_product_name,
+                target_product_name,
+            )
+        except (TypeError, ValueError, json.JSONDecodeError):
+            pass
+
+    prompt_context = {
+        "currentFood": {
+            "name": current_product_name,
+            "scores": _score_map(context, "product_a"),
+            "risks": _extract_risk_tags(context).get("current_food"),
+        },
+        "targetFood": {
+            "name": target_product_name,
+            "scores": _score_map(context, "product_b"),
+            "risks": _extract_risk_tags(context).get("target_food"),
+        },
+        "catProfile": cat_profile,
+        "ruleScenarios": rule_scenarios,
+    }
+    system_prompt = """
+你是猫粮换粮建议文案助手。规则层已经固定提供场景标题、推荐标签、匹配条件和指标证据。
+你只能为每个场景生成 subtitle、reasonSummary、caution、extraReason、warningSignal。
+不得生成或改写 title、recommendationLabel、matchConditions、reasonEvidence、tone。
+严格基于输入证据；不得诊断，不得承诺改善，不得编造原料、口碑、适口性或临床结论。
+subtitle 为一句条件式结论；reasonSummary 解释指标变化；caution 给出换粮注意事项。
+只有确有额外谨慎依据时填写 extraReason，否则为 null。
+只有需要用户暂停换粮或咨询兽医的可观察异常时填写 warningSignal，否则为 null。
+敏感换粮场景应给出明确警示信号；日常稳定场景通常不需要 warningSignal。
+文案中必须直接使用输入提供的完整产品名称，禁止使用“目标粮”“对比粮”“当前粮”“产品A”“产品B”等占位称呼。
+只输出合法 JSON，不要 Markdown。输出必须严格符合提供的 JSON Schema。
+""".strip()
+    completion = compare_app.get_qwen_client().chat.completions.create(
+        model=compare_app.QWEN_CONFIG["model"],
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {
+                "role": "user",
+                "content": json.dumps(
+                    {"jsonSchema": CHANGE_FOOD_ADVICE_SCHEMA, "input": prompt_context},
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+            },
+        ],
+        temperature=min(compare_app.QWEN_CONFIG["temperature"], 0.3),
+        max_tokens=1400,
+    )
+    ai_generated = _validate_ai_generated_advice(
+        _extract_json_object(completion.choices[0].message.content or ""),
+        expected_ids,
+    )
+    task_store.store_llm_result(
+        cache_key=cache_key,
+        task_type="compare_summary",
+        model=compare_app.QWEN_CONFIG["model"],
+        prompt_version=SUMMARY_PROMPT_VERSION,
+        input_hash=input_hash,
+        result_text=json.dumps(ai_generated, ensure_ascii=False),
+    )
+    return _assemble_change_food_advice(
+        rule_scenarios,
+        ai_generated,
+        False,
+        cache_key,
+        current_product_name,
+        target_product_name,
+    )
+
+
+def _replace_advice_product_placeholders(
+    value: str | None,
+    current_product_name: str,
+    target_product_name: str,
+) -> str | None:
+    if value is None:
+        return None
+    cleaned = value
+    replacements = (
+        ("目标猫粮", target_product_name),
+        ("目标粮", target_product_name),
+        ("对比猫粮", target_product_name),
+        ("对比粮", target_product_name),
+        ("产品B", target_product_name),
+        ("产品 B", target_product_name),
+        ("当前猫粮", current_product_name),
+        ("当前粮", current_product_name),
+        ("产品A", current_product_name),
+        ("产品 A", current_product_name),
+    )
+    for placeholder, product_name in replacements:
+        cleaned = cleaned.replace(placeholder, product_name)
+    return cleaned
+
+
+def _assemble_change_food_advice(
+    rule_scenarios: list[dict[str, Any]],
+    ai_generated: dict,
+    cached: bool,
+    cache_key: str,
+    current_product_name: str,
+    target_product_name: str,
+) -> dict:
+    generated_by_id = {row["id"]: row for row in ai_generated["scenarios"]}
+    scenarios = []
+    for rule_row in rule_scenarios:
+        public_rule = {key: value for key, value in rule_row.items() if key != "ruleFacts"}
+        generated_row = generated_by_id[rule_row["id"]]
+        normalized_generated_row = {
+            key: _replace_advice_product_placeholders(value, current_product_name, target_product_name)
+            if key in {"subtitle", "reasonSummary", "caution", "extraReason", "warningSignal"}
+            else value
+            for key, value in generated_row.items()
+        }
+        scenarios.append({**public_rule, **normalized_generated_row})
+    return {
+        "advice": {
+            "scenarios": scenarios,
+            "transitionPlan": [
+                {"period": "第1–3天", "newFoodPercent": 25, "oldFoodPercent": 75},
+                {"period": "第4–6天", "newFoodPercent": 50, "oldFoodPercent": 50},
+                {"period": "第7–9天", "newFoodPercent": 75, "oldFoodPercent": 25},
+                {"period": "第10天及以后", "newFoodPercent": 100, "oldFoodPercent": 0},
+            ],
+            "disclaimer": "以上建议基于配方分析与风险标签，仅供换粮决策参考，不替代专业兽医诊断。",
+        },
+        "cached": cached,
+        "cache_key": cache_key,
+    }
+
+
 def _parse_uploaded_image_task(task_id: str, image_id: str) -> None:
     try:
         task_store.set_task_state(task_id, status="running", progress=20)
@@ -1365,6 +1724,10 @@ def create_app() -> Flask:
     def vite_assets(filename: str):
         return send_from_directory(DIST_DIR / "assets", filename)
 
+    @flask_app.get("/products/<path:filename>")
+    def product_assets(filename: str):
+        return send_from_directory(DIST_DIR / "products", filename)
+
     @flask_app.get("/workbench.html")
     def workbench_html():
         return send_from_directory(WEB_DIR, "index.html")
@@ -1424,6 +1787,8 @@ def create_app() -> Flask:
         task = task_store.get_task(task_id)
         if not task:
             return _json_error("任务不存在。", 404)
+        if request.content_length and request.content_length > 11 * 1024 * 1024:
+            return _json_error("图片大小不能超过 10MB。", 413)
         image_file = request.files.get("image")
         if not image_file or not image_file.filename:
             return _json_error("请上传图片文件。")
@@ -1433,6 +1798,10 @@ def create_app() -> Flask:
 
         brand_name = str(request.form.get("brand_name") or "").strip()
         product_name = str(request.form.get("product_name") or "").strip()
+        if not brand_name:
+            return _json_error("请填写品牌名。")
+        if not product_name:
+            return _json_error("请填写产品名。")
         filename = _build_uploaded_image_filename(product_name, image_file.filename)
         image_dir = task_store.UPLOAD_DIR / task_id
         image_dir.mkdir(parents=True, exist_ok=True)

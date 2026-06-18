@@ -113,6 +113,8 @@ FAT_SOURCE_RULES = [
     {"pattern": r"猪油|猪脂", "source": "猪油", "type": "动物脂肪"},
     {"pattern": r"鱼油|海洋鱼油|深海鱼油", "source": "鱼油", "type": "动物脂肪"},
     {"pattern": r"三文鱼油|鲑鱼油", "source": "三文鱼油", "type": "动物脂肪"},
+    {"pattern": r"磷虾油|虾油", "source": "磷虾油", "type": "动物脂肪"},
+    {"pattern": r"磷虾粉", "source": "磷虾粉", "type": "动物脂肪"},
 
     # 藻类/植物脂肪
     {"pattern": r"海藻油", "source": "海藻油", "type": "藻类/植物脂肪"},
@@ -189,9 +191,11 @@ OMEGA3_RULES = [
     # 明确脂肪型
     {"pattern": r"鱼油|海洋鱼油|深海鱼油", "source": "鱼油", "strength": "明确脂肪型omega-3"},
     {"pattern": r"三文鱼油|鲑鱼油", "source": "三文鱼油", "strength": "明确脂肪型omega-3"},
+    {"pattern": r"磷虾油|虾油", "source": "磷虾油", "strength": "明确脂肪型omega-3"},
     {"pattern": r"海藻油", "source": "海藻油", "strength": "明确脂肪型omega-3"},
 
     # 鱼类原料型
+    {"pattern": r"磷虾粉|磷虾", "source": "磷虾", "strength": "鱼类原料型omega-3"},
     {"pattern": r"鲱鱼|鲱鱼粉", "source": "鲱鱼", "strength": "鱼类原料型omega-3"},
     {"pattern": r"沙丁鱼|沙丁鱼粉", "source": "沙丁鱼", "strength": "鱼类原料型omega-3"},
     {"pattern": r"鲭鱼|鲭鱼粉", "source": "鲭鱼", "strength": "鱼类原料型omega-3"},

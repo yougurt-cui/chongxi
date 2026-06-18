@@ -182,6 +182,7 @@ def _encode_image_for_qwen(
     *,
     max_edge: int = DEFAULT_QWEN_MAX_IMAGE_EDGE,
     max_bytes: int = DEFAULT_QWEN_MAX_IMAGE_BYTES,
+    force_jpeg: bool = False,
 ) -> tuple[str, str]:
     """Return a compact data URL for Qwen OCR while preserving the original file hash."""
     raw = image_path.read_bytes()
@@ -189,7 +190,13 @@ def _encode_image_for_qwen(
     mime, _ = mimetypes.guess_type(str(image_path))
     mime = mime or "image/jpeg"
 
-    if len(raw) <= max_bytes and mime.lower() in {"image/jpeg", "image/png", "image/webp"}:
+    # Qwen can return empty OCR for some valid PNGs, especially 16-bit screenshots.
+    # Send JPEGs as-is, but normalize other image formats through Pillow.
+    if (
+        not force_jpeg
+        and len(raw) <= max_bytes
+        and mime.lower() in {"image/jpeg", "image/jpg"}
+    ):
         b64 = base64.b64encode(raw).decode("ascii")
         return f"data:{mime};base64,{b64}", original_sha256
 
@@ -339,87 +346,106 @@ def _call_qwen_ocr(
     image_path: Path,
     qwen_cfg: Dict[str, Any],
 ) -> Dict[str, Any]:
-    data_url, _ = _encode_image_for_qwen(
-        image_path,
-        max_edge=int(qwen_cfg.get("max_image_edge") or DEFAULT_QWEN_MAX_IMAGE_EDGE),
-        max_bytes=int(qwen_cfg.get("max_image_bytes") or DEFAULT_QWEN_MAX_IMAGE_BYTES),
-    )
-    payload = {
-        "model": qwen_cfg["model"],
-        "temperature": 0,
-        "messages": [
-            {
-                "role": "system",
-                "content": "你是 OCR 引擎，只返回图片里的文字，不要解释。",
-            },
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": "请提取图片中的全部可见文字，按阅读顺序原样输出。"},
-                    {"type": "image_url", "image_url": {"url": data_url}},
-                ],
-            },
-        ],
-    }
-    req_body = safe_json_dumps(payload).encode("utf-8")
     start = now_ms()
     max_attempts = int(qwen_cfg.get("max_attempts") or DEFAULT_QWEN_MAX_ATTEMPTS)
-    last_exc: Optional[BaseException] = None
-    raw_text = ""
-    for attempt in range(1, max_attempts + 1):
-        req = Request(
-            qwen_cfg["endpoint"],
-            data=req_body,
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {qwen_cfg['api_key']}",
-                "User-Agent": "csv-mysql-labeling/qwen-ocr",
-            },
-            method="POST",
+    max_edge = int(qwen_cfg.get("max_image_edge") or DEFAULT_QWEN_MAX_IMAGE_EDGE)
+    max_bytes = int(qwen_cfg.get("max_image_bytes") or DEFAULT_QWEN_MAX_IMAGE_BYTES)
+
+    def _request_once(*, force_jpeg: bool) -> Dict[str, Any]:
+        data_url, _ = _encode_image_for_qwen(
+            image_path,
+            max_edge=max_edge,
+            max_bytes=max_bytes,
+            force_jpeg=force_jpeg,
         )
-        try:
-            with urlopen(req, timeout=float(qwen_cfg["timeout_seconds"])) as resp:
-                raw_text = resp.read().decode("utf-8", errors="ignore")
-            break
-        except HTTPError as exc:
-            detail = exc.read().decode("utf-8", errors="ignore")
-            if exc.code < 500 or attempt >= max_attempts:
-                raise RuntimeError(f"Qwen OCR HTTP {exc.code}: {detail or exc.reason}") from exc
-            last_exc = exc
-        except (URLError, TimeoutError, OSError) as exc:
-            if attempt >= max_attempts:
-                raise RuntimeError(f"Qwen OCR network error: {exc}") from exc
-            last_exc = exc
-        time.sleep(min(8, 2 ** (attempt - 1)))
-    else:
-        raise RuntimeError(f"Qwen OCR network error: {last_exc}")
+        payload = {
+            "model": qwen_cfg["model"],
+            "temperature": 0,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": "你是 OCR 引擎，只返回图片里的文字，不要解释。",
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "请提取图片中的全部可见文字，按阅读顺序原样输出。"},
+                        {"type": "image_url", "image_url": {"url": data_url}},
+                    ],
+                },
+            ],
+        }
+        req_body = safe_json_dumps(payload).encode("utf-8")
+        last_exc: Optional[BaseException] = None
+        raw_text = ""
+        for attempt in range(1, max_attempts + 1):
+            req = Request(
+                qwen_cfg["endpoint"],
+                data=req_body,
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {qwen_cfg['api_key']}",
+                    "User-Agent": "csv-mysql-labeling/qwen-ocr",
+                },
+                method="POST",
+            )
+            try:
+                with urlopen(req, timeout=float(qwen_cfg["timeout_seconds"])) as resp:
+                    raw_text = resp.read().decode("utf-8", errors="ignore")
+                break
+            except HTTPError as exc:
+                detail = exc.read().decode("utf-8", errors="ignore")
+                if exc.code < 500 or attempt >= max_attempts:
+                    raise RuntimeError(f"Qwen OCR HTTP {exc.code}: {detail or exc.reason}") from exc
+                last_exc = exc
+            except (URLError, TimeoutError, OSError) as exc:
+                if attempt >= max_attempts:
+                    raise RuntimeError(f"Qwen OCR network error: {exc}") from exc
+                last_exc = exc
+            time.sleep(min(8, 2 ** (attempt - 1)))
+        else:
+            raise RuntimeError(f"Qwen OCR network error: {last_exc}")
 
-    obj = safe_json_loads(raw_text)
-    if not isinstance(obj, dict):
-        raise ValueError("Qwen OCR response is not a JSON object")
-    if obj.get("error"):
-        err = obj.get("error")
-        if isinstance(err, dict):
-            raise RuntimeError(str(err.get("message") or err.get("code") or err))
-        raise RuntimeError(str(err))
+        obj = safe_json_loads(raw_text)
+        if not isinstance(obj, dict):
+            raise ValueError("Qwen OCR response is not a JSON object")
+        if obj.get("error"):
+            err = obj.get("error")
+            if isinstance(err, dict):
+                raise RuntimeError(str(err.get("message") or err.get("code") or err))
+            raise RuntimeError(str(err))
 
-    choices = obj.get("choices") or []
-    if not choices:
-        raise RuntimeError("Qwen OCR response missing choices")
-    msg = (choices[0] or {}).get("message") or {}
-    full_text = _strip_code_fence(_extract_content_text(msg.get("content")))
+        choices = obj.get("choices") or []
+        if not choices:
+            raise RuntimeError("Qwen OCR response missing choices")
+        msg = (choices[0] or {}).get("message") or {}
+        full_text = _strip_code_fence(_extract_content_text(msg.get("content")))
+        return {
+            "full_text": full_text,
+            "model_name": str(obj.get("model") or qwen_cfg["model"]),
+            "force_jpeg": force_jpeg,
+        }
+
+    parsed = _request_once(force_jpeg=False)
+    if not str(parsed.get("full_text") or "").strip():
+        parsed = _request_once(force_jpeg=True)
+
+    full_text = str(parsed.get("full_text") or "").strip()
     lines = [ln.strip() for ln in full_text.splitlines() if ln.strip()]
+    notes = "provider=qwen"
+    if parsed.get("force_jpeg"):
+        notes = f"{notes};force_jpeg_retry=1"
     model_json = {
         "full_text": full_text,
         "lines": lines,
         "language_hint": None,
-        "notes": "provider=qwen",
+        "notes": notes,
         "provider": "qwen",
     }
     return {
         "text": safe_json_dumps(model_json),
         "latency_ms": now_ms() - start,
-        "model_name": str(obj.get("model") or qwen_cfg["model"]),
+        "model_name": str(parsed.get("model_name") or qwen_cfg["model"]),
     }
 
 

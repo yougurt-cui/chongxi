@@ -5,7 +5,13 @@ from datetime import datetime
 import pandas as pd
 from sqlalchemy import bindparam, create_engine, text
 
-from brand_normalizer import GENERIC_BRAND_VALUES, build_product_key, correct_brand
+from brand_normalizer import (
+    GENERIC_BRAND_VALUES,
+    build_product_key,
+    canonicalize_brand,
+    correct_brand,
+    is_generic_brand,
+)
 
 
 DB_USER = os.getenv("MYSQL_USER", "root")
@@ -127,6 +133,13 @@ def numeric_series(frame, column_name):
     return pd.to_numeric(frame[column_name], errors="coerce").fillna(0.0)
 
 
+def resolve_sku_brand(brand_name, sku_name):
+    brand = canonicalize_brand(brand_name)
+    if brand and not is_generic_brand(brand):
+        return brand
+    return correct_brand(brand, sku_name)
+
+
 def build_feature_rows(wide_df, *, feature_version, data_type):
     rows = pd.DataFrame(
         {
@@ -148,7 +161,7 @@ def build_feature_rows(wide_df, *, feature_version, data_type):
         }
     )
     corrected_brand = rows.apply(
-        lambda row: correct_brand(row.get("brand_name"), row.get("sku_name")),
+        lambda row: resolve_sku_brand(row.get("brand_name"), row.get("sku_name")),
         axis=1,
     )
     rows["brand_name"] = corrected_brand

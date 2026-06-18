@@ -6,7 +6,11 @@ export default {
     "./vendor/csv_mysql_labeling/config/**/*.{js,jsx,ts,tsx}",
   ],
   theme: {
-    extend: {},
+    extend: {
+      fontFamily: {
+        sans: ["var(--font-family-base)"],
+      },
+    },
   },
   plugins: [],
 };

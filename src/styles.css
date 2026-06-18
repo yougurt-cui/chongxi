@@ -2,6 +2,63 @@
 @tailwind components;
 @tailwind utilities;
 
+:root {
+  --font-family-base: Inter, "PingFang SC", "Microsoft YaHei", sans-serif;
+
+  --text-primary: #172033;
+  --text-secondary: #4b5563;
+  --text-tertiary: #7a8499;
+  --text-placeholder: #a0a8ba;
+
+  --font-xs: 12px;
+  --font-sm: 13px;
+  --font-base: 14px;
+  --font-md: 16px;
+  --font-lg: 18px;
+  --font-xl: 24px;
+  --font-logo: 32px;
+
+  --weight-regular: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+  --weight-bold: 700;
+  --weight-heavy: 800;
+}
+
+html {
+  font-family: var(--font-family-base);
+  color: var(--text-primary);
+}
+
 body {
   margin: 0;
+  font-family: inherit;
+  font-size: var(--font-base);
+  font-weight: var(--weight-regular);
+  color: var(--text-primary);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: var(--text-placeholder);
+  opacity: 1;
+}
+
+.scrollbar-none {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.scrollbar-none::-webkit-scrollbar {
+  display: none;
 }
