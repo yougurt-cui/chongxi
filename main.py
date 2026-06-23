@@ -22,6 +22,7 @@ if str(BASE_DIR) not in sys.path:
 
 try:
     from .api.consumer_api import consumer_api
+    from .api.catfood_standardization_api import catfood_standardization_api
     from .api.exception_api import exception_api
     from .api.orchestrator_api import orchestrator_api
     from .api.pipeline_api import pipeline_api
@@ -32,6 +33,7 @@ try:
     from .api.taobao_sku_api import taobao_sku_api
 except ImportError:
     from api.consumer_api import consumer_api
+    from api.catfood_standardization_api import catfood_standardization_api
     from api.exception_api import exception_api
     from api.orchestrator_api import orchestrator_api
     from api.pipeline_api import pipeline_api
@@ -1697,6 +1699,7 @@ def _build_recommendation_response(payload: dict[str, Any]) -> dict[str, Any]:
 def create_app() -> Flask:
     flask_app = Flask(__name__)
     flask_app.register_blueprint(consumer_api)
+    flask_app.register_blueprint(catfood_standardization_api)
     flask_app.register_blueprint(exception_api)
     flask_app.register_blueprint(orchestrator_api)
     flask_app.register_blueprint(pipeline_api)
@@ -1742,7 +1745,11 @@ def create_app() -> Flask:
 
     @flask_app.get("/pipeline-review.html")
     def pipeline_review_html():
-        return send_from_directory(WEB_DIR, "pipeline-review.html")
+        response = send_from_directory(WEB_DIR, "pipeline-review.html")
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+        return response
 
     @flask_app.get("/formula-clue-analysis.html")
     def formula_clue_analysis_html():

@@ -326,6 +326,44 @@
       word-break: break-word;
       line-height: 1.55;
     }
+    .product-review-table {
+      min-width: 1180px;
+      table-layout: fixed;
+    }
+    .product-review-table th,
+    .product-review-table td {
+      padding: 8px 6px;
+    }
+    .product-review-table th:nth-child(1) { width: 54px; }
+    .product-review-table th:nth-child(2) { width: 150px; }
+    .product-review-table th:nth-child(3) { width: 125px; }
+    .product-review-table th:nth-child(4) { width: 230px; }
+    .product-review-table th:nth-child(5) { width: 165px; }
+    .product-review-table th:nth-child(6) { width: 145px; }
+    .product-review-table th:nth-child(7) { width: 82px; }
+    .product-review-table th:nth-child(8) { width: 174px; }
+    .product-review-table .image-name-cell {
+      overflow-wrap: anywhere;
+      word-break: break-word;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.4;
+    }
+    .product-review-table .cell-input {
+      min-width: 0;
+      width: 100%;
+      padding: 7px 8px;
+    }
+    .product-review-table .row-actions {
+      min-width: 0;
+      gap: 5px;
+      flex-wrap: nowrap;
+    }
+    .product-review-table .small-button {
+      min-height: 30px;
+      padding: 0 7px;
+      font-size: 11px;
+    }
     .section[hidden] { display: none; }
     textarea { min-height: 172px; resize: vertical; line-height: 1.55; }
     .actions {
@@ -443,6 +481,39 @@
     </section>
 
     <section id="identitySection" class="section" hidden>
+      <section class="tabs" aria-label="身份认证类型">
+        <button id="brandIdentityTab" class="tab active" type="button">品牌身份</button>
+        <button id="productIdentityTab" class="tab" type="button">产品身份</button>
+      </section>
+
+      <div id="brandIdentityPanel">
+      <section class="toolbar">
+        <div>
+          <div class="title">待确认标准品牌候选</div>
+          <div id="brandCandidateSummary" class="muted">等待初始化...</div>
+        </div>
+        <button id="brandCandidateRefresh" class="button secondary" type="button">初始化品牌候选</button>
+      </section>
+
+      <section class="card" style="margin-bottom:18px;">
+        <div class="table-wrap">
+          <table style="min-width:900px;">
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>待确认品牌</th>
+                <th>出现产品数</th>
+                <th>标准品牌</th>
+                <th>产地分类</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody id="brandCandidateRows"></tbody>
+          </table>
+        </div>
+        <div id="brandCandidateEmpty" class="empty" style="display:none;">暂无待确认品牌候选。</div>
+      </section>
+
       <section class="toolbar">
         <div>
           <div class="title">待确认品牌身份</div>
@@ -460,7 +531,7 @@
                 <th>图片</th>
                 <th>当前身份</th>
                 <th>修正品牌</th>
-                <th>修正产品名</th>
+                <th>OCR 产品参考</th>
                 <th>原料摘要</th>
                 <th>更新时间</th>
                 <th>操作</th>
@@ -471,6 +542,67 @@
         </div>
         <div id="identityEmpty" class="empty" style="display:none;">暂无需要确认身份的数据。</div>
       </section>
+      </div>
+
+      <div id="productIdentityPanel" hidden>
+        <section class="toolbar">
+          <div>
+            <div class="title">标准产品候选认证</div>
+            <div id="productIdentitySummary" class="muted">等待加载...</div>
+          </div>
+          <button id="productIdentityRefresh" class="button secondary" type="button">刷新产品候选</button>
+        </section>
+
+        <section class="filters" aria-label="产品候选筛选">
+          <label>
+            <span class="field-label">审核状态</span>
+            <select id="productStatusFilter">
+              <option value="needs_manual_review,pending">待审核</option>
+              <option value="approved">已通过</option>
+              <option value="rejected">已驳回</option>
+              <option value="">全部</option>
+            </select>
+          </label>
+          <label>
+            <span class="field-label">质量</span>
+            <select id="productQualityFilter">
+              <option value="">全部</option>
+              <option value="strong">strong</option>
+              <option value="medium">medium</option>
+              <option value="weak">weak</option>
+              <option value="invalid">invalid</option>
+            </select>
+          </label>
+          <label>
+            <span class="field-label">品牌</span>
+            <input id="productBrandFilter" placeholder="品牌关键词" />
+          </label>
+          <div class="row-actions">
+            <button id="productApplyFilter" class="button" type="button">筛选</button>
+          </div>
+        </section>
+
+        <section class="card">
+          <div class="table-wrap">
+            <table class="product-review-table">
+              <thead>
+                <tr>
+                  <th>ID</th>
+                  <th>图片名称</th>
+                  <th>标准品牌</th>
+                  <th>标准产品名</th>
+                  <th>display_name</th>
+                  <th>subtitle</th>
+                  <th>质量</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody id="productIdentityRows"></tbody>
+            </table>
+          </div>
+          <div id="productIdentityEmpty" class="empty" style="display:none;">暂无产品候选。</div>
+        </section>
+      </div>
     </section>
 
     <section id="diseaseSection" class="section" hidden>
@@ -537,6 +669,7 @@
     </section>
 
     <datalist id="diseaseBrandOptions"></datalist>
+    <datalist id="standardBrandOptions"></datalist>
     <datalist id="diseaseCategoryOptions"></datalist>
     <datalist id="diseaseSymptomOptions"></datalist>
 
@@ -594,6 +727,23 @@
     const identityEmptyEl = document.getElementById("identityEmpty");
     const identitySummaryEl = document.getElementById("identitySummary");
     const identityRefreshBtn = document.getElementById("identityRefresh");
+    const brandIdentityTab = document.getElementById("brandIdentityTab");
+    const productIdentityTab = document.getElementById("productIdentityTab");
+    const brandIdentityPanel = document.getElementById("brandIdentityPanel");
+    const brandCandidateRows = document.getElementById("brandCandidateRows");
+    const brandCandidateEmpty = document.getElementById("brandCandidateEmpty");
+    const brandCandidateSummary = document.getElementById("brandCandidateSummary");
+    const brandCandidateRefresh = document.getElementById("brandCandidateRefresh");
+    const productIdentityPanel = document.getElementById("productIdentityPanel");
+    const productIdentityRowsEl = document.getElementById("productIdentityRows");
+    const productIdentityEmptyEl = document.getElementById("productIdentityEmpty");
+    const productIdentitySummaryEl = document.getElementById("productIdentitySummary");
+    const productIdentityRefreshBtn = document.getElementById("productIdentityRefresh");
+    const productStatusFilter = document.getElementById("productStatusFilter");
+    const productQualityFilter = document.getElementById("productQualityFilter");
+    const productBrandFilter = document.getElementById("productBrandFilter");
+    const productApplyFilter = document.getElementById("productApplyFilter");
+    const standardBrandOptions = document.getElementById("standardBrandOptions");
     const diseaseRowsEl = document.getElementById("diseaseRows");
     const diseaseEmptyEl = document.getElementById("diseaseEmpty");
     const diseaseSummaryEl = document.getElementById("diseaseSummary");
@@ -612,6 +762,7 @@
     const diseasePageInfo = document.getElementById("diseasePageInfo");
     let activeOcrItem = null;
     let activeTab = "node";
+    let activeIdentityTab = "brand";
     const diseasePageSize = 100;
     let diseaseOffset = 0;
     let diseaseTotal = 0;
@@ -769,7 +920,7 @@
             <div class="muted" style="margin-top:8px;">${escapeHtml(item.old_product_key || "-")}</div>
           </td>
           <td><input class="cell-input" data-field="brand" data-key="${escapeHtml(rowKey)}" value="${escapeHtml(item.suggested_brand || "")}" placeholder="正确品牌" /></td>
-          <td><input class="cell-input" data-field="product_name" data-key="${escapeHtml(rowKey)}" value="${escapeHtml(item.suggested_product_name || "")}" placeholder="正确产品名" /></td>
+          <td><input class="cell-input" data-field="product_name" data-key="${escapeHtml(rowKey)}" value="${escapeHtml(item.product_name || item.suggested_product_name || "")}" disabled title="原始 OCR 产品名不回写；请在产品身份页完成标准产品认证" /></td>
           <td class="payload-cell">${escapeHtml(compactText(item.ingredient_composition))}</td>
           <td class="muted">${escapeHtml(item.updated_ts || item.created_ts || "-")}</td>
           <td>
@@ -788,34 +939,186 @@
 
         row.querySelector('[data-action="confirm-identity"]').addEventListener("click", async () => {
           const brand = row.querySelector('[data-field="brand"]').value.trim();
-          const productName = row.querySelector('[data-field="product_name"]').value.trim();
-          if (!brand || !productName) {
-            showToast("品牌和产品名都需要填写", "error");
+          if (!brand) {
+            showToast("标准品牌需要填写", "error");
             return;
           }
-          if (!window.confirm(`确认把该图身份修正为：${brand}｜${productName}？`)) {
+          if (!window.confirm(`确认把该上传记录映射到标准品牌：${brand}？原始 OCR 数据不会被修改。`)) {
             return;
           }
           await runAction(async () => {
-            const result = await api("/api/product-identity/corrections", {
+            const result = await api("/api/catfood/standardization/brand/resolve", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({
                 source_id: item.source_id,
-                parsed_row_id: item.parsed_row_id,
-                brand,
-                product_name: productName,
+                standard_brand_name: brand,
                 reviewer: "pipeline-review-page",
-                reason: "brand身份认证页面确认修正",
+                review_note: "brand身份认证页面确认标准品牌映射",
               }),
             });
-            const csvRows = (result.updates?.csv_labeling || []).reduce((sum, x) => sum + (x.updated_rows || 0), 0);
-            const featureRows = (result.updates?.feature || []).reduce((sum, x) => sum + (x.updated_rows || 0), 0);
-            showToast(`身份已修正，csv ${csvRows} 行，feature ${featureRows} 行`);
+            showToast(`品牌映射已确认：brand_id=${result.brand_id}`);
           });
         });
 
         identityRowsEl.appendChild(row);
+      });
+    }
+
+    function renderBrandCandidates(data) {
+      const items = data.items || [];
+      brandCandidateSummary.textContent = `待确认 ${data.status_counts?.pending || 0} 条`;
+      brandCandidateRows.innerHTML = "";
+      brandCandidateEmpty.style.display = items.length ? "none" : "block";
+      items.forEach((item) => {
+        const row = document.createElement("tr");
+        row.innerHTML = `
+          <td class="task-id">${escapeHtml(item.candidate_id)}</td>
+          <td><strong>${escapeHtml(item.raw_brand_name)}</strong></td>
+          <td>${escapeHtml(item.occurrence_count || 0)}</td>
+          <td><input class="cell-input" data-field="brand_name" list="standardBrandOptions" value="${escapeHtml(item.raw_brand_name)}" /></td>
+          <td>
+            <select class="cell-input" data-field="origin_type">
+              <option value="">已有品牌映射时无需选择</option>
+              <option value="国产品牌">国产品牌</option>
+              <option value="进口/国际品牌">进口/国际品牌</option>
+            </select>
+          </td>
+          <td>
+            <div class="row-actions">
+              <button class="small-button" data-action="map" type="button">映射已有品牌</button>
+              <button class="small-button secondary" data-action="create" type="button">创建标准品牌</button>
+              <button class="small-button danger" data-action="reject" type="button">驳回</button>
+            </div>
+          </td>
+        `;
+        ["map", "create", "reject"].forEach((action) => {
+          row.querySelector(`[data-action="${action}"]`).addEventListener("click", async () => {
+            const brandName = row.querySelector('[data-field="brand_name"]').value.trim();
+            const originType = row.querySelector('[data-field="origin_type"]').value;
+            if (action !== "reject" && !brandName) {
+              showToast("标准品牌不能为空", "error");
+              return;
+            }
+            if (action === "create" && !originType) {
+              showToast("创建品牌必须选择国产或进口分类", "error");
+              return;
+            }
+            if (!window.confirm(`${action === "map" ? "映射" : action === "create" ? "创建" : "驳回"}品牌候选“${item.raw_brand_name}”？`)) return;
+            await runAction(async () => {
+              await api(`/api/catfood/standardization/brand-candidates/${item.candidate_id}/${action}`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  standard_brand_name: brandName,
+                  origin_type: originType,
+                  reviewer: "pipeline-review-page",
+                }),
+              });
+              showToast("品牌候选已处理");
+            });
+          });
+        });
+        brandCandidateRows.appendChild(row);
+      });
+    }
+
+    async function loadBrandCandidates({ initialize = false } = {}) {
+      brandCandidateRefresh.disabled = true;
+      try {
+        if (initialize) {
+          await api("/api/catfood/standardization/brand-candidates/init", { method: "POST" });
+        }
+        const data = await api("/api/catfood/standardization/brand-candidates?status=pending&limit=200");
+        renderBrandCandidates(data);
+      } catch (error) {
+        showToast(error instanceof Error ? error.message : "品牌候选加载失败", "error");
+      } finally {
+        brandCandidateRefresh.disabled = false;
+      }
+    }
+
+    function productStatusSummary(counts = {}) {
+      return `待人工 ${counts.needs_manual_review || 0}｜待处理 ${counts.pending || 0}｜已通过 ${counts.approved || 0}｜已驳回 ${counts.rejected || 0}`;
+    }
+
+    function renderProductIdentityItems(data) {
+      const items = data.items || [];
+      productIdentitySummaryEl.textContent = `${productStatusSummary(data.status_counts)}｜筛选结果 ${data.total || 0} 条`;
+      productIdentityRowsEl.innerHTML = "";
+      productIdentityEmptyEl.style.display = items.length ? "none" : "block";
+      items.forEach((item) => {
+        const row = document.createElement("tr");
+        row.innerHTML = `
+          <td>
+            <div class="task-id">${escapeHtml(item.product_id)}</div>
+          </td>
+          <td class="image-name-cell">${escapeHtml((item.image_names || []).join("、") || "-")}</td>
+          <td><input class="cell-input" data-field="standard_brand_name" list="standardBrandOptions" value="${escapeHtml(item.standard_brand_name || "")}" placeholder="选择标准品牌" /></td>
+          <td><input class="cell-input" data-field="standard_product_name" value="${escapeHtml(item.standard_product_name || "")}" /></td>
+          <td><input class="cell-input" data-field="display_name" value="${escapeHtml(item.display_name || "")}" placeholder="主展示名" /></td>
+          <td><input class="cell-input" data-field="display_subtitle" value="${escapeHtml(item.display_subtitle || "")}" placeholder="副标题" /></td>
+          <td>
+            <select class="cell-input" data-field="quality_level">
+              ${["strong","medium","weak"].map((value) => `<option value="${value}" ${item.quality_level === value ? "selected" : ""}>${value}</option>`).join("")}
+            </select>
+          </td>
+          <td>
+            <div class="row-actions">
+              <button class="small-button" data-action="approve-product" type="button">确认产品</button>
+              <button class="small-button danger" data-action="reject-product" type="button">驳回</button>
+              <button class="small-button secondary" data-action="product-output" type="button">详情</button>
+            </div>
+          </td>
+        `;
+
+        row.querySelector('[data-action="product-output"]').addEventListener("click", () => {
+          outputDialogMeta.textContent = `product_id ${item.product_id}｜${item.standard_brand_name || "-"}`;
+          outputJsonEl.textContent = safeJson(item);
+          outputDialog.showModal();
+        });
+
+        row.querySelector('[data-action="approve-product"]').addEventListener("click", async () => {
+          const payload = {
+            standard_brand_name: row.querySelector('[data-field="standard_brand_name"]').value.trim(),
+            standard_product_name: row.querySelector('[data-field="standard_product_name"]').value.trim(),
+            display_name: row.querySelector('[data-field="display_name"]').value.trim(),
+            display_subtitle: row.querySelector('[data-field="display_subtitle"]').value.trim(),
+            candidate_type: item.candidate_type || "unknown",
+            quality_level: row.querySelector('[data-field="quality_level"]').value,
+            normalized_tags: item.normalized_tags || [],
+            reviewer: "pipeline-review-page",
+          };
+          if (!payload.standard_brand_name || !payload.standard_product_name || !payload.display_name) {
+            showToast("标准品牌、标准产品名和 display_name 都需要填写", "error");
+            return;
+          }
+          if (!window.confirm(`确认产品：${payload.standard_brand_name}｜${payload.display_name}？`)) return;
+          await runAction(async () => {
+            await api(`/api/product-identity/product-reviews/${item.product_id}/approve`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(payload),
+            });
+            showToast("产品候选已确认");
+          });
+        });
+
+        row.querySelector('[data-action="reject-product"]').addEventListener("click", async () => {
+          if (!window.confirm("确认驳回该产品候选？")) return;
+          await runAction(async () => {
+            await api(`/api/product-identity/product-reviews/${item.product_id}/reject`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                reject_reason: "人工审核驳回",
+                review_note: "pipeline-review 产品身份认证",
+              }),
+            });
+            showToast("产品候选已驳回");
+          });
+        });
+        productIdentityRowsEl.appendChild(row);
       });
     }
 
@@ -968,7 +1271,12 @@
       try {
         await fn();
         if (activeTab === "identity") {
-          await loadIdentityItems();
+          if (activeIdentityTab === "product") {
+            await loadProductIdentityItems();
+          } else {
+            await loadBrandCandidates();
+            await loadIdentityItems();
+          }
         } else if (activeTab === "disease") {
           await loadDiseaseItems();
         } else {
@@ -1008,6 +1316,55 @@
         identityEmptyEl.textContent = error instanceof Error ? error.message : "扫描失败";
       } finally {
         identityRefreshBtn.disabled = false;
+      }
+    }
+
+    async function loadProductIdentityItems() {
+      productIdentityRefreshBtn.disabled = true;
+      productIdentitySummaryEl.textContent = "正在加载...";
+      const params = new URLSearchParams({
+        status: productStatusFilter.value,
+        quality: productQualityFilter.value,
+        brand: productBrandFilter.value.trim(),
+        limit: "200",
+        offset: "0",
+      });
+      try {
+        const data = await api(`/api/product-identity/product-reviews?${params.toString()}`);
+        renderProductIdentityItems(data);
+      } catch (error) {
+        productIdentitySummaryEl.textContent = "加载失败";
+        productIdentityRowsEl.innerHTML = "";
+        productIdentityEmptyEl.style.display = "block";
+        productIdentityEmptyEl.textContent = error instanceof Error ? error.message : "加载失败";
+      } finally {
+        productIdentityRefreshBtn.disabled = false;
+      }
+    }
+
+    async function loadStandardBrandOptions() {
+      try {
+        const data = await api("/api/catfood/standardization/brands?limit=500");
+        standardBrandOptions.innerHTML = (data.items || [])
+          .map((item) => `<option value="${escapeHtml(item.standard_brand_name)}">${escapeHtml(item.brand_id)}</option>`)
+          .join("");
+      } catch (error) {
+        showToast(error instanceof Error ? error.message : "标准品牌列表加载失败", "error");
+      }
+    }
+
+    function switchIdentityTab(tab) {
+      activeIdentityTab = tab;
+      brandIdentityTab.classList.toggle("active", tab === "brand");
+      productIdentityTab.classList.toggle("active", tab === "product");
+      brandIdentityPanel.hidden = tab !== "brand";
+      productIdentityPanel.hidden = tab !== "product";
+      if (tab === "product") {
+        if (!standardBrandOptions.children.length) loadStandardBrandOptions();
+        loadProductIdentityItems();
+      } else if (!identityRowsEl.children.length) {
+        loadBrandCandidates();
+        loadIdentityItems();
       }
     }
 
@@ -1142,7 +1499,11 @@
       identitySection.hidden = tab !== "identity";
       diseaseSection.hidden = tab !== "disease";
       if (tab === "identity" && !identityRowsEl.children.length) {
-        loadIdentityItems();
+        if (activeIdentityTab === "product") {
+          loadProductIdentityItems();
+        } else {
+          loadIdentityItems();
+        }
       }
       if (tab === "disease" && !diseaseRowsEl.children.length) {
         loadDiseaseOptions();
@@ -1171,6 +1532,14 @@
 
     refreshBtn.addEventListener("click", loadItems);
     identityRefreshBtn.addEventListener("click", loadIdentityItems);
+    brandCandidateRefresh.addEventListener("click", () => loadBrandCandidates({ initialize: true }));
+    productIdentityRefreshBtn.addEventListener("click", loadProductIdentityItems);
+    productApplyFilter.addEventListener("click", loadProductIdentityItems);
+    productBrandFilter.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") loadProductIdentityItems();
+    });
+    brandIdentityTab.addEventListener("click", () => switchIdentityTab("brand"));
+    productIdentityTab.addEventListener("click", () => switchIdentityTab("product"));
     diseaseRefreshBtn.addEventListener("click", loadDiseaseItems);
     diseaseBulkApproveBtn.addEventListener("click", bulkApproveDisease);
     diseaseBulkRejectBtn.addEventListener("click", bulkRejectDisease);

@@ -9,7 +9,9 @@ from services.product_identity_service import (
     init_identity_db,
     list_identity_corrections,
     list_identity_review_items,
+    list_product_candidate_reviews,
     lookup_identity,
+    review_product_candidate,
 )
 
 
@@ -62,6 +64,54 @@ def product_identity_create_correction():
     try:
         result = apply_identity_correction(payload)
         return jsonify(result), 200
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+
+
+@product_identity_api.get("/product-reviews")
+def product_candidate_reviews():
+    try:
+        return jsonify(
+            list_product_candidate_reviews(
+                status=str(request.args.get("status") or ""),
+                quality=str(request.args.get("quality") or ""),
+                brand=str(request.args.get("brand") or ""),
+                limit=int(request.args.get("limit") or 100),
+                offset=int(request.args.get("offset") or 0),
+            )
+        ), 200
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+
+
+@product_identity_api.post("/product-reviews/<int:product_id>/approve")
+def product_candidate_approve(product_id: int):
+    try:
+        return jsonify(
+            review_product_candidate(
+                product_id,
+                request.get_json(silent=True) or {},
+                action="approve",
+            )
+        ), 200
+    except KeyError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 404
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+
+
+@product_identity_api.post("/product-reviews/<int:product_id>/reject")
+def product_candidate_reject(product_id: int):
+    try:
+        return jsonify(
+            review_product_candidate(
+                product_id,
+                request.get_json(silent=True) or {},
+                action="reject",
+            )
+        ), 200
+    except KeyError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 404
     except Exception as exc:
         return jsonify({"ok": False, "error": str(exc)}), 400
 

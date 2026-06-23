@@ -145,8 +145,32 @@ PIPELINE_DEFINITIONS: dict[str, tuple[NodeDefinition, ...]] = {
             node_name="原料抽取",
             callable_path="services.orchestrator_service.noop_node",
             api=ApiRoute(method="POST", url="/api/consumer/features/engineer", timeout_seconds=300),
-            depends_on=("ocr_formula",),
+            depends_on=("formula_standardize",),
             priority=30,
+        ),
+        NodeDefinition(
+            node_code="brand_standardize",
+            node_name="品牌标准化",
+            callable_path="services.catfood_standardization_service.standardize_brand",
+            api=ApiRoute(method="POST", url="/api/catfood/standardization/brand", timeout_seconds=60),
+            depends_on=("ocr_formula",),
+            priority=21,
+        ),
+        NodeDefinition(
+            node_code="product_standardize",
+            node_name="产品标准化",
+            callable_path="services.catfood_standardization_service.standardize_product",
+            api=ApiRoute(method="POST", url="/api/catfood/standardization/product", timeout_seconds=60),
+            depends_on=("brand_standardize",),
+            priority=22,
+        ),
+        NodeDefinition(
+            node_code="formula_standardize",
+            node_name="配方标准化",
+            callable_path="services.catfood_standardization_service.standardize_formula",
+            api=ApiRoute(method="POST", url="/api/catfood/standardization/formula", timeout_seconds=60),
+            depends_on=("product_standardize",),
+            priority=23,
         ),
         NodeDefinition(
             node_code="ingredient_standardize",
@@ -993,6 +1017,23 @@ def output_check(node_code: str, output: dict[str, Any], task_payload: dict[str,
         return _check_upload(output, task_payload)
     if node_code == "ocr_formula":
         return _check_ocr_formula(output)
+    if node_code in {"brand_standardize", "product_standardize", "formula_standardize"}:
+        status_field = {
+            "brand_standardize": "brand_status",
+            "product_standardize": "product_status",
+            "formula_standardize": "formula_status",
+        }[node_code]
+        status = str(output.get(status_field) or "").strip()
+        if status == "matched":
+            return CheckResult(True, NODE_SUCCESS, f"{node_code} 匹配成功")
+        if status in {"pending", "conflict", "blocked"}:
+            return CheckResult(
+                False,
+                NODE_NEED_REVIEW,
+                str(output.get("reason") or f"{node_code} 状态: {status}"),
+                {"standardization_status": status},
+            )
+        return CheckResult(False, NODE_FAILED, f"{node_code} 返回未知状态: {status or 'empty'}")
     if node_code == "ingredient_extract":
         return _check_ingredient_extract(output)
     if node_code == "ingredient_standardize":
@@ -1372,17 +1413,24 @@ def build_node_input(task: dict[str, Any], node_def: NodeDefinition) -> dict[str
 
     if task["task_type"] == "catfood_image_analysis":
         if node_def.node_code == "ocr_formula":
+            image_path_value = payload.get("image_path")
+            image_path = Path(str(image_path_value)).expanduser() if image_path_value else None
             return {
                 "orchestrator_task_id": task["id"],
                 "orchestrator_node_code": node_def.node_code,
-                "image_path": payload.get("image_path"),
+                "image_path": str(image_path) if image_path else None,
+                "image_dir": str(image_path.parent) if image_path else None,
+                "image_glob": image_path.name if image_path else None,
                 "image_id": payload.get("image_id"),
                 "product_name": payload.get("product_name"),
                 "original_filename": payload.get("original_filename"),
-                "incremental_only": False,
+                "sha256": payload.get("sha256"),
+                "incremental_only": True,
+                "move_success_images": False,
             }
         if node_def.node_code == "ingredient_extract":
             ocr_output = _output_for(task, "ocr_formula")
+            formula_output = _output_for(task, "formula_standardize")
             return {
                 "orchestrator_task_id": task["id"],
                 "orchestrator_node_code": node_def.node_code,
@@ -1393,6 +1441,37 @@ def build_node_input(task: dict[str, Any], node_def: NodeDefinition) -> dict[str
                 "parsed_row_id": ocr_output.get("parsed_row_id"),
                 "ingredient_composition": ocr_output.get("ingredient_composition"),
                 "parsed": ocr_output.get("parsed"),
+                "brand_id": formula_output.get("brand_id"),
+                "product_id": formula_output.get("product_id"),
+                "formula_id": formula_output.get("formula_id"),
+            }
+        if node_def.node_code == "brand_standardize":
+            ocr_output = _output_for(task, "ocr_formula")
+            return {
+                "orchestrator_task_id": task["id"],
+                "orchestrator_node_code": node_def.node_code,
+                "source_id": ocr_output.get("source_id"),
+                "parsed_row_id": ocr_output.get("parsed_row_id"),
+                "file_sha256": ocr_output.get("file_sha256"),
+                "image_id": payload.get("image_id"),
+                "brand_name": payload.get("brand_name"),
+            }
+        if node_def.node_code == "product_standardize":
+            brand_output = _output_for(task, "brand_standardize")
+            return {
+                "orchestrator_task_id": task["id"],
+                "orchestrator_node_code": node_def.node_code,
+                "source_id": brand_output.get("source_id"),
+                "brand_id": brand_output.get("brand_id"),
+            }
+        if node_def.node_code == "formula_standardize":
+            product_output = _output_for(task, "product_standardize")
+            return {
+                "orchestrator_task_id": task["id"],
+                "orchestrator_node_code": node_def.node_code,
+                "source_id": product_output.get("source_id"),
+                "brand_id": product_output.get("brand_id"),
+                "product_id": product_output.get("product_id"),
             }
         if node_def.node_code == "ingredient_standardize":
             extract_output = _output_for(task, "ingredient_extract")
@@ -1603,6 +1682,9 @@ def _merge_identity_fields(output: dict[str, Any], *sources: dict[str, Any]) -> 
             "source_id",
             "parsed_row_id",
             "product_key",
+            "brand_id",
+            "product_id",
+            "formula_id",
             "brand",
             "product_name",
             "ingredient_composition",

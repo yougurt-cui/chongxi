@@ -14,6 +14,10 @@ from typing import Any
 import pymysql
 
 from app_config import get_feature_mysql_config, get_mysql_config
+from services.catfood_standardization_service import (
+    BRAND_TABLE as STANDARD_BRAND_TABLE,
+    init_standardization_db,
+)
 from services.cat_food_product_catalog_service import (
     DEFAULT_BRAND_EXCEL_PATH,
     load_brand_maps,
@@ -635,6 +639,42 @@ def _replace_brand_summary_rows(rows: list[dict[str, Any]]) -> int:
     return _upsert_brand_summary_rows(rows)
 
 
+def sync_brand_price_ranges_to_standard_master(rows: list[dict[str, Any]]) -> dict[str, int]:
+    """Update the canonical brand master with Taobao price ranges by brand_id."""
+    init_standardization_db()
+    matched = 0
+    skipped = 0
+    with _connect_csv() as conn:
+        with conn.cursor() as cursor:
+            for row in rows:
+                brand_id = row.get("brand_id")
+                if brand_id in (None, ""):
+                    skipped += 1
+                    continue
+                cursor.execute(
+                    f"""
+                    UPDATE `{STANDARD_BRAND_TABLE}`
+                    SET min_price_per_jin = %s,
+                        max_price_per_jin = %s,
+                        price_band = %s,
+                        updated_at = NOW()
+                    WHERE brand_id = %s
+                    """,
+                    (
+                        row.get("min_price_per_jin"),
+                        row.get("max_price_per_jin"),
+                        row.get("price_band"),
+                        int(brand_id),
+                    ),
+                )
+                if cursor.rowcount:
+                    matched += 1
+                else:
+                    skipped += 1
+        conn.commit()
+    return {"standard_brand_price_updated": matched, "standard_brand_price_skipped": skipped}
+
+
 def clean_taobao_sku_brands() -> dict[str, Any]:
     ensure_taobao_sku_table()
     ensure_taobao_sku_brand_clean_table()
@@ -642,6 +682,7 @@ def clean_taobao_sku_brands() -> dict[str, Any]:
     items = _fetch_sku_items()
     rows, dropped_items = _brand_summary_rows(items, brand_maps)
     cleaned_rows = _replace_brand_summary_rows(rows)
+    price_sync = sync_brand_price_ranges_to_standard_master(rows)
     return {
         "ok": True,
         "source_table": TAOBAO_SKU_TABLE,
@@ -650,6 +691,7 @@ def clean_taobao_sku_brands() -> dict[str, Any]:
         "matched_source_items": sum(int(row.get("item_count") or 0) for row in rows),
         "dropped_non_excel_brand_items": dropped_items,
         "cleaned_brand_rows": cleaned_rows,
+        **price_sync,
         "items": [_json_safe(row) for row in rows],
     }
 

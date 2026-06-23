@@ -754,33 +754,35 @@ brands:
   notes: ''
 - brand_id: 95
   standard_name: 亿欧
-  origin_type: 待确认
+  origin_type: 国产品牌
   brand_tier: 知名/主流
   aliases:
   - Yeoh
   status: active
   notes: ''
 - brand_id: 96
-  standard_name: C3
-  origin_type: 待确认
+  standard_name: 帕缇朵
+  origin_type: 国产品牌
   brand_tier: 新兴品牌
   aliases:
+  - C3
   - C3帕缇朵
   status: active
   notes: ''
 - brand_id: 97
   standard_name: JOQO
-  origin_type: 待确认
+  origin_type: 国产品牌
   brand_tier: 新兴品牌
   aliases:
   - joqo
   status: active
   notes: ''
 - brand_id: 98
-  standard_name: NG兔
-  origin_type: 待确认
+  standard_name: 恩萃
+  origin_type: 进口/国际品牌
   brand_tier: 新兴品牌
   aliases:
+  - NG兔
   - NG恩萃
   status: active
   notes: ''
@@ -794,7 +796,7 @@ brands:
   notes: ''
 - brand_id: 100
   standard_name: WHYCAT
-  origin_type: 待确认
+  origin_type: 国产品牌
   brand_tier: 新兴品牌
   aliases:
   - 歪咖
@@ -810,7 +812,7 @@ brands:
   notes: ''
 - brand_id: 102
   standard_name: 汤恩贝
-  origin_type: 待确认
+  origin_type: 国产品牌
   brand_tier: 新兴品牌
   aliases:
   - TEB
@@ -826,7 +828,7 @@ brands:
   notes: ''
 - brand_id: 104
   standard_name: 艾美康
-  origin_type: 待确认
+  origin_type: 国产品牌
   brand_tier: 新兴品牌
   aliases:
   - Animal Care
@@ -842,7 +844,7 @@ brands:
   notes: ''
 - brand_id: 106
   standard_name: YEE
-  origin_type: 待确认
+  origin_type: 国产品牌
   brand_tier: 其他/小众
   aliases: []
   status: active
@@ -856,7 +858,7 @@ brands:
   notes: ''
 - brand_id: 108
   standard_name: 佰萃
-  origin_type: 待确认
+  origin_type: 国产品牌
   brand_tier: 其他/小众
   aliases:
   - 佰萃粮
@@ -864,7 +866,7 @@ brands:
   notes: ''
 - brand_id: 109
   standard_name: 玫斯
-  origin_type: 待确认
+  origin_type: 国产品牌
   brand_tier: 其他/小众
   aliases: []
   status: active
