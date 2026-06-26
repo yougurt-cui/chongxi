@@ -463,7 +463,15 @@ def _backfill_disease_candidate_brands(
         updates = []
         for row in rows:
             candidate = dict(row)
-            standard_brand = _standardize_disease_brand(candidate, brand_lookup=brand_lookup)
+            raw_brand = _clean_field(candidate.get("brand_name"))
+            standard_brand = _match_standard_brand_name(raw_brand, brand_lookup)
+            if not standard_brand:
+                inferred_brand = infer_brand_from_text(
+                    candidate.get("search_keyword"),
+                    candidate.get("mentioned_brands"),
+                    candidate.get("review_text"),
+                )
+                standard_brand = _match_standard_brand_name(inferred_brand, brand_lookup)
             normalized_brand = _normalized_brand_filter_value(standard_brand)
             if standard_brand or normalized_brand:
                 updates.append(
@@ -921,21 +929,6 @@ def consumer_disease_review_options():
             brand_lookup = _load_standard_brand_lookup(conn)
         _backfill_disease_candidate_brands(source_engine, brand_lookup=brand_lookup)
         with source_engine.connect() as conn:
-            candidate_brands = [
-                row[0]
-                for row in conn.execute(
-                    text(
-                        f"""
-                        SELECT DISTINCT standard_brand_name AS brand_name
-                        FROM `{DISEASE_REVIEW_SOURCE_TABLE}`
-                        WHERE standard_brand_name IS NOT NULL
-                          AND TRIM(standard_brand_name) <> ''
-                        ORDER BY brand_name ASC
-                        LIMIT 500
-                        """
-                    )
-                ).fetchall()
-            ]
             standard_brands = [
                 row[0]
                 for row in conn.execute(
@@ -955,7 +948,7 @@ def consumer_disease_review_options():
             brands = sorted(
                 {
                     part.strip()
-                    for value in [*standard_brands, *candidate_brands]
+                    for value in standard_brands
                     for part in _split_brand_parts(value)
                     if part.strip()
                 }
