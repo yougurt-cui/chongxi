@@ -921,16 +921,32 @@ def consumer_disease_review_options():
             brand_lookup = _load_standard_brand_lookup(conn)
         _backfill_disease_candidate_brands(source_engine, brand_lookup=brand_lookup)
         with source_engine.connect() as conn:
-            raw_brands = [
+            candidate_brands = [
                 row[0]
                 for row in conn.execute(
                     text(
                         f"""
-                        SELECT DISTINCT COALESCE(NULLIF(standard_brand_name, ''), brand_name) AS brand_name
+                        SELECT DISTINCT standard_brand_name AS brand_name
                         FROM `{DISEASE_REVIEW_SOURCE_TABLE}`
-                        WHERE COALESCE(NULLIF(standard_brand_name, ''), brand_name) IS NOT NULL
-                          AND TRIM(COALESCE(NULLIF(standard_brand_name, ''), brand_name)) <> ''
+                        WHERE standard_brand_name IS NOT NULL
+                          AND TRIM(standard_brand_name) <> ''
                         ORDER BY brand_name ASC
+                        LIMIT 500
+                        """
+                    )
+                ).fetchall()
+            ]
+            standard_brands = [
+                row[0]
+                for row in conn.execute(
+                    text(
+                        """
+                        SELECT standard_brand_name
+                        FROM catfood_standard_brand
+                        WHERE active = 1
+                          AND standard_brand_name IS NOT NULL
+                          AND TRIM(standard_brand_name) <> ''
+                        ORDER BY standard_brand_name ASC
                         LIMIT 500
                         """
                     )
@@ -938,10 +954,9 @@ def consumer_disease_review_options():
             ]
             brands = sorted(
                 {
-                    _match_standard_brand_name(part.strip(), brand_lookup)
-                    or canonicalize_brand(part.strip())
-                    for value in raw_brands
-                    for part in str(value or "").replace("，", ",").replace("、", ",").split(",")
+                    part.strip()
+                    for value in [*standard_brands, *candidate_brands]
+                    for part in _split_brand_parts(value)
                     if part.strip()
                 }
             )
