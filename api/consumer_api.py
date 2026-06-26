@@ -342,7 +342,7 @@ def _serialize_disease_candidate(
     item = {key: _json_value(value) for key, value in row.items()}
     clue_values = _candidate_to_clue_values(row, brand_lookup=brand_lookup)
     item["raw_brand_name"] = item.get("brand_name")
-    item["brand_name"] = clue_values["brand"]
+    item["brand_name"] = clue_values["brand"] or "其他"
     item["target_case_id"] = clue_values["case_id"]
     item["target_exists"] = clue_values["case_id"] in (target_case_ids or set())
     return item
