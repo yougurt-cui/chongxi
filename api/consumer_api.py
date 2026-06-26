@@ -818,27 +818,50 @@ def consumer_disease_reviews():
             filters.append("confidence <= :max_confidence")
             params["max_confidence"] = float(max_confidence)
         if brand:
-            standard_brand = _match_standard_brand_name(brand, brand_lookup) or canonicalize_brand(brand)
-            brand_key = _normalized_brand_filter_value(standard_brand)
-            if brand_key:
+            if brand == "其他":
                 filters.append(
                     """
                     (
-                      normalized_brand_name = :brand_key
-                      OR normalized_brand_name LIKE :brand_key_prefix
-                      OR normalized_brand_name LIKE :brand_key_suffix
-                      OR normalized_brand_name LIKE :brand_key_contains
+                      standard_brand_name IS NULL
+                      OR TRIM(standard_brand_name) = ''
+                      OR normalized_brand_name IS NULL
+                      OR TRIM(normalized_brand_name) = ''
                     )
                     """
                 )
-                params.update(
-                    {
-                        "brand_key": brand_key,
-                        "brand_key_prefix": f"{brand_key},%",
-                        "brand_key_suffix": f"%,{brand_key}",
-                        "brand_key_contains": f"%,{brand_key},%",
-                    }
-                )
+            else:
+                standard_brand = _match_standard_brand_name(brand, brand_lookup) or canonicalize_brand(brand)
+                brand_key = _normalized_brand_filter_value(standard_brand)
+                if brand_key:
+                    filters.append(
+                        """
+                        (
+                          normalized_brand_name = :brand_key
+                          OR normalized_brand_name LIKE :brand_key_prefix
+                          OR normalized_brand_name LIKE :brand_key_suffix
+                          OR normalized_brand_name LIKE :brand_key_contains
+                        )
+                        """
+                    )
+                    params.update(
+                        {
+                            "brand_key": brand_key,
+                            "brand_key_prefix": f"{brand_key},%",
+                            "brand_key_suffix": f"%,{brand_key}",
+                            "brand_key_contains": f"%,{brand_key},%",
+                        }
+                    )
+                else:
+                    filters.append(
+                        """
+                        (
+                          standard_brand_name IS NULL
+                          OR TRIM(standard_brand_name) = ''
+                          OR normalized_brand_name IS NULL
+                          OR TRIM(normalized_brand_name) = ''
+                        )
+                        """
+                    )
         where_sql = f"WHERE {' AND '.join(filters)}" if filters else ""
         with source_engine.connect() as conn:
             total = conn.execute(
@@ -953,6 +976,7 @@ def consumer_disease_review_options():
                     if part.strip()
                 }
             )
+            brands.append("其他")
             categories = [
                 row[0]
                 for row in conn.execute(

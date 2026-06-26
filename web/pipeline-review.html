@@ -1209,6 +1209,7 @@
 
       items.forEach((item) => {
         const row = document.createElement("tr");
+        const displayBrand = item.brand_name || "其他";
         row.dataset.id = String(item.id);
         row.innerHTML = `
           <td><input data-field="selected" type="checkbox" aria-label="选择病症候选 ${escapeHtml(item.id)}" /></td>
@@ -1216,7 +1217,7 @@
             <div class="task-id">${escapeHtml(item.id)}</div>
           </td>
           <td>
-            <input class="cell-input" data-field="brand" list="diseaseBrandOptions" value="${escapeHtml(item.brand_name || "")}" placeholder="未识别" />
+            <input class="cell-input" data-field="brand" list="diseaseBrandOptions" value="${escapeHtml(displayBrand)}" placeholder="其他" />
           </td>
           <td>
             <input class="cell-input" data-field="primary_symptom" list="diseaseCategoryOptions" value="${escapeHtml(item.symptom_category || "")}" placeholder="一级病症" />
