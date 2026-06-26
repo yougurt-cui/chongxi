@@ -3,6 +3,7 @@
 from flask import Blueprint, jsonify, request
 
 from services.catfood_standardization_service import (
+    build_formula_feature_input,
     get_standard_mapping,
     initialize_brand_candidates,
     init_standardization_db,
@@ -11,10 +12,12 @@ from services.catfood_standardization_service import (
     review_brand_candidate,
     resolve_brand_mapping,
     resolve_formula_mapping,
+    rebuild_formula_feature_inputs,
     standardize_brand,
     standardize_formula,
     standardize_product,
 )
+from services.formula_feature_link_service import backfill_formula_ids
 
 
 catfood_standardization_api = Blueprint(
@@ -129,5 +132,37 @@ def standardization_brand_candidate_review(candidate_id: int, action: str):
 def standardization_formula_resolve():
     try:
         return jsonify(resolve_formula_mapping(request.get_json(silent=True) or {})), 200
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+
+
+@catfood_standardization_api.post("/formula-input/build")
+def standardization_formula_input_build():
+    try:
+        payload = request.get_json(silent=True) or {}
+        return jsonify(
+            build_formula_feature_input(
+                formula_id=int(payload.get("formula_id")),
+                apply=True,
+            )
+        ), 200
+    except KeyError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 404
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+
+
+@catfood_standardization_api.post("/formula-input/rebuild")
+def standardization_formula_input_rebuild():
+    try:
+        return jsonify(rebuild_formula_feature_inputs(apply=True)), 200
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+
+
+@catfood_standardization_api.post("/formula-links/backfill")
+def standardization_formula_links_backfill():
+    try:
+        return jsonify(backfill_formula_ids()), 200
     except Exception as exc:
         return jsonify({"ok": False, "error": str(exc)}), 400

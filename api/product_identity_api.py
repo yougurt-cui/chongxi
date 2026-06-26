@@ -71,11 +71,13 @@ def product_identity_create_correction():
 @product_identity_api.get("/product-reviews")
 def product_candidate_reviews():
     try:
+        product_id = request.args.get("product_id")
         return jsonify(
             list_product_candidate_reviews(
                 status=str(request.args.get("status") or ""),
                 quality=str(request.args.get("quality") or ""),
                 brand=str(request.args.get("brand") or ""),
+                product_id=int(product_id) if product_id else None,
                 limit=int(request.args.get("limit") or 100),
                 offset=int(request.args.get("offset") or 0),
             )

@@ -46,6 +46,7 @@ PROTEIN_STRUCTURE_COMPONENT_SCORE_COLS = [
 ]
 
 SCORED_OUTPUT_COLUMNS = [
+    "formula_id",
     "source_id",
     "product_key",
     "brand_name",
@@ -901,7 +902,7 @@ def main():
     print("结果表：{}（if_exists={}）".format(OUTPUT_TABLE, OUTPUT_IF_EXISTS))
     print("写入行数：{}".format(len(scored_df)))
     print("=" * 80)
-    print(scored_df[SCORED_OUTPUT_COLUMNS].head())
+    print(scored_df[[col for col in SCORED_OUTPUT_COLUMNS if col in scored_df.columns]].head())
 
 
 if __name__ == "__main__":

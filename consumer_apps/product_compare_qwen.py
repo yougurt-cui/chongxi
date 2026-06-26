@@ -608,6 +608,7 @@ def query_one_product(
     *,
     product_col: str,
     brand_col: Optional[str] = None,
+    formula_id: Any = None,
     source_id: Any = None,
     product_key: Any = None,
     extra_where: str = "",
@@ -617,6 +618,49 @@ def query_one_product(
     if product_col not in columns:
         return None
     resolved_brand_col = resolve_brand_col(columns, brand_col or TABLE_CONFIG["brand_name_col"])
+    formula_id_value = str(formula_id or "").strip()
+
+    if formula_id_value and "formula_id" in columns:
+        where_sql = f"WHERE {quote_identifier('formula_id')} = :formula_id"
+        query_params = {"formula_id": formula_id_value}
+        source_id_value = str(source_id or "").strip()
+        product_key_value = str(product_key or "").strip()
+        if source_id_value and "source_id" in columns:
+            where_sql += f" AND {quote_identifier('source_id')} = :formula_source_id"
+            query_params["formula_source_id"] = source_id_value
+        elif product_key_value:
+            product_key_cols = resolve_product_key_cols(columns)
+            if product_key_cols:
+                where_sql += " AND (" + " OR ".join(
+                    f"{quote_identifier(col)} = :formula_product_key"
+                    for col in product_key_cols
+                ) + ")"
+                query_params["formula_product_key"] = product_key_value
+        if extra_where:
+            where_sql += f" AND {extra_where}"
+        order_field = (
+            "calculated_at" if "calculated_at" in columns
+            else "created_at" if "created_at" in columns
+            else "updated_at" if "updated_at" in columns
+            else "id" if "id" in columns
+            else None
+        )
+        order_sql = f"ORDER BY {quote_identifier(order_field)} DESC" if order_field else ""
+        if params:
+            query_params.update(params)
+        formula_df = pd.read_sql(
+            text(f"""
+                SELECT *
+                FROM {quote_identifier(table_name)}
+                {where_sql}
+                {order_sql}
+                LIMIT 10
+            """),
+            engine,
+            params=query_params,
+        )
+        return None if formula_df.empty else formula_df.iloc[0]
+
     source_id_value = str(source_id or "").strip()
 
     if source_id_value and "source_id" in columns:
@@ -753,7 +797,7 @@ def query_one_product(
     return df.iloc[0]
 
 
-def get_pool_summary(engine, product_name: str) -> dict:
+def get_pool_summary(engine, product_name: str, formula_id: Any = None) -> dict:
     score_table = TABLE_CONFIG["score_table"]
     product_col = TABLE_CONFIG["product_name_col"]
     brand_col = TABLE_CONFIG["brand_name_col"]
@@ -769,7 +813,12 @@ def get_pool_summary(engine, product_name: str) -> dict:
     resolved_brand_col = resolve_brand_col(table_cols, brand_col)
 
     selected_score_cols = [col for col in score_cols if col in table_cols]
-    existing_cols = [product_col] + ([resolved_brand_col] if resolved_brand_col else []) + selected_score_cols
+    existing_cols = (
+        (["formula_id"] if "formula_id" in table_cols else [])
+        + [product_col]
+        + ([resolved_brand_col] if resolved_brand_col else [])
+        + selected_score_cols
+    )
 
     sql = text(f"""
         SELECT {", ".join(quote_identifier(col) for col in existing_cols)}
@@ -787,7 +836,10 @@ def get_pool_summary(engine, product_name: str) -> dict:
     for col in selected_score_cols:
         df[col] = df[col].apply(lambda value, field=col: normalize_score(value, field))
 
-    product_df = df[product_identity_mask(df, product_col, product_name, resolved_brand_col)]
+    if formula_id not in (None, "") and "formula_id" in df.columns:
+        product_df = df[df["formula_id"].astype(str) == str(formula_id)]
+    else:
+        product_df = df[product_identity_mask(df, product_col, product_name, resolved_brand_col)]
     if product_df.empty:
         return {"total_products": len(df), "message": "未找到当前产品的池子位置"}
 
@@ -834,6 +886,29 @@ def get_ingredient_composition(engine, source_id: Any) -> str:
     if df.empty:
         return ""
     return str(df.iloc[0].get("ingredient_composition") or "").strip()
+
+
+def get_formula_ingredient_composition(engine, formula_id: Any) -> str:
+    if formula_id in (None, ""):
+        return ""
+    sql = text("""
+        SELECT normalized_ingredient_composition, ingredient_composition
+        FROM csv_labeling.catfood_formula_feature_input
+        WHERE formula_id = :formula_id
+        LIMIT 1
+    """)
+    try:
+        df = pd.read_sql(sql, engine, params={"formula_id": formula_id})
+    except Exception:
+        return ""
+    if df.empty:
+        return ""
+    row = df.iloc[0]
+    return str(
+        row.get("normalized_ingredient_composition")
+        or row.get("ingredient_composition")
+        or ""
+    ).strip()
 
 
 def _compact_row(row: pd.Series, fields: List[str]) -> dict:
@@ -913,6 +988,7 @@ def _fetch_feature_row(
     table_name: str,
     selected_fields: List[str],
     *,
+    formula_id: Any = None,
     source_id: Any = None,
     product_key: Any = None,
     source_ids_json: bool = False,
@@ -927,10 +1003,13 @@ def _fetch_feature_row(
 
     clauses = []
     params = {}
-    if source_id is not None and not pd.isna(source_id) and "source_id" in columns:
+    if formula_id not in (None, "") and "formula_id" in columns:
+        clauses.append(f"{quote_identifier('formula_id')} = :formula_id")
+        params["formula_id"] = formula_id
+    if not clauses and source_id is not None and not pd.isna(source_id) and "source_id" in columns:
         clauses.append(f"{quote_identifier('source_id')} = :source_id")
         params["source_id"] = source_id
-    if product_key is not None and str(product_key).strip() and "product_key" in columns:
+    if not clauses and product_key is not None and str(product_key).strip() and "product_key" in columns:
         clauses.append(f"{quote_identifier('product_key')} = :product_key")
         params["product_key"] = str(product_key).strip()
     if source_ids_json and not clauses and source_id is not None and not pd.isna(source_id) and "source_ids" in columns:
@@ -957,7 +1036,13 @@ def _fetch_feature_row(
     return _compact_row(df.iloc[0], fields)
 
 
-def get_material_role_evidence(engine, source_id: Any, product_key: Any, ingredient_composition: str) -> dict:
+def get_material_role_evidence(
+    engine,
+    source_id: Any,
+    product_key: Any,
+    ingredient_composition: str,
+    formula_id: Any = None,
+) -> dict:
     protein_roles = _fetch_feature_row(
         engine,
         "protein_source_aggregate",
@@ -974,6 +1059,7 @@ def get_material_role_evidence(engine, source_id: Any, product_key: Any, ingredi
             "guarantee_crude_protein_value",
             "guarantee_crude_protein_unit",
         ],
+        formula_id=formula_id,
         source_id=source_id,
         product_key=product_key,
     )
@@ -998,6 +1084,7 @@ def get_material_role_evidence(engine, source_id: Any, product_key: Any, ingredi
             "guarantee_crude_protein_value",
             "guarantee_crude_protein_unit",
         ],
+        formula_id=formula_id,
         source_id=source_id,
         product_key=product_key,
     )
@@ -1017,6 +1104,7 @@ def get_material_role_evidence(engine, source_id: Any, product_key: Any, ingredi
             "guarantee_crude_fat_unit",
             "guarantee_crude_fat_operator",
         ],
+        formula_id=formula_id,
         source_id=source_id,
         product_key=product_key,
     )
@@ -1028,6 +1116,7 @@ def get_material_role_evidence(engine, source_id: Any, product_key: Any, ingredi
             "ingredient_feature_json",
             "starch_ingredients_json",
         ],
+        formula_id=formula_id,
         source_id=source_id,
         product_key=product_key,
         source_ids_json=True,
@@ -1042,7 +1131,12 @@ def get_material_role_evidence(engine, source_id: Any, product_key: Any, ingredi
     })
 
 
-def get_product_data(product_name: str, source_id: Any = None, product_key: Any = None) -> Dict[str, Any]:
+def get_product_data(
+    product_name: str,
+    formula_id: Any = None,
+    source_id: Any = None,
+    product_key: Any = None,
+) -> Dict[str, Any]:
     engine = get_engine()
 
     score_row = query_one_product(
@@ -1051,6 +1145,7 @@ def get_product_data(product_name: str, source_id: Any = None, product_key: Any 
         product_name,
         product_col=TABLE_CONFIG["product_name_col"],
         brand_col=TABLE_CONFIG["brand_name_col"],
+        formula_id=formula_id,
         source_id=source_id,
         product_key=product_key,
     )
@@ -1061,6 +1156,7 @@ def get_product_data(product_name: str, source_id: Any = None, product_key: Any 
         product_name,
         product_col=TABLE_CONFIG["risk_product_name_col"],
         brand_col=TABLE_CONFIG["brand_name_col"],
+        formula_id=formula_id,
         source_id=source_id,
         product_key=product_key,
         extra_where="score_model_version LIKE :score_model_like",
@@ -1073,13 +1169,20 @@ def get_product_data(product_name: str, source_id: Any = None, product_key: Any 
         product_name,
         product_col=TABLE_CONFIG["risk_product_name_col"],
         brand_col=TABLE_CONFIG["brand_name_col"],
+        formula_id=formula_id,
         source_id=source_id,
         product_key=product_key,
         extra_where="score_model_version LIKE :score_model_like",
         params={"score_model_like": TABLE_CONFIG["soft_stool_score_model_like"]},
     )
 
-    pool_summary = get_pool_summary(engine, product_name)
+    pool_summary = get_pool_summary(engine, product_name, formula_id=formula_id)
+    resolved_formula_id = (
+        safe_get(score_row, "formula_id")
+        or safe_get(black_chin_row, "formula_id")
+        or safe_get(soft_stool_row, "formula_id")
+        or formula_id
+    )
     source_id = safe_get(score_row, "source_id") or safe_get(black_chin_row, "source_id") or safe_get(soft_stool_row, "source_id")
     product_key = (
         safe_get(score_row, "product_key")
@@ -1089,9 +1192,17 @@ def get_product_data(product_name: str, source_id: Any = None, product_key: Any 
         or safe_get(soft_stool_row, "product_key")
         or safe_get(soft_stool_row, "sku_id")
     )
-    ingredient_composition = get_ingredient_composition(engine, source_id)
+    ingredient_composition = get_formula_ingredient_composition(engine, resolved_formula_id)
+    if not ingredient_composition:
+        ingredient_composition = get_ingredient_composition(engine, source_id)
     guarantee_values = get_product_guarantee_values(engine, source_id)
-    material_role_evidence = get_material_role_evidence(engine, source_id, product_key, ingredient_composition)
+    material_role_evidence = get_material_role_evidence(
+        engine,
+        source_id,
+        product_key,
+        ingredient_composition,
+        formula_id=resolved_formula_id,
+    )
 
     return {
         "score": score_row,
@@ -1099,6 +1210,7 @@ def get_product_data(product_name: str, source_id: Any = None, product_key: Any 
         "soft_stool": soft_stool_row,
         "pool_summary": pool_summary,
         "ingredient_composition": ingredient_composition,
+        "formula_id": resolved_formula_id,
         "source_id": source_id,
         "product_key": product_key,
         "guarantee_values": guarantee_values,
@@ -1361,8 +1473,18 @@ def build_risk_relative_position(row: Optional[pd.Series]) -> str:
     return "相对位置：暂无"
 
 
-def build_product_context(product_name: str, source_id: Any = None, product_key: Any = None) -> Dict[str, Any]:
-    data = get_product_data(product_name, source_id=source_id, product_key=product_key)
+def build_product_context(
+    product_name: str,
+    formula_id: Any = None,
+    source_id: Any = None,
+    product_key: Any = None,
+) -> Dict[str, Any]:
+    data = get_product_data(
+        product_name,
+        formula_id=formula_id,
+        source_id=source_id,
+        product_key=product_key,
+    )
 
     score_row = data.get("score")
     black_chin_row = data.get("black_chin")
@@ -1395,6 +1517,7 @@ def build_product_context(product_name: str, source_id: Any = None, product_key:
         "name": str(product_display_name),
         "brand_name": str(brand_name),
         "ingredient_composition": str(data.get("ingredient_composition") or ""),
+        "formula_id": data.get("formula_id"),
         "source_id": data.get("source_id"),
         "product_key": data.get("product_key"),
         "guarantee_values": data.get("guarantee_values") or [],

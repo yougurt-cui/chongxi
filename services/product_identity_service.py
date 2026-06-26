@@ -317,6 +317,7 @@ def list_product_candidate_reviews(
     status: str = "",
     quality: str = "",
     brand: str = "",
+    product_id: int | None = None,
     limit: int = 100,
     offset: int = 0,
 ) -> dict[str, Any]:
@@ -340,6 +341,9 @@ def list_product_candidate_reviews(
     if brand:
         filters.append("standard_brand_name LIKE %s")
         params.append(f"%{brand}%")
+    if product_id:
+        filters.append("product_id = %s")
+        params.append(int(product_id))
     where_sql = f"WHERE {' AND '.join(filters)}" if filters else ""
 
     with _connect_csv() as conn:

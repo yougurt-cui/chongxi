@@ -57,6 +57,21 @@ def _path_name(value: Any) -> str:
     return Path(text).stem
 
 
+def _has_cjk(value: str) -> bool:
+    return any("\u4e00" <= char <= "\u9fff" for char in value)
+
+
+def _is_safe_inference_token(value: Any) -> bool:
+    text = clean_text(value)
+    normalized = normalize_text(text)
+    if not normalized:
+        return False
+    if _has_cjk(normalized):
+        return len(normalized) >= 2
+    ascii_alnum = re.sub(r"[^a-z0-9]+", "", normalized)
+    return len(ascii_alnum) >= 3
+
+
 def _configured_brand_tokens() -> list[str]:
     raw = os.getenv("CATFOOD_KNOWN_BRANDS", "")
     configured = [item.strip() for item in re.split(r"[,，|;；\s]+", raw) if item.strip()]
@@ -141,6 +156,8 @@ def infer_brand_from_text(*values: Any) -> Optional[str]:
 
     matches = []
     for brand in _configured_brand_tokens():
+        if not _is_safe_inference_token(brand):
+            continue
         normalized_brand = normalize_text(brand)
         if normalized_brand and normalized_brand in haystack:
             matches.append(canonicalize_brand(brand))
@@ -167,13 +184,15 @@ def correct_brand(
     canonical_original = canonicalize_brand(original)
     if canonical_original and normalize_text(canonical_original) != normalize_text(original):
         return canonical_original
+    if canonical_original and not is_generic_brand(canonical_original):
+        return canonical_original
     inferred = infer_brand_from_text(
         product_name,
         image_name,
         _path_name(image_path),
         image_path,
     )
-    if inferred and (is_generic_brand(original) or normalize_text(inferred) not in normalize_text(original)):
+    if inferred and is_generic_brand(original):
         return inferred
     return canonical_original or original or (inferred or "")
 

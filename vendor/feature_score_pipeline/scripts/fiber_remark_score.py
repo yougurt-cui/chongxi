@@ -35,6 +35,7 @@ MAX_MAIN_COMPONENT_COUNT = 2
 CREATE_TARGET_TABLE_SQL = f"""
 CREATE TABLE IF NOT EXISTS {TARGET_TABLE} (
     id BIGINT PRIMARY KEY AUTO_INCREMENT,
+    formula_id BIGINT UNSIGNED NULL,
     source_id BIGINT NULL,
     product_key VARCHAR(600) NOT NULL,
     brand VARCHAR(255),
@@ -54,7 +55,7 @@ CREATE TABLE IF NOT EXISTS {TARGET_TABLE} (
     q_main_ingredients TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 
-    UNIQUE KEY uk_product_key (product_key),
+    UNIQUE KEY uk_formula_id (formula_id),
     KEY idx_source_id (source_id),
     KEY idx_brand (brand),
     KEY idx_product_name (product_name)
@@ -907,6 +908,7 @@ def compute_scores(raw_ingredient_text: str, ingredient_feature_json: Dict[str, 
 # =========================================================
 INSERT_TARGET_SQL = f"""
 INSERT INTO {TARGET_TABLE} (
+    formula_id,
     source_id,
     product_key,
     brand,
@@ -925,6 +927,7 @@ INSERT INTO {TARGET_TABLE} (
     p_main_ingredients,
     q_main_ingredients
 ) VALUES (
+    %(formula_id)s,
     %(source_id)s,
     %(product_key)s,
     %(brand)s,
@@ -944,6 +947,7 @@ INSERT INTO {TARGET_TABLE} (
     %(q_main_ingredients)s
 )
 ON DUPLICATE KEY UPDATE
+    formula_id = VALUES(formula_id),
     source_id = VALUES(source_id),
     brand = VALUES(brand),
     product_name = VALUES(product_name),
@@ -1040,6 +1044,7 @@ def batch_process():
             cursor.execute(f"""
                 SELECT
                     id,
+                    formula_id,
                     source_ids,
                     brand,
                     product_name,
@@ -1073,6 +1078,7 @@ def batch_process():
                     q_level = get_q_level(result["q_total_score"])
 
                     params = {
+                        "formula_id": row.get("formula_id"),
                         "source_id": source_id,
                         "product_key": product_key,
                         "brand": brand,

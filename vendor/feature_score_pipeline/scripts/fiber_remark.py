@@ -23,7 +23,7 @@ DB_CONFIG = {
 }
 
 SOURCE_DB = "csv_labeling"
-SOURCE_TABLE = "catfood_ingredient_ocr_parsed"
+SOURCE_TABLE = os.getenv("CATFOOD_FORMULA_INPUT_TABLE", "catfood_formula_feature_input")
 
 TARGET_DB = "protein_feature_platform"
 TARGET_TABLE = "catfood_fiber_feature_json"
@@ -176,6 +176,34 @@ INGREDIENT_RULES: Dict[str, Dict] = {
         "fiber_solubility": "混合",
         "fermentability": "中",
         "fiber_functions": ["温和供菌底物", "缓冲刺激"],
+        "prebiotic_functions": [],
+    },
+    "西红柿": {
+        "ingredient_category": "膳食纤维",
+        "fiber_solubility": "混合",
+        "fermentability": "中",
+        "fiber_functions": ["温和供菌底物", "缓冲刺激"],
+        "prebiotic_functions": [],
+    },
+    "番茄": {
+        "ingredient_category": "膳食纤维",
+        "fiber_solubility": "混合",
+        "fermentability": "中",
+        "fiber_functions": ["温和供菌底物", "缓冲刺激"],
+        "prebiotic_functions": [],
+    },
+    "西蓝花": {
+        "ingredient_category": "膳食纤维",
+        "fiber_solubility": "混合",
+        "fermentability": "中低",
+        "fiber_functions": ["温和供菌底物"],
+        "prebiotic_functions": [],
+    },
+    "西兰花": {
+        "ingredient_category": "膳食纤维",
+        "fiber_solubility": "混合",
+        "fermentability": "中低",
+        "fiber_functions": ["温和供菌底物"],
         "prebiotic_functions": [],
     },
     "菠菜": {
@@ -468,7 +496,7 @@ GENERIC_KEYWORDS: List[Tuple[str, Dict]] = [
     ),
     # 果蔬纤维源
     (
-        r"(南瓜(?!籽)|冬南瓜|苹果果肉|苹果纤维|胡萝卜|胡萝卜粉|西葫芦|柑橘纤维|甜菜粕|甜菜纤维|菠菜|甘蓝|芜菁叶|甜菜叶|蔓越莓|蓝莓|梨)",
+        r"(南瓜(?!籽)|冬南瓜|苹果果肉|苹果纤维|胡萝卜|胡萝卜粉|西葫芦|西红柿|番茄|西蓝花|西兰花|柑橘纤维|甜菜粕|甜菜纤维|菠菜|甘蓝|芜菁叶|甜菜叶|蔓越莓|蓝莓|梨)",
         {
             "ingredient_category": "膳食纤维",
             "fiber_solubility": "混合",
@@ -771,7 +799,7 @@ def main() -> None:
 
     try:
         read_sql = f"""
-            SELECT s.id, s.brand, s.product_name, s.image_name, s.image_path, s.ingredient_composition
+            SELECT s.id, s.formula_id, s.brand, s.product_name, s.image_name, s.image_path, s.ingredient_composition
             FROM {SOURCE_DB}.{SOURCE_TABLE} s
             WHERE s.ingredient_composition IS NOT NULL
               AND s.ingredient_composition <> ''
@@ -779,12 +807,10 @@ def main() -> None:
                   SELECT 1
                   FROM {SOURCE_DB}.{SOURCE_TABLE} changed
                   LEFT JOIN {TARGET_DB}.{TARGET_TABLE} t
-                    ON COALESCE(TRIM(t.brand), '') = COALESCE(TRIM(changed.brand), '')
-                   AND COALESCE(TRIM(t.product_name), '') = COALESCE(TRIM(changed.product_name), '')
+                    ON t.formula_id = changed.formula_id
                   WHERE changed.ingredient_composition IS NOT NULL
                     AND changed.ingredient_composition <> ''
-                    AND COALESCE(TRIM(changed.brand), '') = COALESCE(TRIM(s.brand), '')
-                    AND COALESCE(TRIM(changed.product_name), '') = COALESCE(TRIM(s.product_name), '')
+                    AND changed.formula_id = s.formula_id
                     AND (
                         t.id IS NULL
                         OR t.updated_at IS NULL
@@ -796,6 +822,7 @@ def main() -> None:
         create_table_sql = f"""
             CREATE TABLE IF NOT EXISTS {TARGET_DB}.{TARGET_TABLE} (
                 id BIGINT PRIMARY KEY AUTO_INCREMENT,
+                formula_id BIGINT UNSIGNED NOT NULL,
                 product_key VARCHAR(600) NULL,
                 brand VARCHAR(255) NOT NULL,
                 product_name VARCHAR(255) NOT NULL,
@@ -806,18 +833,18 @@ def main() -> None:
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
                 KEY idx_product_key (product_key),
-                UNIQUE KEY uniq_brand_product (brand, product_name)
+                UNIQUE KEY uq_formula_id (formula_id)
             )
         """
 
         upsert_sql = f"""
             INSERT INTO {TARGET_DB}.{TARGET_TABLE}
                 (
-                    product_key, brand, product_name, source_ids,
+                    formula_id, product_key, brand, product_name, source_ids,
                     raw_ingredient_text, ingredient_feature_json, starch_ingredients_json
                 )
             VALUES
-                (%s, %s, %s, %s, %s, %s, %s)
+                (%s, %s, %s, %s, %s, %s, %s, %s)
             ON DUPLICATE KEY UPDATE
                 product_key = VALUES(product_key),
                 source_ids = VALUES(source_ids),
@@ -829,6 +856,66 @@ def main() -> None:
 
         with conn.cursor() as cursor:
             cursor.execute(create_table_sql)
+            cursor.execute(
+                """
+                SELECT COLUMN_NAME
+                FROM INFORMATION_SCHEMA.COLUMNS
+                WHERE TABLE_SCHEMA = %s
+                  AND TABLE_NAME = %s
+                  AND COLUMN_NAME = 'formula_id'
+                """,
+                (TARGET_DB, TARGET_TABLE),
+            )
+            if cursor.fetchone() is None:
+                cursor.execute(
+                    f"ALTER TABLE {TARGET_DB}.{TARGET_TABLE} "
+                    "ADD COLUMN formula_id BIGINT UNSIGNED NULL AFTER id"
+                )
+            cursor.execute(
+                """
+                SELECT COUNT(*) AS index_count
+                FROM INFORMATION_SCHEMA.STATISTICS
+                WHERE TABLE_SCHEMA = %s
+                  AND TABLE_NAME = %s
+                  AND INDEX_NAME = 'uniq_brand_product'
+                """,
+                (TARGET_DB, TARGET_TABLE),
+            )
+            if int(cursor.fetchone()["index_count"]) > 0:
+                cursor.execute(
+                    f"ALTER TABLE {TARGET_DB}.{TARGET_TABLE} "
+                    "DROP INDEX uniq_brand_product"
+                )
+            cursor.execute(
+                """
+                SELECT COUNT(*) AS index_count
+                FROM INFORMATION_SCHEMA.STATISTICS
+                WHERE TABLE_SCHEMA = %s
+                  AND TABLE_NAME = %s
+                  AND INDEX_NAME = 'uq_formula_id'
+                """,
+                (TARGET_DB, TARGET_TABLE),
+            )
+            if int(cursor.fetchone()["index_count"]) == 0:
+                cursor.execute(
+                    f"""
+                    DELETE FROM {TARGET_DB}.{TARGET_TABLE}
+                    WHERE id IN (
+                        SELECT id FROM (
+                            SELECT older.id
+                            FROM {TARGET_DB}.{TARGET_TABLE} older
+                            JOIN {TARGET_DB}.{TARGET_TABLE} newer
+                              ON older.formula_id = newer.formula_id
+                             AND older.id < newer.id
+                            WHERE older.formula_id IS NOT NULL
+                        ) duplicated_formula_rows
+                    )
+                    """
+                )
+                cursor.execute(
+                    f"ALTER TABLE {TARGET_DB}.{TARGET_TABLE} "
+                    "ADD UNIQUE KEY uq_formula_id (formula_id)"
+                )
             cursor.execute(
                 """
                 SELECT COLUMN_NAME
@@ -886,7 +973,7 @@ def main() -> None:
                 row.get("image_path"),
             )
             product_name = (row["product_name"] or "").strip()
-            key = (brand, product_name)
+            key = (int(row["formula_id"]), brand, product_name)
 
             grouped[key]["ids"].append(row["id"])
             grouped[key]["ingredient_texts"].append(row["ingredient_composition"])
@@ -894,7 +981,7 @@ def main() -> None:
         processed_count = 0
 
         with conn.cursor() as cursor:
-            for (brand, product_name), payload in grouped.items():
+            for (formula_id, brand, product_name), payload in grouped.items():
                 merged_text = "，".join(payload["ingredient_texts"])
                 normalized_text = normalize_text(merged_text)
                 raw_ingredients = split_ingredients(normalized_text)
@@ -917,6 +1004,7 @@ def main() -> None:
                 cursor.execute(
                     upsert_sql,
                     (
+                        formula_id,
                         build_product_key(brand, product_name),
                         brand,
                         product_name,
@@ -929,7 +1017,7 @@ def main() -> None:
                 processed_count += 1
 
         conn.commit()
-        print(f"处理完成，共写入/更新 {processed_count} 条 brand+product_name 数据。")
+        print(f"处理完成，共写入/更新 {processed_count} 条 formula 数据。")
 
     finally:
         conn.close()

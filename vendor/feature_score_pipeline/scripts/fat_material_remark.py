@@ -20,7 +20,10 @@ DB_CONFIG = {
 }
 
 # 跨库表名
-SOURCE_TABLE = "csv_labeling.catfood_ingredient_ocr_parsed"
+SOURCE_TABLE = os.getenv(
+    "CATFOOD_FORMULA_INPUT_FQ",
+    "csv_labeling.catfood_formula_feature_input",
+)
 TARGET_TABLE = "protein_feature_platform.catfood_fat_material_features"
 
 
@@ -141,6 +144,9 @@ ANTIOXIDANT_RULES = [
     {"pattern": r"维生素C|抗坏血酸|L-抗坏血酸-2-聚磷酸盐|L-抗坏血酸-2-多磷酸盐|L-抗坏血酸-2-磷酸酯", "source": "维生素C", "type": "天然抗氧化物"},
     {"pattern": r"柠檬酸", "source": "柠檬酸", "type": "天然抗氧化物"},
     {"pattern": r"迷迭香提取物|迷迭香萃取物|迷迭香萃取|迷迭香|迷选香萃取物|迷选香提取物|迷选香", "source": "迷迭香提取物", "type": "天然抗氧化物"},
+    {"pattern": r"姜黄|姜黄粉|姜黄根", "source": "姜黄", "type": "植物抗氧化来源"},
+    {"pattern": r"西红柿|番茄|番茄粉", "source": "番茄", "type": "植物抗氧化来源"},
+    {"pattern": r"西蓝花|西兰花|西兰花粉|西蓝花粉", "source": "西蓝花", "type": "植物抗氧化来源"},
 
     # 人工抗氧化
     {"pattern": r"\bBHA\b", "source": "BHA", "type": "人工抗氧化物"},
@@ -309,6 +315,7 @@ def ensure_target_table(conn):
     create_sql = f"""
         CREATE TABLE IF NOT EXISTS {TARGET_TABLE} (
             id BIGINT NOT NULL,
+            formula_id BIGINT UNSIGNED NULL,
             source_row_id BIGINT NULL,
             source_id BIGINT NULL,
             source_table VARCHAR(128) NULL,
@@ -339,6 +346,7 @@ def ensure_target_table(conn):
     """
 
     required_columns = {
+        "formula_id": "BIGINT UNSIGNED NULL",
         "source_row_id": "BIGINT NULL",
         "source_id": "BIGINT NULL",
         "source_table": "VARCHAR(128) NULL",
@@ -420,6 +428,7 @@ def fetch_source_data(conn):
         )
         SELECT
             s.id,
+            s.formula_id,
             s.id AS source_row_id,
             s.source_id,
             s.brand,
@@ -498,9 +507,20 @@ def fetch_source_data(conn):
 # 9. 写入结果表
 # =====================================
 def upsert_results(conn, df_result):
+    if "source_id" in df_result.columns and not df_result.empty:
+        with_source_id = df_result[df_result["source_id"].notna()].copy()
+        without_source_id = df_result[df_result["source_id"].isna()].copy()
+        if not with_source_id.empty:
+            sort_columns = [col for col in ("source_updated_ts", "id") if col in with_source_id.columns]
+            if sort_columns:
+                with_source_id = with_source_id.sort_values(sort_columns)
+            with_source_id = with_source_id.drop_duplicates(subset=["source_id"], keep="last")
+        df_result = pd.concat([with_source_id, without_source_id], ignore_index=True)
+
     sql = f"""
         INSERT INTO {TARGET_TABLE} (
             id,
+            formula_id,
             source_row_id,
             source_id,
             source_table,
@@ -530,8 +550,9 @@ def upsert_results(conn, df_result):
             needs_review,
             review_reason
         )
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         ON DUPLICATE KEY UPDATE
+            formula_id = VALUES(formula_id),
             source_row_id = VALUES(source_row_id),
             source_id = VALUES(source_id),
             source_table = VALUES(source_table),
@@ -565,6 +586,7 @@ def upsert_results(conn, df_result):
     data = [
         tuple(mysql_safe_value(value) for value in (
             row["id"],
+            row["formula_id"],
             row["source_row_id"],
             row["source_id"],
             row["source_table"],
@@ -598,6 +620,26 @@ def upsert_results(conn, df_result):
     ]
 
     with conn.cursor() as cursor:
+        ids = [
+            int(value)
+            for value in df_result["id"].dropna().tolist()
+            if str(value).strip() and str(value).replace(".", "", 1).isdigit()
+        ]
+        source_ids = [
+            int(value)
+            for value in df_result["source_id"].dropna().tolist()
+            if str(value).strip() and str(value).replace(".", "", 1).isdigit()
+        ]
+        if ids or source_ids:
+            clauses = []
+            params = []
+            if ids:
+                clauses.append("id IN (" + ",".join(["%s"] * len(ids)) + ")")
+                params.extend(ids)
+            if source_ids:
+                clauses.append("source_id IN (" + ",".join(["%s"] * len(source_ids)) + ")")
+                params.extend(source_ids)
+            cursor.execute(f"DELETE FROM {TARGET_TABLE} WHERE {' OR '.join(clauses)}", params)
         cursor.executemany(sql, data)
     conn.commit()
 

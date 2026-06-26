@@ -36,12 +36,24 @@ git pull --ff-only origin "$REMOTE_BRANCH"
   api/product_function_api.py \
   api/taobao_sku_api.py \
   services/catfood_standardization_service.py \
+  services/formula_feature_link_service.py \
+  services/consumer_analysis_service.py \
   services/orchestrator_service.py \
   services/cat_food_task_service.py \
   services/cat_food_product_catalog_service.py \
   services/product_function_service.py \
   services/product_identity_service.py \
   services/taobao_sku_import_service.py \
+  vendor/feature_score_pipeline/black_risk_done.py \
+  vendor/feature_score_pipeline/soft_risk_done.py \
+  vendor/feature_score_pipeline/scripts/build_catfood_score_wide_table.py \
+  vendor/feature_score_pipeline/scripts/build_sku_feature_input.py \
+  vendor/feature_score_pipeline/scripts/fat_material_remark.py \
+  vendor/feature_score_pipeline/scripts/fat_score1.py \
+  vendor/feature_score_pipeline/scripts/fiber_remark.py \
+  vendor/feature_score_pipeline/scripts/fiber_remark_score.py \
+  vendor/feature_score_pipeline/scripts/protein_score1.py \
+  vendor/feature_score_pipeline/scripts/rebuild_protein_source_aggregate.py \
   vendor/csv_mysql_labeling/src/parse_catfood_ocr.py \
   vendor/csv_mysql_labeling/src/extract_catfood_brand_relations.py \
   vendor/feature_score_pipeline/scripts/brand_normalizer.py
@@ -71,4 +83,7 @@ curl -fsS --retry 5 --retry-delay 1 --max-time 8 "http://127.0.0.1:$APP_PORT/api
   | .venv/bin/python -c 'import json,sys; data=json.load(sys.stdin); print("brand_count", len(data.get("brands", [])))'
 curl -fsS --retry 5 --retry-delay 1 --max-time 8 "http://127.0.0.1:$APP_PORT/api/catfood/standardization/brands?limit=500" \
   | .venv/bin/python -c 'import json,sys; data=json.load(sys.stdin); assert data.get("ok") is True; print("standard_brand_count", len(data.get("items", [])))'
+curl -fsS --retry 5 --retry-delay 1 --max-time 120 \
+  -X POST "http://127.0.0.1:$APP_PORT/api/catfood/standardization/formula-links/backfill" \
+  | .venv/bin/python -c 'import json,sys; data=json.load(sys.stdin); assert data.get("ok") is True; print("formula_input_count", data.get("formula_inputs", {}).get("count"), "formula_link_updates", sum(data.get("table_updates", {}).values()))'
 REMOTE_SCRIPT

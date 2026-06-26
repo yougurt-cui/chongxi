@@ -145,7 +145,7 @@ PIPELINE_DEFINITIONS: dict[str, tuple[NodeDefinition, ...]] = {
             node_name="原料抽取",
             callable_path="services.orchestrator_service.noop_node",
             api=ApiRoute(method="POST", url="/api/consumer/features/engineer", timeout_seconds=300),
-            depends_on=("formula_standardize",),
+            depends_on=("formula_input_build",),
             priority=30,
         ),
         NodeDefinition(
@@ -171,6 +171,18 @@ PIPELINE_DEFINITIONS: dict[str, tuple[NodeDefinition, ...]] = {
             api=ApiRoute(method="POST", url="/api/catfood/standardization/formula", timeout_seconds=60),
             depends_on=("product_standardize",),
             priority=23,
+        ),
+        NodeDefinition(
+            node_code="formula_input_build",
+            node_name="配方计算输入准备",
+            callable_path="services.catfood_standardization_service.build_formula_feature_input",
+            api=ApiRoute(
+                method="POST",
+                url="/api/catfood/standardization/formula-input/build",
+                timeout_seconds=60,
+            ),
+            depends_on=("formula_standardize",),
+            priority=24,
         ),
         NodeDefinition(
             node_code="ingredient_standardize",
@@ -1034,6 +1046,13 @@ def output_check(node_code: str, output: dict[str, Any], task_payload: dict[str,
                 {"standardization_status": status},
             )
         return CheckResult(False, NODE_FAILED, f"{node_code} 返回未知状态: {status or 'empty'}")
+    if node_code == "formula_input_build":
+        status = str(output.get("build_status") or "").strip()
+        if status in {"ready", "nutrition_missing"} and output.get("formula_id"):
+            return CheckResult(True, NODE_SUCCESS, f"配方输入已准备: {status}")
+        if status == "blocked":
+            return CheckResult(False, NODE_NEED_REVIEW, "配方输入缺少有效原料")
+        return CheckResult(False, NODE_FAILED, f"配方输入状态异常: {status or 'empty'}")
     if node_code == "ingredient_extract":
         return _check_ingredient_extract(output)
     if node_code == "ingredient_standardize":
@@ -1430,7 +1449,7 @@ def build_node_input(task: dict[str, Any], node_def: NodeDefinition) -> dict[str
             }
         if node_def.node_code == "ingredient_extract":
             ocr_output = _output_for(task, "ocr_formula")
-            formula_output = _output_for(task, "formula_standardize")
+            formula_output = _output_for(task, "formula_input_build")
             return {
                 "orchestrator_task_id": task["id"],
                 "orchestrator_node_code": node_def.node_code,
@@ -1473,8 +1492,16 @@ def build_node_input(task: dict[str, Any], node_def: NodeDefinition) -> dict[str
                 "brand_id": product_output.get("brand_id"),
                 "product_id": product_output.get("product_id"),
             }
+        if node_def.node_code == "formula_input_build":
+            formula_output = _output_for(task, "formula_standardize")
+            return {
+                "orchestrator_task_id": task["id"],
+                "orchestrator_node_code": node_def.node_code,
+                "formula_id": formula_output.get("formula_id"),
+            }
         if node_def.node_code == "ingredient_standardize":
             extract_output = _output_for(task, "ingredient_extract")
+            formula_input = _output_for(task, "formula_input_build")
             return {
                 "orchestrator_task_id": task["id"],
                 "orchestrator_node_code": node_def.node_code,
@@ -1485,9 +1512,13 @@ def build_node_input(task: dict[str, Any], node_def: NodeDefinition) -> dict[str
                 "ingredient_composition": extract_output.get("ingredient_composition"),
                 "ingredients": extract_output.get("ingredients"),
                 "product_name": extract_output.get("product_name") or payload.get("product_name"),
+                "brand_id": formula_input.get("brand_id"),
+                "product_id": formula_input.get("product_id"),
+                "formula_id": formula_input.get("formula_id"),
             }
         if node_def.node_code == "formula_profile":
             standardize_output = _output_for(task, "ingredient_standardize")
+            formula_input = _output_for(task, "formula_input_build")
             return {
                 "orchestrator_task_id": task["id"],
                 "orchestrator_node_code": node_def.node_code,
@@ -1496,6 +1527,9 @@ def build_node_input(task: dict[str, Any], node_def: NodeDefinition) -> dict[str
                 "brand": standardize_output.get("brand"),
                 "standardized_ingredients": standardize_output,
                 "product_name": standardize_output.get("product_name") or payload.get("product_name"),
+                "brand_id": formula_input.get("brand_id"),
+                "product_id": formula_input.get("product_id"),
+                "formula_id": formula_input.get("formula_id"),
             }
 
     return payload
@@ -1674,6 +1708,28 @@ def _set_if_missing(output: dict[str, Any], key: str, value: Any) -> None:
         output[key] = value
 
 
+def _unwrap_node_output_envelope(output: dict[str, Any]) -> dict[str, Any]:
+    """Flatten common API envelopes before saving and validating node output."""
+    if not isinstance(output, dict):
+        return {}
+
+    for envelope_key in ("data", "result", "item"):
+        nested = output.get(envelope_key)
+        if not isinstance(nested, dict):
+            continue
+        if not nested:
+            continue
+        flattened = dict(nested)
+        for key, value in output.items():
+            if key == envelope_key:
+                continue
+            if key == "ok" or not _is_non_empty(flattened.get(key)):
+                flattened[key] = value
+        return flattened
+
+    return dict(output)
+
+
 def _merge_identity_fields(output: dict[str, Any], *sources: dict[str, Any]) -> None:
     for source in sources:
         if not isinstance(source, dict):
@@ -1739,7 +1795,8 @@ def apply_node_result(
     if node_code not in nodes_by_code:
         raise ValueError(f"节点不存在: {task_id}/{node_code}")
 
-    output = _augment_node_output(task, node_code, dict(output or {}))
+    output = _unwrap_node_output_envelope(dict(output or {}))
+    output = _augment_node_output(task, node_code, output)
     normalized_status = str(call_status or "").strip().lower()
     with _connect() as conn:
         if output:

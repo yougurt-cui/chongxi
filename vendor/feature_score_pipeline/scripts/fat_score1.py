@@ -796,6 +796,25 @@ def ensure_output_table_metadata():
                     )
                 )
             )
+
+        required_columns = {
+            "formula_id": "BIGINT UNSIGNED NULL",
+            "source_id": "BIGINT NULL",
+            "product_key": "VARCHAR(1024) NULL",
+            "brand": "VARCHAR(255) NULL",
+            "product_name": "VARCHAR(512) NULL",
+        }
+        for column_name, column_type in required_columns.items():
+            if column_name not in column_map:
+                conn.execute(
+                    text(
+                        "ALTER TABLE {} ADD COLUMN {} {}".format(
+                            quote_identifier(OUTPUT_TABLE),
+                            quote_identifier(column_name),
+                            column_type,
+                        )
+                    )
+                )
         else:
             conn.execute(
                 text(
@@ -1033,6 +1052,8 @@ df = round_score_columns(df)
 # =========================
 OUTPUT_COLUMNS = [
     "id",
+    "formula_id",
+    "source_id",
     "product_key",
     "brand",
     "product_name",
@@ -1066,7 +1087,7 @@ OUTPUT_COLUMNS = [
     "created_at",
 ]
 
-output_df = df[OUTPUT_COLUMNS].copy()
+output_df = df[[column for column in OUTPUT_COLUMNS if column in df.columns]].copy()
 
 upsert_output(output_df)
 

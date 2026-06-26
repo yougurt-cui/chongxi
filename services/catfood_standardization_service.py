@@ -26,6 +26,7 @@ BRAND_ALIAS_TABLE = "catfood_standard_brand_alias"
 PRODUCT_TABLE = "catfood_standard_product"
 PRODUCT_ALIAS_TABLE = "catfood_standard_product_alias"
 FORMULA_TABLE = "catfood_standard_formula"
+FORMULA_INPUT_TABLE = "catfood_formula_feature_input"
 MAPPING_TABLE = "catfood_ocr_standard_mapping"
 BRAND_CANDIDATE_TABLE = "catfood_standard_brand_candidate"
 PRODUCT_CANDIDATE_TABLE = "catfood_standard_product_candidate"
@@ -169,6 +170,46 @@ def init_standardization_db() -> None:
             )
             cursor.execute(
                 f"""
+                CREATE TABLE IF NOT EXISTS `{FORMULA_INPUT_TABLE}` (
+                  formula_id BIGINT UNSIGNED NOT NULL,
+                  product_id BIGINT UNSIGNED NOT NULL,
+                  brand_id BIGINT NOT NULL,
+                  formula_version INT NOT NULL,
+                  is_current TINYINT NOT NULL DEFAULT 1,
+                  id BIGINT UNSIGNED NOT NULL,
+                  source_id BIGINT NULL,
+                  parsed_row_id BIGINT NULL,
+                  canonical_source_id BIGINT NULL,
+                  source_ids_json JSON NULL,
+                  merged_source_ids TEXT NULL,
+                  brand VARCHAR(255) NOT NULL,
+                  product_name VARCHAR(512) NOT NULL,
+                  image_name VARCHAR(255) NULL,
+                  image_path VARCHAR(1024) NULL,
+                  file_sha256 CHAR(64) NULL,
+                  ingredient_composition LONGTEXT NOT NULL,
+                  normalized_ingredient_composition LONGTEXT NOT NULL,
+                  normalized_ingredients_json JSON NULL,
+                  ingredient_fingerprint CHAR(64) NOT NULL,
+                  nutrition_json JSON NULL,
+                  nutrition_completeness DECIMAL(6,5) NOT NULL DEFAULT 0,
+                  input_hash CHAR(64) NOT NULL,
+                  input_version VARCHAR(32) NOT NULL DEFAULT 'v1',
+                  build_status VARCHAR(32) NOT NULL,
+                  parse_batch_id VARCHAR(32) NOT NULL DEFAULT 'formula_input',
+                  parse_ts DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                  updated_ts DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                  PRIMARY KEY (formula_id),
+                  UNIQUE KEY uq_formula_input_id (id),
+                  KEY idx_formula_input_source_id (source_id),
+                  KEY idx_formula_input_product_current (product_id, is_current),
+                  KEY idx_formula_input_status (build_status)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                """
+            )
+            cursor.execute(
+                f"""
                 CREATE TABLE IF NOT EXISTS `{BRAND_CANDIDATE_TABLE}` (
                   candidate_id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
                   raw_brand_name VARCHAR(255) NOT NULL,
@@ -273,6 +314,277 @@ def init_standardization_db() -> None:
             )
         conn.commit()
     seed_brand_master()
+
+
+def _nutrition_completeness(nutrition: dict[str, Any]) -> float:
+    required_metrics = {"粗蛋白", "粗脂肪", "粗纤维", "水分", "粗灰分", "钙", "总磷"}
+    present = {
+        _clean(item.get("metric_name"))
+        for item in nutrition.values()
+        if isinstance(item, dict) and _clean(item.get("metric_name"))
+    }
+    return round(len(required_metrics & present) / len(required_metrics), 5)
+
+
+def _canonical_formula_source(
+    cursor,
+    *,
+    formula_id: int,
+) -> tuple[dict[str, Any] | None, list[int]]:
+    cursor.execute(
+        f"""
+        SELECT
+          m.source_id,
+          m.parsed_row_id,
+          p.image_name,
+          p.image_path,
+          p.file_sha256,
+          p.parse_ts,
+          p.updated_ts
+        FROM `{MAPPING_TABLE}` m
+        LEFT JOIN catfood_ingredient_ocr_parsed p
+          ON p.source_id = m.source_id
+        WHERE m.formula_id = %s
+        ORDER BY
+          (p.ingredient_composition IS NOT NULL AND TRIM(p.ingredient_composition) <> '') DESC,
+          p.updated_ts DESC,
+          p.id DESC,
+          m.mapping_id DESC
+        """,
+        (formula_id,),
+    )
+    rows = list(cursor.fetchall())
+    source_ids = list(
+        dict.fromkeys(int(row["source_id"]) for row in rows if row.get("source_id") is not None)
+    )
+    return (rows[0] if rows else None), source_ids
+
+
+def build_formula_feature_input(
+    *,
+    formula_id: int,
+    apply: bool = True,
+    initialize: bool = True,
+) -> dict[str, Any]:
+    """Build one stable, formula-keyed input row for downstream feature models."""
+    if initialize:
+        init_standardization_db()
+    with _connect() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                f"""
+                SELECT
+                  f.*,
+                  p.brand_id,
+                  p.standard_product_name,
+                  b.standard_brand_name
+                FROM `{FORMULA_TABLE}` f
+                JOIN `{PRODUCT_TABLE}` p ON p.product_id = f.product_id
+                JOIN `{BRAND_TABLE}` b ON b.brand_id = p.brand_id
+                WHERE f.formula_id = %s
+                  AND f.status = 'active'
+                """,
+                (int(formula_id),),
+            )
+            formula = cursor.fetchone()
+            if not formula:
+                raise KeyError(f"formula_id 不存在或未启用: {formula_id}")
+
+            source, source_ids = _canonical_formula_source(
+                cursor,
+                formula_id=int(formula_id),
+            )
+            nutrition = _json_dict(formula.get("nutrition_json"))
+            if not nutrition and source and source.get("source_id") is not None:
+                nutrition = _load_nutrition_signature(cursor, int(source["source_id"]))
+            raw_ingredients = _clean(formula.get("raw_ingredient_example"))
+            normalized = _clean(formula.get("normalized_ingredient_composition"))
+            normalized_items = _json_list(formula.get("normalized_ingredients_json"))
+            if not raw_ingredients:
+                raw_ingredients = normalized
+            completeness = _nutrition_completeness(nutrition)
+            build_status = (
+                "blocked"
+                if not normalized_items
+                else "ready"
+                if completeness >= 0.7
+                else "nutrition_missing"
+            )
+            input_payload = {
+                "formula_id": int(formula["formula_id"]),
+                "product_id": int(formula["product_id"]),
+                "brand_id": int(formula["brand_id"]),
+                "formula_version": int(formula["formula_version"]),
+                "brand": formula["standard_brand_name"],
+                "product_name": formula["standard_product_name"],
+                "raw_ingredient_composition": raw_ingredients,
+                "normalized_ingredients": normalized_items,
+                "nutrition": nutrition,
+                "source_ids": source_ids,
+            }
+            input_hash = hashlib.sha256(
+                json.dumps(
+                    input_payload,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            ).hexdigest()
+            existing_hash = None
+            cursor.execute(
+                f"SELECT input_hash FROM `{FORMULA_INPUT_TABLE}` WHERE formula_id = %s",
+                (int(formula_id),),
+            )
+            existing = cursor.fetchone()
+            if existing:
+                existing_hash = existing.get("input_hash")
+
+            if apply:
+                canonical_source_id = (
+                    int(source["source_id"])
+                    if source and source.get("source_id") is not None
+                    else None
+                )
+                compatibility_source_id = canonical_source_id or -(10**15 + int(formula_id))
+                synthetic_id = int(formula_id)
+                if int(formula["is_current"]):
+                    cursor.execute(
+                        f"""
+                        UPDATE `{FORMULA_INPUT_TABLE}`
+                        SET is_current = 0
+                        WHERE product_id = %s AND formula_id <> %s
+                        """,
+                        (formula["product_id"], formula["formula_id"]),
+                    )
+                cursor.execute(
+                    f"""
+                    INSERT INTO `{FORMULA_INPUT_TABLE}`(
+                      formula_id, product_id, brand_id, formula_version, is_current,
+                      id, source_id, parsed_row_id, canonical_source_id,
+                      source_ids_json, merged_source_ids,
+                      brand, product_name, image_name, image_path, file_sha256,
+                      ingredient_composition, normalized_ingredient_composition,
+                      normalized_ingredients_json, ingredient_fingerprint,
+                      nutrition_json, nutrition_completeness, input_hash, build_status,
+                      parse_batch_id, parse_ts, updated_ts
+                    ) VALUES(
+                      %s, %s, %s, %s, %s,
+                      %s, %s, %s, %s,
+                      %s, %s,
+                      %s, %s, %s, %s, %s,
+                      %s, %s,
+                      %s, %s,
+                      %s, %s, %s, %s,
+                      'formula_input', NOW(), NOW()
+                    )
+                    ON DUPLICATE KEY UPDATE
+                      product_id = VALUES(product_id),
+                      brand_id = VALUES(brand_id),
+                      formula_version = VALUES(formula_version),
+                      is_current = VALUES(is_current),
+                      source_id = VALUES(source_id),
+                      parsed_row_id = VALUES(parsed_row_id),
+                      canonical_source_id = VALUES(canonical_source_id),
+                      source_ids_json = VALUES(source_ids_json),
+                      merged_source_ids = VALUES(merged_source_ids),
+                      brand = VALUES(brand),
+                      product_name = VALUES(product_name),
+                      image_name = VALUES(image_name),
+                      image_path = VALUES(image_path),
+                      file_sha256 = VALUES(file_sha256),
+                      ingredient_composition = VALUES(ingredient_composition),
+                      normalized_ingredient_composition = VALUES(normalized_ingredient_composition),
+                      normalized_ingredients_json = VALUES(normalized_ingredients_json),
+                      ingredient_fingerprint = VALUES(ingredient_fingerprint),
+                      nutrition_json = VALUES(nutrition_json),
+                      nutrition_completeness = VALUES(nutrition_completeness),
+                      build_status = VALUES(build_status),
+                      updated_ts = IF(input_hash <> VALUES(input_hash), NOW(), updated_ts),
+                      input_hash = VALUES(input_hash)
+                    """,
+                    (
+                        formula["formula_id"],
+                        formula["product_id"],
+                        formula["brand_id"],
+                        formula["formula_version"],
+                        formula["is_current"],
+                        synthetic_id,
+                        compatibility_source_id,
+                        source.get("parsed_row_id") if source else None,
+                        canonical_source_id,
+                        json.dumps(source_ids, ensure_ascii=False),
+                        ",".join(str(value) for value in source_ids) or None,
+                        formula["standard_brand_name"],
+                        formula["standard_product_name"],
+                        source.get("image_name") if source else None,
+                        source.get("image_path") if source else None,
+                        source.get("file_sha256") if source else None,
+                        raw_ingredients,
+                        normalized,
+                        json.dumps(normalized_items, ensure_ascii=False),
+                        formula["ingredient_fingerprint"],
+                        json.dumps(nutrition, ensure_ascii=False),
+                        completeness,
+                        input_hash,
+                        build_status,
+                    ),
+                )
+            if apply:
+                conn.commit()
+            else:
+                conn.rollback()
+    result = {
+        "ok": True,
+        "formula_id": int(formula_id),
+        "product_id": int(formula["product_id"]),
+        "brand_id": int(formula["brand_id"]),
+        "source_id": (
+            source.get("source_id")
+            if source and source.get("source_id") is not None
+            else -(10**15 + int(formula_id))
+        ),
+        "source_ids": source_ids,
+        "input_hash": input_hash,
+        "changed": existing_hash != input_hash,
+        "build_status": build_status,
+        "nutrition_completeness": completeness,
+    }
+    return result
+
+
+def rebuild_formula_feature_inputs(*, apply: bool = True) -> dict[str, Any]:
+    init_standardization_db()
+    with _connect() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                f"""
+                SELECT formula_id
+                FROM `{FORMULA_TABLE}`
+                WHERE status = 'active'
+                ORDER BY formula_id
+                """
+            )
+            formula_ids = [int(row["formula_id"]) for row in cursor.fetchall()]
+    items = [
+        build_formula_feature_input(
+            formula_id=formula_id,
+            apply=apply,
+            initialize=False,
+        )
+        for formula_id in formula_ids
+    ]
+    result = {
+        "ok": True,
+        "applied": apply,
+        "count": len(items),
+        "changed": sum(bool(item["changed"]) for item in items),
+        "status_counts": {
+            status: sum(item["build_status"] == status for item in items)
+            for status in ("ready", "nutrition_missing", "blocked")
+        },
+        "items": items,
+    }
+    return result
 
 
 def initialize_brand_candidates() -> dict[str, int]:
@@ -1252,7 +1564,7 @@ def standardize_product(payload: dict[str, Any]) -> dict[str, Any]:
                 ),
             )
         conn.commit()
-    return {
+    result = {
         "ok": True,
         "source_id": source_id,
         "brand_id": mapping["brand_id"],
@@ -1266,6 +1578,7 @@ def standardize_product(payload: dict[str, Any]) -> dict[str, Any]:
         "formula_product_candidates": formula_candidates,
         "review_candidate_id": candidate_product_id,
     }
+    return result
 
 
 INGREDIENT_SYNONYMS = {
@@ -1798,7 +2111,7 @@ def standardize_formula(payload: dict[str, Any]) -> dict[str, Any]:
                 ),
             )
         conn.commit()
-    return {
+    result = {
         "ok": True,
         "source_id": source_id,
         "brand_id": mapping["brand_id"],
@@ -1812,6 +2125,12 @@ def standardize_formula(payload: dict[str, Any]) -> dict[str, Any]:
         "overall_status": overall,
         "formula_candidates": conflict_candidates if ingredients else [],
     }
+    if result["formula_id"]:
+        result["formula_input"] = build_formula_feature_input(
+            formula_id=int(result["formula_id"]),
+            apply=True,
+        )
+    return result
 
 
 def resolve_formula_mapping(payload: dict[str, Any]) -> dict[str, Any]:
@@ -1905,7 +2224,7 @@ def resolve_formula_mapping(payload: dict[str, Any]) -> dict[str, Any]:
                 ),
             )
         conn.commit()
-    return {
+    result = {
         "ok": True,
         "source_id": source_id,
         "product_id": mapping["product_id"],
@@ -1914,6 +2233,11 @@ def resolve_formula_mapping(payload: dict[str, Any]) -> dict[str, Any]:
         "formula_status": "matched",
         "overall_status": "matched",
     }
+    result["formula_input"] = build_formula_feature_input(
+        formula_id=int(formula["formula_id"]),
+        apply=True,
+    )
+    return result
 
 
 def get_standard_mapping(source_id: int) -> dict[str, Any] | None:

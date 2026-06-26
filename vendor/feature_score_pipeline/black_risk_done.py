@@ -70,6 +70,58 @@ def get_table_columns(engine, table_name):
     return {row[0] for row in rows}
 
 
+def ensure_reference_pool_formula_id(engine):
+    """Bring the reference pool snapshot up to formula-level identity when possible."""
+    columns = get_table_columns(engine, "reference_sku_pool_snapshot")
+    with engine.begin() as conn:
+        if "formula_id" not in columns:
+            conn.execute(
+                text(
+                    "ALTER TABLE reference_sku_pool_snapshot "
+                    "ADD COLUMN formula_id BIGINT UNSIGNED NULL AFTER sku_id"
+                )
+            )
+
+        index_rows = conn.execute(
+            text(
+                """
+                SELECT INDEX_NAME
+                FROM INFORMATION_SCHEMA.STATISTICS
+                WHERE TABLE_SCHEMA = :schema_name
+                  AND TABLE_NAME = 'reference_sku_pool_snapshot'
+                  AND INDEX_NAME = 'idx_reference_formula_feature'
+                """
+            ),
+            {"schema_name": DB_CONFIG["database"]},
+        ).fetchall()
+        if not index_rows:
+            conn.execute(
+                text(
+                    "ALTER TABLE reference_sku_pool_snapshot "
+                    "ADD KEY idx_reference_formula_feature (formula_id, feature_version)"
+                )
+            )
+
+        conn.execute(
+            text(
+                """
+                UPDATE reference_sku_pool_snapshot p
+                JOIN (
+                    SELECT sku_id, feature_version, MIN(formula_id) AS formula_id
+                    FROM sku_feature_input
+                    WHERE formula_id IS NOT NULL
+                    GROUP BY sku_id, feature_version
+                    HAVING COUNT(DISTINCT formula_id) = 1
+                ) f
+                  ON p.sku_id = f.sku_id
+                 AND p.feature_version = f.feature_version
+                SET p.formula_id = f.formula_id
+                WHERE p.formula_id IS NULL
+                """
+            )
+        )
+
+
 def build_sku_feature_sql(engine):
     """
     构造 sku_feature_input 查询 SQL。
@@ -89,6 +141,7 @@ def build_sku_feature_sql(engine):
     if can_join_fat_table:
         return f"""
         SELECT
+            s.formula_id,
             s.sku_id,
             s.sku_name,
             s.brand_name,
@@ -119,7 +172,8 @@ def build_sku_feature_sql(engine):
             WHERE f0.product_key IS NOT NULL
                OR unique_name.product_name IS NOT NULL
         ) f
-          ON s.sku_id = f.product_key
+          ON s.formula_id = f.formula_id
+          OR (s.formula_id IS NULL AND s.sku_id = f.product_key)
           OR (
               COALESCE(TRIM(s.sku_name), '') <> ''
               AND f.product_key <> s.sku_id
@@ -131,6 +185,7 @@ def build_sku_feature_sql(engine):
 
     return """
         SELECT
+            formula_id,
             sku_id,
             sku_name,
             brand_name,
@@ -486,6 +541,20 @@ def load_sku_feature_input(engine, feature_version):
     return pd.read_sql(text(sql), engine, params={"feature_version": feature_version})
 
 
+def dedupe_reference_pool_rows(df):
+    if df.empty or "formula_id" not in df.columns:
+        return df
+    linked = df[df["formula_id"].notna()].drop_duplicates(
+        subset=["formula_id"],
+        keep="first",
+    )
+    legacy = df[df["formula_id"].isna()].drop_duplicates(
+        subset=["sku_id", "feature_version"],
+        keep="first",
+    )
+    return pd.concat([linked, legacy], ignore_index=True)
+
+
 def load_reference_pool(engine, reference_pool_version, feature_version):
     fat_cols = get_table_columns(engine, FAT_FEATURE_TABLE)
     can_join_fat_table = {
@@ -499,6 +568,7 @@ def load_reference_pool(engine, reference_pool_version, feature_version):
     if can_join_fat_table:
         sql = f"""
             SELECT
+                f.formula_id,
                 f.sku_id,
                 f.sku_name,
                 f.brand_name,
@@ -516,16 +586,21 @@ def load_reference_pool(engine, reference_pool_version, feature_version):
                 ff.fat_reason_tags
             FROM reference_sku_pool_snapshot p
             JOIN sku_feature_input f
-              ON p.sku_id = f.sku_id
-             AND p.feature_version = f.feature_version
+              ON p.feature_version = f.feature_version
+             AND (
+                    (p.formula_id IS NOT NULL AND p.formula_id = f.formula_id)
+                 OR (p.formula_id IS NULL AND p.sku_id = f.sku_id)
+             )
             LEFT JOIN {FAT_FEATURE_TABLE} ff
-              ON f.sku_id = ff.product_key
+              ON f.formula_id = ff.formula_id
+              OR (f.formula_id IS NULL AND f.sku_id = ff.product_key)
             WHERE p.reference_pool_version = :reference_pool_version
               AND p.feature_version = :feature_version
         """
     else:
         sql = """
             SELECT
+                f.formula_id,
                 f.sku_id,
                 f.sku_name,
                 f.brand_name,
@@ -543,13 +618,16 @@ def load_reference_pool(engine, reference_pool_version, feature_version):
                 NULL AS fat_reason_tags
             FROM reference_sku_pool_snapshot p
             JOIN sku_feature_input f
-              ON p.sku_id = f.sku_id
-             AND p.feature_version = f.feature_version
+              ON p.feature_version = f.feature_version
+             AND (
+                    (p.formula_id IS NOT NULL AND p.formula_id = f.formula_id)
+                 OR (p.formula_id IS NULL AND p.sku_id = f.sku_id)
+             )
             WHERE p.reference_pool_version = :reference_pool_version
               AND p.feature_version = :feature_version
         """
 
-    return pd.read_sql(
+    df = pd.read_sql(
         text(sql),
         engine,
         params={
@@ -557,6 +635,7 @@ def load_reference_pool(engine, reference_pool_version, feature_version):
             "feature_version": feature_version,
         },
     )
+    return dedupe_reference_pool_rows(df)
 
 
 def load_brand_symptom_stats(engine, symptom_type="black_chin"):
@@ -1002,6 +1081,7 @@ def write_results(engine, result_df):
     """
 
     insert_columns = [
+        "formula_id",
         "sku_id",
         "sku_name",
         "brand_name",
@@ -1066,6 +1146,7 @@ def ensure_result_table_schema(engine):
     兼容当前 sku_risk_score_result 表，补齐脚本会写入的品牌反馈字段。
     """
     expected_columns = {
+        "formula_id": "BIGINT UNSIGNED NULL",
         "brand_black_chin_rate": "DECIMAL(10,4) NULL",
         "brand_black_chin_count": "INT NULL",
         "brand_total_comment_count": "INT NULL",
@@ -1116,6 +1197,7 @@ def run(
     monitor_reference_pool=True,
 ):
     engine = get_engine()
+    ensure_reference_pool_formula_id(engine)
 
     if reference_pool_version is None:
         reference_pool_version = get_active_reference_pool_version(engine)

@@ -931,12 +931,37 @@ def load_product_pool(engine) -> pd.DataFrame:
     if product_col not in table_cols:
         raise ValueError(f"产品 score 表缺少字段：{product_col}")
 
-    selected_cols = [product_col]
-    if brand_col in table_cols:
-        selected_cols.append(brand_col)
-    selected_cols.extend([col for col in SCORE_COLS if col in table_cols])
-
-    sql = text(f"SELECT {', '.join(quote_identifier(c) for c in selected_cols)} FROM {quote_identifier(table)}")
+    if "formula_id" in table_cols and "source_id" in table_cols:
+        selected_exprs = [
+            f"fi.product_name AS {quote_identifier(product_col)}",
+            "s.formula_id",
+        ]
+        if brand_col in table_cols:
+            selected_exprs.append(f"fi.brand AS {quote_identifier(brand_col)}")
+        selected_exprs.extend(
+            f"s.{quote_identifier(col)}"
+            for col in SCORE_COLS
+            if col in table_cols
+        )
+        sql = text(f"""
+            SELECT {", ".join(selected_exprs)}
+            FROM {quote_identifier(table)} s
+            JOIN csv_labeling.catfood_formula_feature_input fi
+              ON fi.formula_id = s.formula_id
+             AND fi.source_id = s.source_id
+            WHERE fi.is_current = 1
+        """)
+    else:
+        selected_cols = [product_col]
+        if "formula_id" in table_cols:
+            selected_cols.append("formula_id")
+        if brand_col in table_cols:
+            selected_cols.append(brand_col)
+        selected_cols.extend([col for col in SCORE_COLS if col in table_cols])
+        sql = text(
+            f"SELECT {', '.join(quote_identifier(c) for c in selected_cols)} "
+            f"FROM {quote_identifier(table)}"
+        )
     df = pd.read_sql(sql, engine)
 
     for col in SCORE_COLS:
@@ -1026,7 +1051,12 @@ def build_risk_relative_position(row: Optional[pd.Series]) -> str:
         return "相对位置：暂无"
 
 
-def query_risk_row(engine, product_name: str, model_like: str) -> Optional[pd.Series]:
+def query_risk_row(
+    engine,
+    product_name: str,
+    model_like: str,
+    formula_id: Any = None,
+) -> Optional[pd.Series]:
     table = CONFIG_TABLES["risk_table"]
     product_col = CONFIG_TABLES["risk_product_name_col"]
     columns = get_table_columns(engine, table)
@@ -1039,15 +1069,20 @@ def query_risk_row(engine, product_name: str, model_like: str) -> Optional[pd.Se
     elif "created_at" in columns:
         order_sql = "ORDER BY created_at DESC"
 
+    identity_clause = f"{quote_identifier(product_col)} = :product_name"
+    params = {"product_name": product_name, "model_like": model_like}
+    if "formula_id" in columns and formula_id is not None and not pd.isna(formula_id):
+        identity_clause = "formula_id = :formula_id"
+        params["formula_id"] = int(formula_id)
     sql = text(f"""
         SELECT *
         FROM {quote_identifier(table)}
-        WHERE {quote_identifier(product_col)} = :product_name
+        WHERE {identity_clause}
           AND score_model_version LIKE :model_like
         {order_sql}
         LIMIT 1
     """)
-    df = pd.read_sql(sql, engine, params={"product_name": product_name, "model_like": model_like})
+    df = pd.read_sql(sql, engine, params=params)
     if df.empty:
         return None
     return df.iloc[0]
@@ -1060,8 +1095,19 @@ def enrich_top_products_with_risk(engine, rec_df: pd.DataFrame) -> pd.DataFrame:
 
     for _, row in rec_df.iterrows():
         product_name = row[product_col]
-        black_row = query_risk_row(engine, product_name, CONFIG_TABLES["black_chin_score_model_like"])
-        stool_row = query_risk_row(engine, product_name, CONFIG_TABLES["soft_stool_score_model_like"])
+        formula_id = row.get("formula_id")
+        black_row = query_risk_row(
+            engine,
+            product_name,
+            CONFIG_TABLES["black_chin_score_model_like"],
+            formula_id=formula_id,
+        )
+        stool_row = query_risk_row(
+            engine,
+            product_name,
+            CONFIG_TABLES["soft_stool_score_model_like"],
+            formula_id=formula_id,
+        )
 
         item = row.to_dict()
         item["black_chin_risk_level"] = safe_get(black_row, CONFIG_TABLES["risk_level_col"], "暂无")

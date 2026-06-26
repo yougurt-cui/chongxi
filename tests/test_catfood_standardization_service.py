@@ -1,6 +1,7 @@
 import unittest
 
 from services.catfood_standardization_service import (
+    _nutrition_completeness,
     _merge_product_candidate_lineage,
     _merge_json_lists,
     _preferred_value,
@@ -13,6 +14,15 @@ from services.catfood_standardization_service import (
 
 
 class CatfoodStandardizationServiceTest(unittest.TestCase):
+    def test_nutrition_completeness_uses_core_guarantee_metrics(self):
+        nutrition = {
+            "protein": {"metric_name": "粗蛋白"},
+            "fat": {"metric_name": "粗脂肪"},
+            "fiber": {"metric_name": "粗纤维"},
+            "calcium": {"metric_name": "钙"},
+        }
+        self.assertEqual(_nutrition_completeness(nutrition), 0.57143)
+
     def test_name_normalization(self):
         self.assertEqual(normalize_name("N&D 南瓜系列"), "n&d南瓜系列")
 

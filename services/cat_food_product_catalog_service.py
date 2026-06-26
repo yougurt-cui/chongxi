@@ -380,69 +380,79 @@ def _fetch_score_rows() -> list[dict[str, Any]]:
             cursor.execute(
                 f"""
                 SELECT
-                    w.source_id, w.product_key, w.brand, w.product_name,
+                    w.formula_id, w.source_id, w.product_key, w.brand, w.product_name,
                     w.protein_structure_score, w.protein_quality_score,
                     w.fat_regulation_score, w.fat_score,
                     w.omega_imbalance_score, w.p_total_score, w.p_buffer,
                     w.q_feed, w.q_scfa, w.q_total_score, w.starch_burden_score,
                     (
                         SELECT protein_score FROM {SKU_FEATURE_TABLE}
-                        WHERE sku_id = w.product_key
+                        WHERE (formula_id = w.formula_id)
+                           OR (formula_id IS NULL AND sku_id = w.product_key)
                         ORDER BY created_at DESC
                         LIMIT 1
                     ) AS protein_score,
                     (
                         SELECT carb_score FROM {SKU_FEATURE_TABLE}
-                        WHERE sku_id = w.product_key
+                        WHERE (formula_id = w.formula_id)
+                           OR (formula_id IS NULL AND sku_id = w.product_key)
                         ORDER BY created_at DESC
                         LIMIT 1
                     ) AS carb_score,
                     (
                         SELECT fiber_score FROM {SKU_FEATURE_TABLE}
-                        WHERE sku_id = w.product_key
+                        WHERE (formula_id = w.formula_id)
+                           OR (formula_id IS NULL AND sku_id = w.product_key)
                         ORDER BY created_at DESC
                         LIMIT 1
                     ) AS fiber_score,
                     (
                         SELECT fat_score FROM {SKU_FEATURE_TABLE}
-                        WHERE sku_id = w.product_key
+                        WHERE (formula_id = w.formula_id)
+                           OR (formula_id IS NULL AND sku_id = w.product_key)
                         ORDER BY created_at DESC
                         LIMIT 1
                     ) AS sku_fat_score,
                     (
                         SELECT prebiotic_score FROM {SKU_FEATURE_TABLE}
-                        WHERE sku_id = w.product_key
+                        WHERE (formula_id = w.formula_id)
+                           OR (formula_id IS NULL AND sku_id = w.product_key)
                         ORDER BY created_at DESC
                         LIMIT 1
                     ) AS prebiotic_score,
                     (
                         SELECT antioxidant_score FROM {SKU_FEATURE_TABLE}
-                        WHERE sku_id = w.product_key
+                        WHERE (formula_id = w.formula_id)
+                           OR (formula_id IS NULL AND sku_id = w.product_key)
                         ORDER BY created_at DESC
                         LIMIT 1
                     ) AS antioxidant_score,
                     (
                         SELECT p_buffer FROM {SKU_FEATURE_TABLE}
-                        WHERE sku_id = w.product_key
+                        WHERE (formula_id = w.formula_id)
+                           OR (formula_id IS NULL AND sku_id = w.product_key)
                         ORDER BY created_at DESC
                         LIMIT 1
                     ) AS sku_p_buffer,
                     (
                         SELECT q_feed FROM {SKU_FEATURE_TABLE}
-                        WHERE sku_id = w.product_key
+                        WHERE (formula_id = w.formula_id)
+                           OR (formula_id IS NULL AND sku_id = w.product_key)
                         ORDER BY created_at DESC
                         LIMIT 1
                     ) AS sku_q_feed,
                     (
                         SELECT q_scfa FROM {SKU_FEATURE_TABLE}
-                        WHERE sku_id = w.product_key
+                        WHERE (formula_id = w.formula_id)
+                           OR (formula_id IS NULL AND sku_id = w.product_key)
                         ORDER BY created_at DESC
                         LIMIT 1
                     ) AS sku_q_scfa,
                     (
                         SELECT current_pool_risk_level
                         FROM {RISK_RESULT_TABLE}
-                        WHERE sku_id = w.product_key
+                        WHERE ((formula_id = w.formula_id)
+                            OR (formula_id IS NULL AND sku_id = w.product_key))
                           AND score_model_version LIKE 'BLACK_CHIN%%'
                         ORDER BY calculated_at DESC
                         LIMIT 1
@@ -450,7 +460,8 @@ def _fetch_score_rows() -> list[dict[str, Any]]:
                     (
                         SELECT current_pool_risk_level
                         FROM {RISK_RESULT_TABLE}
-                        WHERE sku_id = w.product_key
+                        WHERE ((formula_id = w.formula_id)
+                            OR (formula_id IS NULL AND sku_id = w.product_key))
                           AND score_model_version LIKE 'SOFT_STOOL%%'
                         ORDER BY calculated_at DESC
                         LIMIT 1

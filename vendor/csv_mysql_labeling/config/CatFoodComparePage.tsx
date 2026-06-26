@@ -37,6 +37,7 @@ type FriendlyRow = {
 
 type ProductInfo = {
   query: string;
+  formula_id?: string | number | null;
   source_id?: string | number | null;
   product_key?: string | null;
   name: string;
@@ -57,6 +58,7 @@ type MaterialRoleEvidence = {
 type ProductOption = {
   id: string;
   catalog_key: string;
+  formula_id?: string | number | null;
   product_key?: string | null;
   label: string;
   brand: string;
@@ -611,30 +613,48 @@ function ProductCarousel(props: {
 
 function SelectedCompareBar(props: {
   selectedCount: number;
+  selectedProducts: ProductOption[];
   loading: boolean;
   summaryLoading: boolean;
   canCompare: boolean;
   hasResult: boolean;
   onAddProduct: () => void;
+  onRemoveProduct: (value: string) => void;
   onCompare: () => void;
   onSummary: () => void;
 }) {
   return (
-    <section className="grid grid-cols-[minmax(0,1fr)_auto_auto_auto] items-center gap-4 max-[1399px]:grid-cols-[minmax(0,1fr)_auto]">
-      <div className="flex h-[48px] items-center justify-between rounded-xl border border-[#E5E9F5] bg-white px-5 shadow-[0_8px_24px_rgba(30,41,59,0.04)]">
-        <div className="flex items-center gap-3 text-[#172033]">
+    <section className="grid grid-cols-[minmax(0,1fr)_auto_auto_auto] items-start gap-4 max-[1399px]:grid-cols-[minmax(0,1fr)_auto]">
+      <div className="flex min-h-[48px] flex-wrap items-center justify-between gap-3 rounded-xl border border-[#E5E9F5] bg-white px-5 py-2 shadow-[0_8px_24px_rgba(30,41,59,0.04)]">
+        <div className="flex min-w-0 flex-1 flex-wrap items-center gap-3 text-[#172033]">
           <span className="flex h-7 w-7 items-center justify-center rounded-full bg-[#F3F2FF] text-[#3F35FF]">
             <FavoriteIcon className="h-4 w-4" />
           </span>
           <span className="text-[16px] font-semibold">已选内容（{props.selectedCount}）</span>
-          <span className="ml-3 text-[14px] font-normal text-[#8A94A8]">
-            {props.loading
-              ? "正在生成对比"
-              : props.selectedCount >= 2
-                ? "已准备好对比"
-                : props.selectedCount === 0
-                  ? "还未选择任何产品，快去收藏喜欢的产品吧"
-                  : "请选择 2 个产品"}
+          {props.selectedProducts.length ? (
+            <div className="flex min-w-0 flex-1 flex-wrap gap-2">
+              {props.selectedProducts.map((product) => {
+                const value = productOptionValue(product);
+                const name = [product.brand, product.product_name].filter(Boolean).join(" ") || product.label;
+                return (
+                  <button
+                    key={value}
+                    type="button"
+                    onClick={() => props.onRemoveProduct(value)}
+                    title={`移除 ${name}`}
+                    className="inline-flex max-w-[340px] items-center gap-2 rounded-lg border border-[#DDDFFF] bg-[#F7F6FF] px-3 py-1 text-[12px] font-medium text-[#4034E8] hover:border-[#B9B4FF] hover:bg-[#F0EEFF]"
+                  >
+                    <span className="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap">{name}</span>
+                    <span className="text-[14px] leading-none text-[#7A70FF]">×</span>
+                  </button>
+                );
+              })}
+            </div>
+          ) : (
+            <span className="text-[14px] font-normal text-[#8A94A8]">还未选择任何产品，点击商品卡片加入对比</span>
+          )}
+          <span className="text-[14px] font-normal text-[#8A94A8]">
+            {props.loading ? "正在生成对比" : props.selectedCount >= 2 ? "已准备好对比" : props.selectedCount === 1 ? "请选择 2 个产品" : ""}
           </span>
         </div>
         <span className="text-[#4B4BFF]"><ChevronDownIcon /></span>
@@ -1531,7 +1551,8 @@ function CatFoodComparePage() {
 
   const selectedCurrentFood = useMemo(() => findProductOption(productOptions, currentFood), [currentFood, productOptions]);
   const selectedTargetFood = useMemo(() => findProductOption(productOptions, targetFood), [targetFood, productOptions]);
-  const selectedCount = [selectedCurrentFood, selectedTargetFood].filter(Boolean).length;
+  const selectedProducts = [selectedCurrentFood, selectedTargetFood].filter((product): product is ProductOption => Boolean(product));
+  const selectedCount = selectedProducts.length;
   const canCompare = Boolean(currentFood && targetFood && currentFood !== targetFood && selectedCurrentFood && selectedTargetFood);
 
   const filteredOptions = useMemo(() => {
@@ -1571,6 +1592,8 @@ function CatFoodComparePage() {
       target_display_name: selectedTargetFood?.product_name || "",
       current_source_id: selectedCurrentFood?.score_source_id || "",
       target_source_id: selectedTargetFood?.score_source_id || "",
+      current_formula_id: selectedCurrentFood?.formula_id || "",
+      target_formula_id: selectedTargetFood?.formula_id || "",
       current_product_key: selectedCurrentFood?.product_key || "",
       target_product_key: selectedTargetFood?.product_key || "",
       cat_profile: catProfile,
@@ -1663,13 +1686,31 @@ function CatFoodComparePage() {
     if (!product.value) return;
     if (product.value === currentFood) {
       setCurrentFood("");
+      resetCompareState();
+      return;
     } else if (product.value === targetFood) {
       setTargetFood("");
+      resetCompareState();
+      return;
     } else if (!currentFood) {
       setCurrentFood(product.value);
     } else {
       setTargetFood(product.value);
     }
+    resetCompareState();
+  }
+
+  function handleRemoveProduct(value: string) {
+    if (value === currentFood) {
+      setCurrentFood("");
+    }
+    if (value === targetFood) {
+      setTargetFood("");
+    }
+    resetCompareState();
+  }
+
+  function resetCompareState() {
     setTask(null);
     setCompareResult(null);
     setSummary(null);
@@ -1704,11 +1745,13 @@ function CatFoodComparePage() {
             <ProductCarousel products={carouselProducts} onSelect={handleSelectProduct} loading={productsLoading} error={productsError} />
             <SelectedCompareBar
               selectedCount={selectedCount}
+              selectedProducts={selectedProducts}
               loading={compareLoading}
               summaryLoading={summaryLoading}
               canCompare={canCompare}
               hasResult={Boolean(compareResult)}
               onAddProduct={() => setAddProductOpen(true)}
+              onRemoveProduct={handleRemoveProduct}
               onCompare={handleCompare}
               onSummary={handleGenerateSummary}
             />

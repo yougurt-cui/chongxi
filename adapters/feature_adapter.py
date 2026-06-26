@@ -545,7 +545,7 @@ def run_consumer_feature_engineering(
         "mode": "incremental",
         "steps": selected_steps,
         "db": {k: v for k, v in db_config.items() if k != "password"},
-        "source_table": "csv_labeling.catfood_ingredient_ocr_parsed",
+        "source_table": "csv_labeling.catfood_formula_feature_input",
         "target_tables": DEFAULT_TABLES,
         "row_counts": row_counts,
         "results": results,

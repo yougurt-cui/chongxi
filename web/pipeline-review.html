@@ -763,6 +763,7 @@
     let activeOcrItem = null;
     let activeTab = "node";
     let activeIdentityTab = "brand";
+    let focusedProductReview = null;
     const diseasePageSize = 100;
     let diseaseOffset = 0;
     let diseaseTotal = 0;
@@ -826,6 +827,7 @@
         return;
       }
       items.forEach((item) => {
+        const reviewCandidateId = item.output && item.output.review_candidate_id;
         const row = document.createElement("tr");
         row.innerHTML = `
           <td>
@@ -844,6 +846,7 @@
           <td>
             <div class="row-actions">
               <button class="small-button secondary" data-action="output" type="button">查看输出</button>
+              ${item.node_code === "product_standardize" && reviewCandidateId ? '<button class="small-button" data-action="product-review" type="button">审核产品候选</button>' : ""}
               ${item.node_code === "ocr_formula" && item.node_status !== "failed" ? '<button class="small-button" data-action="ocr" type="button">OCR 修改</button>' : ""}
               <button class="small-button secondary" data-action="reextract" type="button">重新抽取</button>
               <button class="small-button danger" data-action="cancel" type="button">作废</button>
@@ -876,6 +879,23 @@
             ocrDialogMeta.textContent = `${item.task_id.slice(0, 8)}｜${item.node_code}`;
             ocrTextEl.value = textFromOutput(item.output);
             ocrDialog.showModal();
+          });
+        }
+
+        const productReviewButton = row.querySelector('[data-action="product-review"]');
+        if (productReviewButton) {
+          productReviewButton.addEventListener("click", async () => {
+            focusedProductReview = {
+              productId: String(reviewCandidateId),
+              taskId: item.task_id,
+              nodeCode: item.node_code,
+            };
+            productStatusFilter.value = "";
+            productQualityFilter.value = "";
+            productBrandFilter.value = "";
+            switchTab("identity");
+            switchIdentityTab("product");
+            showToast(`已定位产品候选 ${reviewCandidateId}`);
           });
         }
 
@@ -1079,6 +1099,7 @@
         });
 
         row.querySelector('[data-action="approve-product"]').addEventListener("click", async () => {
+          const reviewContext = focusedProductReview?.productId === String(item.product_id) ? { ...focusedProductReview } : null;
           const payload = {
             standard_brand_name: row.querySelector('[data-field="standard_brand_name"]').value.trim(),
             standard_product_name: row.querySelector('[data-field="standard_product_name"]').value.trim(),
@@ -1100,7 +1121,14 @@
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify(payload),
             });
-            showToast("产品候选已确认");
+            if (reviewContext) {
+              await resumeProductStandardizeTask(reviewContext);
+              focusedProductReview = null;
+              productStatusFilter.value = "needs_manual_review,pending";
+              showToast("产品候选已确认，编排任务已继续");
+            } else {
+              showToast("产品候选已确认");
+            }
           });
         });
 
@@ -1115,6 +1143,9 @@
                 review_note: "pipeline-review 产品身份认证",
               }),
             });
+            if (focusedProductReview?.productId === String(item.product_id)) {
+              focusedProductReview = null;
+            }
             showToast("产品候选已驳回");
           });
         });
@@ -1329,6 +1360,7 @@
         limit: "200",
         offset: "0",
       });
+      if (focusedProductReview?.productId) params.set("product_id", focusedProductReview.productId);
       try {
         const data = await api(`/api/product-identity/product-reviews?${params.toString()}`);
         renderProductIdentityItems(data);
@@ -1366,6 +1398,24 @@
         loadBrandCandidates();
         loadIdentityItems();
       }
+    }
+
+    async function resumeProductStandardizeTask(reviewContext) {
+      if (!reviewContext?.taskId || !reviewContext?.nodeCode) return;
+      await api(`/api/orchestrator/tasks/${reviewContext.taskId}/nodes/${reviewContext.nodeCode}/reextract`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reason: "产品候选人工确认后继续产品标准化" }),
+      });
+      await api("/api/orchestrator/dispatch-call-sync", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          limit: 1,
+          task_id: reviewContext.taskId,
+          node_codes: [reviewContext.nodeCode],
+        }),
+      });
     }
 
     function diseaseQueryParams() {
@@ -1533,8 +1583,14 @@
     refreshBtn.addEventListener("click", loadItems);
     identityRefreshBtn.addEventListener("click", loadIdentityItems);
     brandCandidateRefresh.addEventListener("click", () => loadBrandCandidates({ initialize: true }));
-    productIdentityRefreshBtn.addEventListener("click", loadProductIdentityItems);
-    productApplyFilter.addEventListener("click", loadProductIdentityItems);
+    productIdentityRefreshBtn.addEventListener("click", () => {
+      focusedProductReview = null;
+      loadProductIdentityItems();
+    });
+    productApplyFilter.addEventListener("click", () => {
+      focusedProductReview = null;
+      loadProductIdentityItems();
+    });
     productBrandFilter.addEventListener("keydown", (event) => {
       if (event.key === "Enter") loadProductIdentityItems();
     });

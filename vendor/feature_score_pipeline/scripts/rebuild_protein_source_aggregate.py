@@ -33,6 +33,7 @@ ANIMAL_SOURCE_LEVEL2_TO_LEVEL1 = {
     "火鸡": "禽类",
     "鸭": "禽类",
     "鹌鹑": "禽类",
+    "乳鸽": "禽类",
     "鲱鱼": "鱼类",
     "鳕鱼": "鱼类",
     "比目鱼": "鱼类",
@@ -135,6 +136,8 @@ PROTEIN_ANIMAL_MARKERS = (
     "火鸡",
     "鹅",
     "鹌鹑",
+    "乳鸽",
+    "鸽",
     "牛",
     "羊",
     "鹿",
@@ -281,6 +284,10 @@ def _normalize_source_token(token: str) -> Optional[str]:
         return "火鸡"
     if "鹌鹑" in cleaned:
         return "鹌鹑"
+    if "乳鸽" in cleaned:
+        return "乳鸽"
+    if "鸽" in cleaned:
+        return "乳鸽"
     if "鸭" in cleaned and "蛋" not in cleaned:
         return "鸭"
     if "鸡" in cleaned and "蛋" not in cleaned:
@@ -361,7 +368,11 @@ def _classify_animal_sources(animal_sources: Any, protein_source_details: Any) -
     level1_set: set[str] = set()
     has_fish_generic = False
 
-    for raw_token in _split_source_tokens(animal_sources):
+    source_tokens = _split_source_tokens(protein_source_details)
+    if not source_tokens:
+        source_tokens = _split_source_tokens(animal_sources)
+
+    for raw_token in source_tokens:
         normalized = _normalize_source_token(raw_token)
         if not normalized:
             continue
@@ -462,6 +473,7 @@ def _target_table_ddl(table_name: str) -> str:
     return f"""
     CREATE TABLE IF NOT EXISTS `{table_name}` (
       `source_id` BIGINT NOT NULL,
+      `formula_id` BIGINT UNSIGNED DEFAULT NULL,
       `product_key` VARCHAR(255) DEFAULT NULL,
       `guarantee_product_id` BIGINT DEFAULT NULL,
       `brand_name` VARCHAR(255) DEFAULT NULL,
@@ -857,7 +869,7 @@ def load_rows_from_parsed_incremental(
         """
 
     parsed_sql = f"""
-    SELECT p.id, p.source_id, p.image_name, p.image_path, p.brand, p.product_name, p.ingredient_composition, p.merged_source_ids
+    SELECT p.id, p.formula_id, p.source_id, p.image_name, p.image_path, p.brand, p.product_name, p.ingredient_composition, p.merged_source_ids
     FROM {parsed_fq} p
     WHERE p.source_id IS NOT NULL
       AND p.ingredient_composition IS NOT NULL
@@ -914,6 +926,7 @@ def load_rows_from_parsed_incremental(
                     batch_id=batch_id,
                     protein_feature_items=protein_feature_items,
                 )
+                label_row["formula_id"] = row.get("formula_id")
                 label_row["merged_source_ids"] = row.get("merged_source_ids")
                 label_rows.append(label_row)
 
@@ -1046,11 +1059,12 @@ def transform_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         out.append(
             {
                 "source_id": int(row["source_id"]),
+                "formula_id": int(row["formula_id"]) if row.get("formula_id") is not None else None,
                 "product_key": build_corrected_product_key(brand_name, product_name),
                 "guarantee_product_id": row.get("product_info_id") or row.get("guarantee_product_id"),
                 "brand_name": brand_name,
                 "product_name": product_name,
-                "animal_sources": _clean_text(row.get("animal_sources")),
+                "animal_sources": level2_sources or _clean_text(row.get("animal_sources")),
                 "animal_source_level1_categories": level1_categories,
                 "animal_source_level2_sources": level2_sources,
                 "protein_source_details": protein_source_details,
@@ -1086,6 +1100,7 @@ def write_rows(
         f"""
         INSERT INTO {target_fq} (
           source_id,
+          formula_id,
           product_key,
           guarantee_product_id,
           brand_name,
@@ -1107,6 +1122,7 @@ def write_rows(
           guarantee_crude_protein_unit
         ) VALUES (
           :source_id,
+          :formula_id,
           :product_key,
           :guarantee_product_id,
           :brand_name,
@@ -1128,6 +1144,7 @@ def write_rows(
           :guarantee_crude_protein_unit
         )
         ON DUPLICATE KEY UPDATE
+          formula_id = VALUES(formula_id),
           product_key = VALUES(product_key),
           guarantee_product_id = VALUES(guarantee_product_id),
           brand_name = VALUES(brand_name),
@@ -1226,7 +1243,7 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument("--parsed-db", default="csv_labeling", help="database containing catfood_ingredient_ocr_parsed")
-    parser.add_argument("--parsed-table", default="catfood_ingredient_ocr_parsed", help="current parsed OCR table used to filter stale protein labels")
+    parser.add_argument("--parsed-table", default="catfood_formula_feature_input", help="formula-keyed input table used to build protein labels")
     parser.add_argument("--feature-db", default="protein_feature_platform", help="database containing protein_source_feature")
     parser.add_argument("--feature-table", default="protein_source_feature", help="feature summary table")
     parser.add_argument("--guarantee-db", default="csv_labeling", help="database containing product_info/product_guarantee")

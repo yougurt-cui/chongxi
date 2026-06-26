@@ -16,6 +16,8 @@ import pymysql
 from app_config import get_feature_mysql_config, get_mysql_config
 from services.catfood_standardization_service import (
     BRAND_TABLE as STANDARD_BRAND_TABLE,
+    FORMULA_TABLE as STANDARD_FORMULA_TABLE,
+    PRODUCT_TABLE as STANDARD_PRODUCT_TABLE,
     init_standardization_db,
 )
 from services.cat_food_product_catalog_service import (
@@ -947,6 +949,188 @@ def list_ocr_product_options_with_brand_mapping(
         )
         if len(items) >= limit:
             break
+    return {"ok": True, "count": len(items), "items": items}
+
+
+def list_standardized_product_options(
+    *,
+    q: str = "",
+    origin: str = "",
+    price_bucket: str = "",
+    function_tag: str = "",
+    brand: str = "",
+    compare_available: str | bool | None = None,
+    limit: int = 200,
+) -> dict[str, Any]:
+    """Return active products from the standardized brand/product/formula masters."""
+    init_standardization_db()
+    limit = max(1, min(int(limit or 200), 500))
+    where = [
+        "b.active = 1",
+        "p.active = 1",
+        "f.is_current = 1",
+        "f.status = 'active'",
+    ]
+    params: list[Any] = []
+    if q:
+        like = f"%{q.strip()}%"
+        where.append(
+            "("
+            "b.standard_brand_name LIKE %s OR "
+            "p.display_name LIKE %s OR "
+            "p.display_subtitle LIKE %s OR "
+            "p.standard_product_name LIKE %s"
+            ")"
+        )
+        params.extend([like, like, like, like])
+    if brand:
+        where.append("b.standard_brand_name = %s")
+        params.append(brand)
+    if origin:
+        where.append("b.origin_type = %s")
+        params.append(origin)
+    params.append(limit)
+
+    with _connect_csv(autocommit=True) as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                f"""
+                SELECT
+                    b.brand_id,
+                    b.standard_brand_name,
+                    b.origin_type,
+                    b.brand_tier,
+                    b.min_price_per_jin,
+                    b.max_price_per_jin,
+                    b.price_band AS brand_price_band,
+                    b.image_url AS brand_image_url,
+                    p.product_id,
+                    p.standard_product_name,
+                    p.display_name,
+                    p.display_subtitle,
+                    p.price_band AS product_price_band,
+                    p.product_type,
+                    p.life_stage,
+                    p.image_url AS product_image_url,
+                    f.formula_id,
+                    f.formula_version,
+                    f.normalized_ingredient_composition,
+                    fi.source_id AS input_source_id
+                FROM `{STANDARD_BRAND_TABLE}` b
+                JOIN `{STANDARD_PRODUCT_TABLE}` p
+                  ON p.brand_id = b.brand_id
+                JOIN `{STANDARD_FORMULA_TABLE}` f
+                  ON f.product_id = p.product_id
+                LEFT JOIN catfood_formula_feature_input fi
+                  ON fi.formula_id = f.formula_id
+                WHERE {" AND ".join(where)}
+                ORDER BY b.standard_brand_name, p.display_name, f.formula_version DESC
+                LIMIT %s
+                """,
+                params,
+            )
+            rows = list(cursor.fetchall() or [])
+
+    formula_ids = [int(row["formula_id"]) for row in rows]
+    scores_by_formula: dict[int, list[dict[str, Any]]] = {}
+    if formula_ids:
+        placeholders = ", ".join(["%s"] * len(formula_ids))
+        with _connect_feature(autocommit=True) as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    f"""
+                    SELECT formula_id, source_id, product_key
+                    FROM catfood_protein_fat_fiber_score_wide
+                    WHERE formula_id IN ({placeholders})
+                    ORDER BY formula_id, source_id DESC
+                    """,
+                    formula_ids,
+                )
+                for score_row in cursor.fetchall() or []:
+                    formula_id = int(score_row["formula_id"])
+                    scores_by_formula.setdefault(formula_id, []).append(score_row)
+
+    compare_filter: bool | None = None
+    if compare_available not in (None, ""):
+        compare_filter = compare_available
+        if isinstance(compare_filter, str):
+            compare_filter = compare_filter.strip().lower() in {"1", "true", "yes", "available"}
+
+    items = []
+    for row in rows:
+        formula_id = int(row["formula_id"])
+        input_source_id = row.get("input_source_id")
+        score_candidates = scores_by_formula.get(formula_id, [])
+        score_row = next(
+            (
+                candidate
+                for candidate in score_candidates
+                if input_source_id is not None
+                and str(candidate.get("source_id")) == str(input_source_id)
+            ),
+            None,
+        )
+        if score_row is None and len(score_candidates) == 1:
+            score_row = score_candidates[0]
+        available = score_row is not None
+        if compare_filter is not None and available != compare_filter:
+            continue
+
+        min_price = _json_safe(row.get("min_price_per_jin"))
+        max_price = _json_safe(row.get("max_price_per_jin"))
+        average_price = None
+        if min_price is not None and max_price is not None:
+            average_price = round((float(min_price) + float(max_price)) / 2, 2)
+        elif min_price is not None:
+            average_price = min_price
+        elif max_price is not None:
+            average_price = max_price
+        row_price_bucket = _price_bucket_from_value(average_price)
+        if price_bucket and row_price_bucket != price_bucket:
+            continue
+        if function_tag:
+            continue
+
+        standard_brand = _clean_text(row.get("standard_brand_name"))
+        display_name = _clean_text(row.get("display_name"))
+        subtitle = _clean_text(row.get("display_subtitle"))
+        image_url = _clean_text(row.get("product_image_url")) or _clean_text(row.get("brand_image_url")) or None
+        items.append(
+            {
+                "id": f"formula:{formula_id}",
+                "catalog_key": f"formula:{formula_id}",
+                "formula_id": formula_id,
+                "product_id": int(row["product_id"]),
+                "brand_id": int(row["brand_id"]),
+                "product_key": (score_row or {}).get("product_key") or f"{standard_brand}||{display_name}",
+                "label": " ".join(part for part in [standard_brand, display_name] if part),
+                "brand": standard_brand,
+                "raw_brand": standard_brand,
+                "product_name": display_name,
+                "standard_product_name": row.get("standard_product_name"),
+                "display_subtitle": subtitle or None,
+                "raw_title": display_name,
+                "origin_type": row.get("origin_type"),
+                "brand_tier": row.get("brand_tier"),
+                "source": "standard_formula",
+                "source_item_id": str(formula_id),
+                "source_url": None,
+                "price": average_price,
+                "price_bucket": row_price_bucket,
+                "price_band": row.get("product_price_band") or row.get("brand_price_band"),
+                "food_taste": None,
+                "net_content": None,
+                "sold_text": "",
+                "main_image_url": image_url,
+                "main_images": [image_url] if image_url else [],
+                "compare_available": available,
+                "score_source_id": (score_row or {}).get("source_id"),
+                "function_tags": [],
+                "warning_tags": [],
+                "display_text": subtitle or row.get("normalized_ingredient_composition"),
+                "quality_flags": [] if available else ["score_missing"],
+            }
+        )
     return {"ok": True, "count": len(items), "items": items}
 
 

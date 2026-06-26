@@ -38,6 +38,7 @@ def ensure_target_table(engine):
     ddl = f"""
     CREATE TABLE IF NOT EXISTS {TARGET_TABLE} (
         id BIGINT AUTO_INCREMENT PRIMARY KEY,
+        formula_id BIGINT UNSIGNED NULL,
         sku_id VARCHAR(100) NOT NULL,
         sku_name VARCHAR(255) NULL,
         brand_name VARCHAR(100) NULL,
@@ -55,12 +56,14 @@ def ensure_target_table(engine):
         q_scfa DECIMAL(10,4) NULL,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         UNIQUE KEY uk_sku_feature_version (sku_id, feature_version),
+        UNIQUE KEY uk_formula_feature_version (formula_id, feature_version),
         KEY idx_feature_version (feature_version),
         KEY idx_batch_id (batch_id),
         KEY idx_data_type (data_type)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     """
     required_columns = {
+        "formula_id": "ALTER TABLE sku_feature_input ADD COLUMN formula_id BIGINT UNSIGNED NULL AFTER id",
         "p_buffer": "ALTER TABLE sku_feature_input ADD COLUMN p_buffer DECIMAL(10,4) NULL AFTER antioxidant_score",
         "q_feed": "ALTER TABLE sku_feature_input ADD COLUMN q_feed DECIMAL(10,4) NULL AFTER p_buffer",
         "q_scfa": "ALTER TABLE sku_feature_input ADD COLUMN q_scfa DECIMAL(10,4) NULL AFTER q_feed",
@@ -84,6 +87,19 @@ def ensure_target_table(engine):
         for column_name, alter_sql in required_columns.items():
             if column_name not in existing_cols:
                 conn.execute(text(alter_sql))
+        conn.execute(
+            text(
+                """
+                DELETE older
+                FROM sku_feature_input older
+                JOIN sku_feature_input newer
+                  ON older.formula_id = newer.formula_id
+                 AND older.feature_version = newer.feature_version
+                 AND older.formula_id IS NOT NULL
+                 AND older.id < newer.id
+                """
+            )
+        )
 
         index_count = conn.execute(
             text(
@@ -104,11 +120,31 @@ def ensure_target_table(engine):
                     "ADD UNIQUE KEY uk_sku_feature_version (sku_id, feature_version)"
                 )
             )
+        formula_index_count = conn.execute(
+            text(
+                """
+                SELECT COUNT(*)
+                FROM INFORMATION_SCHEMA.STATISTICS
+                WHERE TABLE_SCHEMA = :schema_name
+                  AND TABLE_NAME = :table_name
+                  AND INDEX_NAME = 'uk_formula_feature_version'
+                """
+            ),
+            {"schema_name": DB_NAME, "table_name": TARGET_TABLE},
+        ).scalar()
+        if not formula_index_count:
+            conn.execute(
+                text(
+                    f"ALTER TABLE {TARGET_TABLE} "
+                    "ADD UNIQUE KEY uk_formula_feature_version (formula_id, feature_version)"
+                )
+            )
 
 
 def load_wide(engine):
     sql = f"""
     SELECT
+        formula_id,
         product_key,
         brand,
         product_name,
@@ -143,6 +179,7 @@ def resolve_sku_brand(brand_name, sku_name):
 def build_feature_rows(wide_df, *, feature_version, data_type):
     rows = pd.DataFrame(
         {
+            "formula_id": wide_df["formula_id"],
             "sku_id": wide_df["product_key"].astype(str).str.strip(),
             "sku_name": wide_df["product_name"],
             "brand_name": wide_df["brand"],
@@ -170,7 +207,15 @@ def build_feature_rows(wide_df, *, feature_version, data_type):
         axis=1,
     )
     rows = rows[rows["sku_id"] != ""].copy()
-    rows = rows.drop_duplicates(subset=["sku_id", "feature_version"], keep="first")
+    linked = rows[rows["formula_id"].notna()].drop_duplicates(
+        subset=["formula_id", "feature_version"],
+        keep="first",
+    )
+    unlinked = rows[rows["formula_id"].isna()].drop_duplicates(
+        subset=["sku_id", "feature_version"],
+        keep="first",
+    )
+    rows = pd.concat([linked, unlinked], ignore_index=True)
     return rows
 
 
@@ -182,6 +227,7 @@ def upsert_rows(engine, rows):
     sql = text(
         f"""
         INSERT INTO {TARGET_TABLE} (
+            formula_id,
             sku_id,
             sku_name,
             brand_name,
@@ -199,6 +245,7 @@ def upsert_rows(engine, rows):
             q_scfa,
             created_at
         ) VALUES (
+            :formula_id,
             :sku_id,
             :sku_name,
             :brand_name,
@@ -217,6 +264,7 @@ def upsert_rows(engine, rows):
             NOW()
         )
         ON DUPLICATE KEY UPDATE
+            formula_id = VALUES(formula_id),
             sku_name = VALUES(sku_name),
             brand_name = VALUES(brand_name),
             batch_id = VALUES(batch_id),

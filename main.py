@@ -379,6 +379,8 @@ def _build_cat_food_compare_response(payload: dict) -> dict:
     target_query = str(payload.get("target_food") or "").strip()
     current_source_id = str(payload.get("current_source_id") or "").strip()
     target_source_id = str(payload.get("target_source_id") or "").strip()
+    current_formula_id = str(payload.get("current_formula_id") or "").strip()
+    target_formula_id = str(payload.get("target_formula_id") or "").strip()
     current_product_key = str(payload.get("current_product_key") or "").strip()
     target_product_key = str(payload.get("target_product_key") or "").strip()
     current_display_brand = str(payload.get("current_display_brand") or "").strip()
@@ -387,17 +389,24 @@ def _build_cat_food_compare_response(payload: dict) -> dict:
     target_display_name = str(payload.get("target_display_name") or "").strip()
     if not current_query or not target_query:
         raise ValueError("请选择当前粮和对比粮。")
-    if current_query == target_query and current_source_id == target_source_id and current_product_key == target_product_key:
+    if (
+        current_query == target_query
+        and current_formula_id == target_formula_id
+        and current_source_id == target_source_id
+        and current_product_key == target_product_key
+    ):
         raise ValueError("当前粮和对比粮不能相同。")
 
     compare_app = _load_compare_app()
     current_product = compare_app.build_product_context(
         current_query,
+        formula_id=current_formula_id or None,
         source_id=current_source_id or None,
         product_key=current_product_key or None,
     )
     target_product = compare_app.build_product_context(
         target_query,
+        formula_id=target_formula_id or None,
         source_id=target_source_id or None,
         product_key=target_product_key or None,
     )
@@ -432,6 +441,7 @@ def _build_cat_food_compare_response(payload: dict) -> dict:
     return {
         "current_food": {
             "query": current_query,
+            "formula_id": compare_app.make_json_safe(current_product.get("formula_id")),
             "source_id": compare_app.make_json_safe(current_product.get("source_id")),
             "product_key": current_product.get("product_key"),
             "name": current_product["name"],
@@ -443,6 +453,7 @@ def _build_cat_food_compare_response(payload: dict) -> dict:
         },
         "target_food": {
             "query": target_query,
+            "formula_id": compare_app.make_json_safe(target_product.get("formula_id")),
             "source_id": compare_app.make_json_safe(target_product.get("source_id")),
             "product_key": target_product.get("product_key"),
             "name": target_product["name"],

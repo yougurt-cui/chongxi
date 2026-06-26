@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from "react";
 
 type ProductOption = {
   id: string;
+  formula_id?: string | number | null;
   label: string;
   brand?: string;
   origin_type?: string | null;

@@ -17,6 +17,7 @@ from adapters.feature_adapter import (
     run_risk_score_pipeline,
 )
 from vendor.csv_mysql_labeling.src.settings import load_settings
+from services.formula_feature_link_service import backfill_formula_ids
 
 
 def _configured_pipeline_paths() -> Dict[str, Any]:
@@ -25,13 +26,16 @@ def _configured_pipeline_paths() -> Dict[str, Any]:
 
 def engineer_consumer_features(payload: Dict[str, Any]) -> Dict[str, Any]:
     payload = dict(payload or {})
-    return run_consumer_feature_engineering(
+    result = run_consumer_feature_engineering(
         db=payload.get("db"),
         steps=payload.get("steps"),
         protein_limit=int(payload.get("protein_limit") or 0),
         protein_concurrency=int(payload.get("protein_concurrency") or 4),
         timeout_seconds=payload.get("timeout_seconds"),
     )
+    if result.get("ok"):
+        result["formula_links"] = backfill_formula_ids()
+    return result
 
 
 def collect_consumer_comments(payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -92,7 +96,7 @@ def structure_consumer_disease_clues(payload: Dict[str, Any]) -> Dict[str, Any]:
 
 def calculate_material_scores(payload: Dict[str, Any]) -> Dict[str, Any]:
     payload = dict(payload or {})
-    return run_material_score_pipeline(
+    result = run_material_score_pipeline(
         api_url=payload.get("api_url"),
         db=payload.get("db"),
         steps=payload.get("steps"),
@@ -100,11 +104,14 @@ def calculate_material_scores(payload: Dict[str, Any]) -> Dict[str, Any]:
         timeout_seconds=int(payload.get("timeout_seconds") or 1800),
         poll_interval_seconds=float(payload.get("poll_interval_seconds") or 1.5),
     )
+    if result.get("ok"):
+        result["formula_links"] = backfill_formula_ids()
+    return result
 
 
 def calculate_risk_scores(payload: Dict[str, Any]) -> Dict[str, Any]:
     payload = dict(payload or {})
-    return run_risk_score_pipeline(
+    result = run_risk_score_pipeline(
         api_url=payload.get("api_url"),
         db=payload.get("db"),
         steps=payload.get("steps"),
@@ -113,3 +120,6 @@ def calculate_risk_scores(payload: Dict[str, Any]) -> Dict[str, Any]:
         timeout_seconds=int(payload.get("timeout_seconds") or 300),
         poll_interval_seconds=float(payload.get("poll_interval_seconds") or 1.5),
     )
+    if result.get("ok"):
+        result["formula_links"] = backfill_formula_ids()
+    return result

@@ -13,7 +13,7 @@ DB_PORT = os.getenv("MYSQL_PORT", "3306")
 DB_NAME = os.getenv("MYSQL_DATABASE", "protein_feature_platform")
 
 PROTEIN_TABLE = "protein_business_cluster_product_details_scored"
-PARSED_SOURCE_TABLE = "csv_labeling.catfood_ingredient_ocr_parsed"
+PARSED_SOURCE_TABLE = "csv_labeling.catfood_formula_feature_input"
 FAT_TABLE = "catfood_fat_material_features_scored"
 FIBER_TABLE = "catfood_fiber_feature_score"
 OUTPUT_TABLE = "catfood_protein_fat_fiber_score_wide"
@@ -106,6 +106,38 @@ def ensure_wide_unique_key(engine):
                     )
                 )
             )
+        formula_idx_count = conn.execute(
+            text(
+                """
+                SELECT COUNT(*)
+                FROM INFORMATION_SCHEMA.STATISTICS
+                WHERE TABLE_SCHEMA = :schema_name
+                  AND TABLE_NAME = :table_name
+                  AND INDEX_NAME = 'uq_formula_id'
+                """
+            ),
+            {"schema_name": DB_NAME, "table_name": OUTPUT_TABLE},
+        ).scalar()
+        if not formula_idx_count:
+            conn.execute(
+                text(
+                    """
+                    DELETE older
+                    FROM catfood_protein_fat_fiber_score_wide older
+                    JOIN catfood_protein_fat_fiber_score_wide newer
+                      ON older.formula_id = newer.formula_id
+                     AND older.formula_id IS NOT NULL
+                     AND older.source_id < newer.source_id
+                    """
+                )
+            )
+            conn.execute(
+                text(
+                    "ALTER TABLE {} ADD UNIQUE KEY uq_formula_id (formula_id)".format(
+                        quote_identifier(OUTPUT_TABLE)
+                    )
+                )
+            )
 
 
 def write_wide_incremental(engine, wide_df, score_types):
@@ -128,7 +160,7 @@ def write_wide_incremental(engine, wide_df, score_types):
     columns = list(wide_df.columns)
     insert_columns = ", ".join(quote_identifier(col) for col in columns)
     select_columns = ", ".join(quote_identifier(col) for col in columns)
-    update_columns = [col for col in columns if col != "source_id"]
+    update_columns = [col for col in columns if col not in {"source_id", "formula_id"}]
     update_sql = ", ".join(
         "{0}=VALUES({0})".format(quote_identifier(col)) for col in update_columns
     )
@@ -164,8 +196,8 @@ def write_wide_incremental(engine, wide_df, score_types):
                 DELETE output
                 FROM {output} AS output
                 LEFT JOIN {temp} AS latest
-                  ON output.source_id = latest.source_id
-                WHERE latest.source_id IS NULL
+                  ON output.formula_id = latest.formula_id
+                WHERE latest.formula_id IS NULL
                 """.format(output=quoted_output, temp=quoted_temp)
             )
         )
@@ -178,6 +210,7 @@ def main():
     protein_df = pd.read_sql(
         f"""
         SELECT
+            protein.formula_id,
             protein.source_id,
             protein.product_key,
             protein.brand_name AS brand,
@@ -189,7 +222,7 @@ def main():
             NULL AS business_label
         FROM {PROTEIN_TABLE} AS protein
         INNER JOIN {PARSED_SOURCE_TABLE} AS parsed
-          ON parsed.source_id = protein.source_id
+          ON parsed.formula_id = protein.formula_id
         """,
         engine,
     )
@@ -197,6 +230,7 @@ def main():
     fat_df = pd.read_sql(
         f"""
         SELECT
+            formula_id,
             product_key,
             fat_structure_type,
             fat_oily_score,
@@ -217,6 +251,7 @@ def main():
     fiber_df = pd.read_sql(
         f"""
         SELECT
+            formula_id,
             product_key,
             p_form_score,
             p_bulk_score,
@@ -233,8 +268,17 @@ def main():
         engine,
     )
 
-    fat_df = fat_df.drop_duplicates(subset=["product_key"], keep="first")
-    fiber_df = fiber_df.drop_duplicates(subset=["product_key"], keep="first")
+    linked_protein = (
+        protein_df[protein_df["formula_id"].notna()]
+        .sort_values("source_id")
+        .drop_duplicates(subset=["formula_id"], keep="last")
+    )
+    protein_df = pd.concat(
+        [linked_protein, protein_df[protein_df["formula_id"].isna()]],
+        ignore_index=True,
+    )
+    fat_df = fat_df.drop_duplicates(subset=["formula_id"], keep="first")
+    fiber_df = fiber_df.drop_duplicates(subset=["formula_id"], keep="first")
 
     protein_df["product_key_join"] = normalize_product_key(protein_df["product_key"])
     fat_df["product_key_join"] = normalize_product_key(fat_df["product_key"])
@@ -244,18 +288,19 @@ def main():
     fiber_df = fiber_df.drop_duplicates(subset=["product_key_join"], keep="first")
 
     wide_df = protein_df.merge(
-        fat_df.drop(columns=["product_key"]),
-        on="product_key_join",
+        fat_df.drop(columns=["product_key", "product_key_join"]),
+        on="formula_id",
         how="left",
     )
     wide_df = wide_df.merge(
-        fiber_df.drop(columns=["product_key"]),
-        on="product_key_join",
+        fiber_df.drop(columns=["product_key", "product_key_join"]),
+        on="formula_id",
         how="left",
     )
 
     wide_df = wide_df[
         [
+            "formula_id",
             "source_id",
             "product_key",
             "brand",

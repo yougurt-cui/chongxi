@@ -8,7 +8,7 @@ from services.cat_food_product_catalog_service import (
     DEFAULT_TAOBAO_SKU_DIR,
     rebuild_product_catalog,
 )
-from services.taobao_sku_import_service import list_ocr_product_options_with_brand_mapping
+from services.taobao_sku_import_service import list_standardized_product_options
 
 
 product_catalog_api = Blueprint("product_catalog_api", __name__, url_prefix="/api/cat-food-compare")
@@ -18,7 +18,7 @@ product_catalog_api = Blueprint("product_catalog_api", __name__, url_prefix="/ap
 def cat_food_compare_product_options():
     try:
         return jsonify(
-            list_ocr_product_options_with_brand_mapping(
+            list_standardized_product_options(
                 q=request.args.get("q", "").strip(),
                 origin=request.args.get("origin", "").strip(),
                 price_bucket=request.args.get("price_bucket", "").strip(),
