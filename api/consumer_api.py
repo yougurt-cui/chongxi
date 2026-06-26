@@ -20,7 +20,8 @@ from services.consumer_analysis_service import (
     engineer_consumer_features,
     structure_consumer_disease_clues,
 )
-from vendor.feature_score_pipeline.scripts.brand_normalizer import canonicalize_brand, infer_brand_from_text, normalize_text
+from services.catfood_standardization_service import normalize_name
+from vendor.feature_score_pipeline.scripts.brand_normalizer import canonicalize_brand, infer_brand_from_text
 
 
 consumer_api = Blueprint("consumer_api", __name__, url_prefix="/api/consumer")
@@ -40,6 +41,85 @@ DISEASE_REVIEW_TARGET_TABLE = "cat_disease_clues"
 _disease_structure_executor = ThreadPoolExecutor(max_workers=1)
 _disease_structure_jobs = {}
 _disease_structure_jobs_lock = Lock()
+
+
+def _split_brand_parts(value) -> list[str]:
+    return [
+        part.strip()
+        for part in str(value or "").replace("，", ",").replace("、", ",").split(",")
+        if part.strip()
+    ]
+
+
+def _load_standard_brand_lookup(conn) -> dict[str, str]:
+    """Return normalized brand/alias -> standard brand using the standard brand tables."""
+    rows = conn.execute(
+        text(
+            """
+            SELECT b.standard_brand_name, NULL AS alias_name
+            FROM catfood_standard_brand b
+            WHERE b.active = 1
+            UNION ALL
+            SELECT b.standard_brand_name, a.alias_name
+            FROM catfood_standard_brand_alias a
+            JOIN catfood_standard_brand b ON b.brand_id = a.brand_id
+            WHERE a.active = 1 AND b.active = 1
+            """
+        )
+    ).mappings().fetchall()
+    lookup: dict[str, str] = {}
+    for row in rows:
+        standard = _clean_field(row.get("standard_brand_name"))
+        if not standard:
+            continue
+        candidates = [standard, row.get("alias_name")]
+        for candidate in candidates:
+            key = normalize_name(candidate)
+            if key:
+                lookup.setdefault(key, standard)
+            canonical_key = normalize_name(canonicalize_brand(candidate))
+            if canonical_key:
+                lookup.setdefault(canonical_key, standard)
+    return lookup
+
+
+def _match_standard_brand_name(value, lookup: dict[str, str]) -> str:
+    """Map raw brand text to standard brand names, preserving multi-brand events."""
+    if not lookup:
+        return ""
+    matched_parts: list[str] = []
+    seen: set[str] = set()
+    for part in _split_brand_parts(value) or [_clean_field(value)]:
+        if not part:
+            continue
+        candidates = [part, canonicalize_brand(part)]
+        standard = ""
+        for candidate in candidates:
+            key = normalize_name(candidate)
+            if key in lookup:
+                standard = lookup[key]
+                break
+            if len(key) >= 2:
+                fuzzy_matches = {
+                    brand
+                    for alias_key, brand in lookup.items()
+                    if len(alias_key) >= 2 and (key in alias_key or alias_key in key)
+                }
+                if len(fuzzy_matches) == 1:
+                    standard = next(iter(fuzzy_matches))
+                    break
+        if standard and standard.lower() not in seen:
+            seen.add(standard.lower())
+            matched_parts.append(standard)
+    return ",".join(matched_parts)
+
+
+def _normalized_brand_filter_value(value) -> str:
+    return ",".join(
+        normalize_name(part)
+        for part in _split_brand_parts(value)
+        if normalize_name(part)
+    )
 
 
 @consumer_api.post("/features/engineer")
@@ -192,9 +272,17 @@ def _disease_case_id(values: dict) -> str:
     return md5(raw.encode("utf-8")).hexdigest()
 
 
-def _standardize_disease_brand(candidate: dict, override: str | None = None) -> str:
+def _standardize_disease_brand(
+    candidate: dict,
+    override: str | None = None,
+    *,
+    brand_lookup: dict[str, str] | None = None,
+) -> str:
     brand_text = _clean_field(override if override is not None else candidate.get("brand_name"))
     if brand_text:
+        standard_brand = _match_standard_brand_name(brand_text, brand_lookup or {})
+        if standard_brand:
+            return standard_brand
         parts = [part.strip() for part in brand_text.replace("，", ",").replace("、", ",").split(",") if part.strip()]
         canonical_parts = []
         seen = set()
@@ -211,12 +299,24 @@ def _standardize_disease_brand(candidate: dict, override: str | None = None) -> 
         candidate.get("mentioned_brands"),
         candidate.get("review_text"),
     )
+    standard_inferred = _match_standard_brand_name(inferred, brand_lookup or {})
+    if standard_inferred:
+        return standard_inferred
     return inferred or brand_text
 
 
-def _candidate_to_clue_values(candidate: dict, payload: dict | None = None) -> dict:
+def _candidate_to_clue_values(
+    candidate: dict,
+    payload: dict | None = None,
+    *,
+    brand_lookup: dict[str, str] | None = None,
+) -> dict:
     payload = dict(payload or {})
-    brand = _standardize_disease_brand(candidate, payload.get("brand") if "brand" in payload else None)
+    brand = _standardize_disease_brand(
+        candidate,
+        payload.get("brand") if "brand" in payload else None,
+        brand_lookup=brand_lookup,
+    )
     values = {
         "comment_hash": candidate.get("comment_hash"),
         "brand": _clean_field(brand, 32),
@@ -233,9 +333,14 @@ def _candidate_to_clue_values(candidate: dict, payload: dict | None = None) -> d
     return values
 
 
-def _serialize_disease_candidate(row: dict, target_case_ids: set[str] | None = None) -> dict:
+def _serialize_disease_candidate(
+    row: dict,
+    target_case_ids: set[str] | None = None,
+    *,
+    brand_lookup: dict[str, str] | None = None,
+) -> dict:
     item = {key: _json_value(value) for key, value in row.items()}
-    clue_values = _candidate_to_clue_values(row)
+    clue_values = _candidate_to_clue_values(row, brand_lookup=brand_lookup)
     item["raw_brand_name"] = item.get("brand_name")
     item["brand_name"] = clue_values["brand"]
     item["target_case_id"] = clue_values["case_id"]
@@ -267,8 +372,121 @@ def _ensure_disease_clues_table(engine) -> None:
                     KEY idx_event_date (event_date)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
                 """
+                )
             )
+
+
+def _ensure_disease_review_source_table(engine) -> None:
+    with engine.begin() as conn:
+        column_rows = conn.execute(
+            text(
+                """
+                SELECT COLUMN_NAME
+                FROM information_schema.columns
+                WHERE table_schema = DATABASE()
+                  AND table_name = :table_name
+                """
+            ),
+            {"table_name": DISEASE_REVIEW_SOURCE_TABLE},
+        ).fetchall()
+        columns = {row[0] for row in column_rows}
+        if "standard_brand_name" not in columns:
+            conn.execute(
+                text(
+                    f"""
+                    ALTER TABLE `{DISEASE_REVIEW_SOURCE_TABLE}`
+                    ADD COLUMN standard_brand_name VARCHAR(100) NULL AFTER brand_name
+                    """
+                )
+            )
+        if "normalized_brand_name" not in columns:
+            conn.execute(
+                text(
+                    f"""
+                    ALTER TABLE `{DISEASE_REVIEW_SOURCE_TABLE}`
+                    ADD COLUMN normalized_brand_name VARCHAR(255) NULL AFTER standard_brand_name
+                    """
+                )
+            )
+
+        index_rows = conn.execute(text(f"SHOW INDEX FROM `{DISEASE_REVIEW_SOURCE_TABLE}`")).fetchall()
+        index_names = {row[2] for row in index_rows}
+        index_sql = {
+            "idx_disease_review_status_id": (
+                "review_status, id"
+            ),
+            "idx_disease_review_brand_status": (
+                "normalized_brand_name, review_status, id"
+            ),
+            "idx_disease_review_symptom_status": (
+                "review_status, symptom_category, symptom_name, id"
+            ),
+            "idx_disease_review_confidence_status": (
+                "review_status, confidence, id"
+            ),
+        }
+        for index_name, columns_sql in index_sql.items():
+            if index_name not in index_names:
+                conn.execute(
+                    text(
+                        f"""
+                        ALTER TABLE `{DISEASE_REVIEW_SOURCE_TABLE}`
+                        ADD KEY {index_name} ({columns_sql})
+                        """
+                    )
+                )
+
+
+def _backfill_disease_candidate_brands(
+    engine,
+    *,
+    brand_lookup: dict[str, str],
+    limit: int = 5000,
+) -> int:
+    if not brand_lookup:
+        return 0
+    with engine.begin() as conn:
+        rows = conn.execute(
+            text(
+                f"""
+                SELECT id, brand_name, search_keyword, mentioned_brands, review_text
+                FROM `{DISEASE_REVIEW_SOURCE_TABLE}`
+                WHERE standard_brand_name IS NULL
+                   OR normalized_brand_name IS NULL
+                   OR normalized_brand_name = ''
+                ORDER BY id ASC
+                LIMIT :limit
+                """
+            ),
+            {"limit": max(1, min(int(limit or 5000), 20000))},
+        ).mappings().fetchall()
+        updates = []
+        for row in rows:
+            candidate = dict(row)
+            standard_brand = _standardize_disease_brand(candidate, brand_lookup=brand_lookup)
+            normalized_brand = _normalized_brand_filter_value(standard_brand)
+            if standard_brand or normalized_brand:
+                updates.append(
+                    {
+                        "id": row["id"],
+                        "standard_brand_name": standard_brand or None,
+                        "normalized_brand_name": normalized_brand or None,
+                    }
+                )
+        if not updates:
+            return 0
+        conn.execute(
+            text(
+                f"""
+                UPDATE `{DISEASE_REVIEW_SOURCE_TABLE}`
+                SET standard_brand_name = :standard_brand_name,
+                    normalized_brand_name = :normalized_brand_name
+                WHERE id = :id
+                """
+            ),
+            updates,
         )
+        return len(updates)
 
 
 def _ensure_disease_cursor_table(engine) -> None:
@@ -572,9 +790,13 @@ def consumer_disease_reviews():
     source_engine = _get_csv_engine()
     target_engine = _get_feature_engine()
     try:
+        _ensure_disease_review_source_table(source_engine)
         _ensure_disease_clues_table(target_engine)
         filters = []
         params = {"limit": limit, "offset": offset}
+        with source_engine.connect() as conn:
+            brand_lookup = _load_standard_brand_lookup(conn)
+        _backfill_disease_candidate_brands(source_engine, brand_lookup=brand_lookup)
         if status != "ALL":
             filters.append("review_status = :status")
             params["status"] = status
@@ -587,51 +809,52 @@ def consumer_disease_reviews():
         if max_confidence not in (None, ""):
             filters.append("confidence <= :max_confidence")
             params["max_confidence"] = float(max_confidence)
+        if brand:
+            standard_brand = _match_standard_brand_name(brand, brand_lookup) or canonicalize_brand(brand)
+            brand_key = _normalized_brand_filter_value(standard_brand)
+            if brand_key:
+                filters.append(
+                    """
+                    (
+                      normalized_brand_name = :brand_key
+                      OR normalized_brand_name LIKE :brand_key_prefix
+                      OR normalized_brand_name LIKE :brand_key_suffix
+                      OR normalized_brand_name LIKE :brand_key_contains
+                    )
+                    """
+                )
+                params.update(
+                    {
+                        "brand_key": brand_key,
+                        "brand_key_prefix": f"{brand_key},%",
+                        "brand_key_suffix": f"%,{brand_key}",
+                        "brand_key_contains": f"%,{brand_key},%",
+                    }
+                )
         where_sql = f"WHERE {' AND '.join(filters)}" if filters else ""
         with source_engine.connect() as conn:
-            if brand:
-                raw_rows = conn.execute(
-                    text(
-                        f"""
-                        SELECT *
-                        FROM `{DISEASE_REVIEW_SOURCE_TABLE}`
-                        {where_sql}
-                        ORDER BY id ASC
-                        """
-                    ),
-                    params,
-                ).mappings().fetchall()
-                brand_key = normalize_text(canonicalize_brand(brand))
-                matched_rows = [
-                    row
-                    for row in raw_rows
-                    if brand_key and brand_key in normalize_text(_standardize_disease_brand(dict(row)))
-                ]
-                total = len(matched_rows)
-                rows = matched_rows[offset : offset + limit]
-            else:
-                total = conn.execute(
-                    text(
-                        f"""
-                        SELECT COUNT(*)
-                        FROM `{DISEASE_REVIEW_SOURCE_TABLE}`
-                        {where_sql}
-                        """
-                    ),
-                    params,
-                ).scalar()
-                rows = conn.execute(
-                    text(
-                        f"""
-                        SELECT *
-                        FROM `{DISEASE_REVIEW_SOURCE_TABLE}`
-                        {where_sql}
-                        ORDER BY id ASC
-                        LIMIT :limit OFFSET :offset
-                        """
-                    ),
-                    params,
-                ).mappings().fetchall()
+            total = conn.execute(
+                text(
+                    f"""
+                    SELECT COUNT(*)
+                    FROM `{DISEASE_REVIEW_SOURCE_TABLE}`
+                    {where_sql}
+                    """
+                ),
+                params,
+            ).scalar()
+            rows = conn.execute(
+                text(
+                    f"""
+                    SELECT *
+                    FROM `{DISEASE_REVIEW_SOURCE_TABLE}`
+                    {where_sql}
+                    ORDER BY id ASC
+                    LIMIT :limit OFFSET :offset
+                    """
+                ),
+                params,
+            ).mappings().fetchall()
             status_rows = conn.execute(
                 text(
                     f"""
@@ -642,7 +865,10 @@ def consumer_disease_reviews():
                 )
             ).mappings().fetchall()
 
-        target_case_ids = {_candidate_to_clue_values(dict(row))["case_id"] for row in rows}
+        target_case_ids = {
+            _candidate_to_clue_values(dict(row), brand_lookup=brand_lookup)["case_id"]
+            for row in rows
+        }
         existing_case_ids: set[str] = set()
         if target_case_ids:
             placeholders = ", ".join(f":case_id_{idx}" for idx, _ in enumerate(target_case_ids))
@@ -665,7 +891,14 @@ def consumer_disease_reviews():
         return jsonify(
             {
                 "ok": True,
-                "items": [_serialize_disease_candidate(dict(row), existing_case_ids) for row in rows],
+                "items": [
+                    _serialize_disease_candidate(
+                        dict(row),
+                        existing_case_ids,
+                        brand_lookup=brand_lookup,
+                    )
+                    for row in rows
+                ],
                 "status_counts": {row["review_status"]: int(row["cnt"]) for row in status_rows},
                 "total": int(total or 0),
                 "limit": limit,
@@ -683,15 +916,20 @@ def consumer_disease_reviews():
 def consumer_disease_review_options():
     source_engine = _get_csv_engine()
     try:
+        _ensure_disease_review_source_table(source_engine)
+        with source_engine.connect() as conn:
+            brand_lookup = _load_standard_brand_lookup(conn)
+        _backfill_disease_candidate_brands(source_engine, brand_lookup=brand_lookup)
         with source_engine.connect() as conn:
             raw_brands = [
                 row[0]
                 for row in conn.execute(
                     text(
                         f"""
-                        SELECT DISTINCT brand_name
+                        SELECT DISTINCT COALESCE(NULLIF(standard_brand_name, ''), brand_name) AS brand_name
                         FROM `{DISEASE_REVIEW_SOURCE_TABLE}`
-                        WHERE brand_name IS NOT NULL AND TRIM(brand_name) <> ''
+                        WHERE COALESCE(NULLIF(standard_brand_name, ''), brand_name) IS NOT NULL
+                          AND TRIM(COALESCE(NULLIF(standard_brand_name, ''), brand_name)) <> ''
                         ORDER BY brand_name ASC
                         LIMIT 500
                         """
@@ -700,7 +938,8 @@ def consumer_disease_review_options():
             ]
             brands = sorted(
                 {
-                    canonicalize_brand(part.strip())
+                    _match_standard_brand_name(part.strip(), brand_lookup)
+                    or canonicalize_brand(part.strip())
                     for value in raw_brands
                     for part in str(value or "").replace("，", ",").replace("、", ",").split(",")
                     if part.strip()
@@ -773,7 +1012,10 @@ def consumer_disease_review_approve(candidate_id: int):
     source_engine = _get_csv_engine(payload.get("db"))
     target_engine = _get_feature_engine(payload.get("db"))
     try:
+        _ensure_disease_review_source_table(source_engine)
         _ensure_disease_clues_table(target_engine)
+        with source_engine.connect() as conn:
+            brand_lookup = _load_standard_brand_lookup(conn)
         with source_engine.connect() as conn:
             candidate = conn.execute(
                 text(
@@ -789,7 +1031,11 @@ def consumer_disease_review_approve(candidate_id: int):
             return jsonify({"ok": False, "error": f"candidate not found: {candidate_id}"}), 404
 
         candidate_dict = dict(candidate)
-        clue_values = _candidate_to_clue_values(candidate_dict, payload)
+        clue_values = _candidate_to_clue_values(
+            candidate_dict,
+            payload,
+            brand_lookup=brand_lookup,
+        )
         required_fields = ["brand", "comment_text", "primary_symptom", "secondary_symptom", "direct"]
         missing = [field for field in required_fields if not clue_values.get(field)]
         if missing:
@@ -842,12 +1088,19 @@ def consumer_disease_review_approve(candidate_id: int):
                     f"""
                     UPDATE `{DISEASE_REVIEW_SOURCE_TABLE}`
                     SET review_status = 'APPROVED',
+                        standard_brand_name = :standard_brand_name,
+                        normalized_brand_name = :normalized_brand_name,
                         reviewer_note = :reviewer_note,
                         updated_at = CURRENT_TIMESTAMP
                     WHERE id = :candidate_id
                     """
                 ),
-                {"candidate_id": candidate_id, "reviewer_note": note},
+                {
+                    "candidate_id": candidate_id,
+                    "standard_brand_name": clue_values["brand"] or None,
+                    "normalized_brand_name": _normalized_brand_filter_value(clue_values["brand"]) or None,
+                    "reviewer_note": note,
+                },
             )
 
         return jsonify(

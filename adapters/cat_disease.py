@@ -857,6 +857,8 @@ def create_disease_review_table(engine, target_table: str = DISEASE_REVIEW_TABLE
         platform VARCHAR(32),
         external_id VARCHAR(128),
         brand_name VARCHAR(100),
+        standard_brand_name VARCHAR(100),
+        normalized_brand_name VARCHAR(255),
         search_keyword TEXT,
         mentioned_brands TEXT,
         review_text LONGTEXT,
@@ -890,6 +892,10 @@ def create_disease_review_table(engine, target_table: str = DISEASE_REVIEW_TABLE
             effect_direction
         ),
         KEY idx_review_status (review_status),
+        KEY idx_disease_review_status_id (review_status, id),
+        KEY idx_disease_review_brand_status (normalized_brand_name, review_status, id),
+        KEY idx_disease_review_symptom_status (review_status, symptom_category, symptom_name, id),
+        KEY idx_disease_review_confidence_status (review_status, confidence, id),
         KEY idx_comment_hash (comment_hash),
         KEY idx_review_date (review_date)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
@@ -910,6 +916,10 @@ def create_disease_review_table(engine, target_table: str = DISEASE_REVIEW_TABLE
         cols = {row["COLUMN_NAME"] for row in column_rows}
         if "search_keyword" not in cols:
             conn.execute(text(f"ALTER TABLE `{target_table}` ADD COLUMN search_keyword TEXT NULL AFTER brand_name"))
+        if "standard_brand_name" not in cols:
+            conn.execute(text(f"ALTER TABLE `{target_table}` ADD COLUMN standard_brand_name VARCHAR(100) NULL AFTER brand_name"))
+        if "normalized_brand_name" not in cols:
+            conn.execute(text(f"ALTER TABLE `{target_table}` ADD COLUMN normalized_brand_name VARCHAR(255) NULL AFTER standard_brand_name"))
         if "mentioned_brands" not in cols:
             conn.execute(text(f"ALTER TABLE `{target_table}` ADD COLUMN mentioned_brands TEXT NULL AFTER search_keyword"))
         col_meta = {row["COLUMN_NAME"]: row for row in column_rows}
@@ -987,6 +997,17 @@ def create_disease_review_table(engine, target_table: str = DISEASE_REVIEW_TABLE
                     """
                 )
             )
+        index_rows = conn.execute(text(f"SHOW INDEX FROM `{target_table}`")).fetchall()
+        index_names = {row[2] for row in index_rows}
+        index_sql = {
+            "idx_disease_review_status_id": "review_status, id",
+            "idx_disease_review_brand_status": "normalized_brand_name, review_status, id",
+            "idx_disease_review_symptom_status": "review_status, symptom_category, symptom_name, id",
+            "idx_disease_review_confidence_status": "review_status, confidence, id",
+        }
+        for index_name, columns_sql in index_sql.items():
+            if index_name not in index_names:
+                conn.execute(text(f"ALTER TABLE `{target_table}` ADD KEY {index_name} ({columns_sql})"))
 
 
 def make_candidate_comment_hash(row: pd.Series) -> str:
