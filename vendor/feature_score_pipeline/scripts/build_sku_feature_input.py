@@ -160,7 +160,10 @@ def load_wide(engine):
     WHERE product_key IS NOT NULL
       AND TRIM(product_key) <> ''
     """
-    return pd.read_sql(sql, engine)
+    frame = pd.read_sql(sql, engine)
+    if os.getenv("FORMULA_ID"):
+        frame = frame[pd.to_numeric(frame["formula_id"], errors="coerce") == int(os.environ["FORMULA_ID"])].copy()
+    return frame
 
 
 def numeric_series(frame, column_name):

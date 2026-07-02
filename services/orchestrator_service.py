@@ -142,9 +142,9 @@ PIPELINE_DEFINITIONS: dict[str, tuple[NodeDefinition, ...]] = {
         ),
         NodeDefinition(
             node_code="ingredient_extract",
-            node_name="原料抽取",
+            node_name="原料标准化与 Profile 生成",
             callable_path="services.orchestrator_service.noop_node",
-            api=ApiRoute(method="POST", url="/api/consumer/features/engineer", timeout_seconds=300),
+            api=ApiRoute(method="POST", url="/api/catfood/standardization/formula-profile/build", timeout_seconds=300),
             depends_on=("formula_input_build",),
             priority=30,
         ),
@@ -186,17 +186,17 @@ PIPELINE_DEFINITIONS: dict[str, tuple[NodeDefinition, ...]] = {
         ),
         NodeDefinition(
             node_code="ingredient_standardize",
-            node_name="原料标准化",
+            node_name="增量标签与分数物化",
             callable_path="services.orchestrator_service.noop_node",
-            api=ApiRoute(method="POST", url="/api/consumer/materials/scores/calculate", timeout_seconds=300),
+            api=ApiRoute(method="POST", url="/api/catfood/standardization/formula-materialize", timeout_seconds=600),
             depends_on=("ingredient_extract",),
             priority=40,
         ),
         NodeDefinition(
             node_code="formula_profile",
-            node_name="配方画像生成",
+            node_name="增量风险画像生成",
             callable_path="services.orchestrator_service.noop_node",
-            api=ApiRoute(method="POST", url="/api/consumer/risks/calculate", timeout_seconds=300),
+            api=ApiRoute(method="POST", url="/api/catfood/standardization/formula-risk/materialize", timeout_seconds=600),
             depends_on=("ingredient_standardize",),
             priority=50,
         ),
@@ -421,6 +421,7 @@ def _check_ocr_formula(output: dict[str, Any]) -> CheckResult:
 def _check_ingredient_extract(output: dict[str, Any]) -> CheckResult:
     source_id = _get_output_value(output, "source_id")
     parsed_row_id = _get_output_value(output, "parsed_row_id")
+    formula_id = _get_output_value(output, "formula_id")
     product_key = _get_output_value(output, "product_key")
     if not _is_non_empty(product_key):
         brand = _get_output_value(output, "brand")
@@ -428,13 +429,13 @@ def _check_ingredient_extract(output: dict[str, Any]) -> CheckResult:
         if _is_non_empty(brand) and _is_non_empty(product_name):
             product_key = f"{brand}||{product_name}"
 
-    if not any(_is_non_empty(value) for value in (source_id, parsed_row_id, product_key)):
+    if not any(_is_non_empty(value) for value in (formula_id, source_id, parsed_row_id, product_key)):
         return CheckResult(
             False,
             NODE_FAILED,
             "原料特征检查缺少单图定位字段",
             {
-                "required_identity_fields": ["source_id", "parsed_row_id", "product_key"],
+                "required_identity_fields": ["formula_id", "source_id", "parsed_row_id", "product_key"],
             },
         )
 
@@ -451,6 +452,7 @@ def _check_ingredient_extract(output: dict[str, Any]) -> CheckResult:
         source_id=source_id,
         parsed_row_id=parsed_row_id,
         product_key=product_key,
+        formula_id=formula_id,
     )
 
 
@@ -510,11 +512,13 @@ def _check_ingredient_feature_tables(
     source_id: Any,
     parsed_row_id: Any,
     product_key: Any,
+    formula_id: Any,
 ) -> CheckResult:
     details: dict[str, Any] = {
         "source_id": source_id,
         "parsed_row_id": parsed_row_id,
         "product_key": product_key,
+        "formula_id": formula_id,
         "tables": {},
     }
     missing_tables: list[str] = []
@@ -523,9 +527,9 @@ def _check_ingredient_feature_tables(
     try:
         with _connect_feature() as conn:
             with conn.cursor() as cursor:
-                protein_row = _fetch_protein_feature_row(cursor, source_id, product_key)
-                fat_row = _fetch_fat_feature_row(cursor, source_id, product_key)
-                fiber_row = _fetch_fiber_feature_row(cursor, parsed_row_id, product_key)
+                protein_row = _fetch_protein_feature_row(cursor, formula_id)
+                fat_row = _fetch_fat_feature_row(cursor, formula_id)
+                fiber_row = _fetch_fiber_feature_row(cursor, formula_id)
     except Exception as exc:
         return CheckResult(False, NODE_FAILED, f"原料特征表检查失败: {exc}", details)
 
@@ -881,21 +885,19 @@ def _fetch_risk_result_rows(cursor: pymysql.cursors.DictCursor, product_key: Any
     return list(cursor.fetchall() or [])
 
 
-def _fetch_protein_feature_row(cursor: pymysql.cursors.DictCursor, source_id: Any, product_key: Any) -> dict[str, Any] | None:
-    where, params = _feature_identity_where(source_id=source_id, product_key=product_key)
-    if not where:
+def _fetch_protein_feature_row(cursor: pymysql.cursors.DictCursor, formula_id: Any) -> dict[str, Any] | None:
+    if not _is_non_empty(formula_id):
         return None
     cursor.execute(
-        f"""
-        SELECT source_id, product_key, animal_sources, animal_source_level1_categories,
+        """
+        SELECT formula_id, animal_sources, animal_source_level1_categories,
                animal_source_level2_sources, protein_source_details,
-               primary_meat_source_species, secondary_meat_source_species
+               primary_meat_source_type, secondary_meat_source_type
         FROM protein_source_aggregate
-        WHERE {where}
-        ORDER BY aggregated_at DESC
+        WHERE formula_id = %s
         LIMIT 1
         """,
-        params,
+        (int(formula_id),),
     )
     return cursor.fetchone()
 
@@ -932,46 +934,35 @@ def _fetch_parsed_ingredient_row(source_id: Any, parsed_row_id: Any) -> dict[str
     return None
 
 
-def _fetch_fat_feature_row(cursor: pymysql.cursors.DictCursor, source_id: Any, product_key: Any) -> dict[str, Any] | None:
-    where, params = _feature_identity_where(source_id=source_id, product_key=product_key)
-    if not where:
+def _fetch_fat_feature_row(cursor: pymysql.cursors.DictCursor, formula_id: Any) -> dict[str, Any] | None:
+    if not _is_non_empty(formula_id):
         return None
     cursor.execute(
-        f"""
-        SELECT source_id, product_key, fat_sources, antioxidant_sources,
+        """
+        SELECT formula_id, fat_sources, antioxidant_sources,
                micronutrient_sources, omega6_sources, omega3_sources,
                guarantee_crude_fat_value
         FROM catfood_fat_material_features
-        WHERE {where}
-        ORDER BY updated_at DESC
+        WHERE formula_id = %s
         LIMIT 1
         """,
-        params,
+        (int(formula_id),),
     )
     return cursor.fetchone()
 
 
-def _fetch_fiber_feature_row(cursor: pymysql.cursors.DictCursor, parsed_row_id: Any, product_key: Any) -> dict[str, Any] | None:
-    clauses: list[str] = []
-    params: list[Any] = []
-    if _is_non_empty(product_key):
-        clauses.append("product_key = %s")
-        params.append(str(product_key))
-    if _is_non_empty(parsed_row_id):
-        clauses.append("JSON_CONTAINS(source_ids, CAST(%s AS JSON))")
-        params.append(str(int(parsed_row_id)))
-    if not clauses:
+def _fetch_fiber_feature_row(cursor: pymysql.cursors.DictCursor, formula_id: Any) -> dict[str, Any] | None:
+    if not _is_non_empty(formula_id):
         return None
     cursor.execute(
-        f"""
-        SELECT id, product_key, source_ids, raw_ingredient_text,
+        """
+        SELECT formula_id, raw_ingredient_text,
                ingredient_feature_json, starch_ingredients_json
         FROM catfood_fiber_feature_json
-        WHERE {" OR ".join(clauses)}
-        ORDER BY updated_at DESC
+        WHERE formula_id = %s
         LIMIT 1
         """,
-        params,
+        (int(formula_id),),
     )
     return cursor.fetchone()
 
@@ -1054,7 +1045,12 @@ def output_check(node_code: str, output: dict[str, Any], task_payload: dict[str,
             return CheckResult(False, NODE_NEED_REVIEW, "配方输入缺少有效原料")
         return CheckResult(False, NODE_FAILED, f"配方输入状态异常: {status or 'empty'}")
     if node_code == "ingredient_extract":
-        return _check_ingredient_extract(output)
+        status = str(output.get("overall_status") or "")
+        if status == "ready_for_rebuild":
+            return CheckResult(True, NODE_SUCCESS, "原料标准化与 Profile 检查通过")
+        if status in {"partially_ready", "need_review"}:
+            return CheckResult(False, NODE_NEED_REVIEW, f"Profile 状态需要复核: {status}")
+        return CheckResult(False, NODE_FAILED, f"Profile 状态异常: {status or 'empty'}")
     if node_code == "ingredient_standardize":
         return _check_ingredient_standardize(output)
     if node_code == "formula_profile":
@@ -1448,20 +1444,10 @@ def build_node_input(task: dict[str, Any], node_def: NodeDefinition) -> dict[str
                 "move_success_images": False,
             }
         if node_def.node_code == "ingredient_extract":
-            ocr_output = _output_for(task, "ocr_formula")
             formula_output = _output_for(task, "formula_input_build")
             return {
                 "orchestrator_task_id": task["id"],
                 "orchestrator_node_code": node_def.node_code,
-                "ocr_text": ocr_output.get("ocr_text"),
-                "image_path": payload.get("image_path"),
-                "product_name": payload.get("product_name"),
-                "source_id": ocr_output.get("source_id"),
-                "parsed_row_id": ocr_output.get("parsed_row_id"),
-                "ingredient_composition": ocr_output.get("ingredient_composition"),
-                "parsed": ocr_output.get("parsed"),
-                "brand_id": formula_output.get("brand_id"),
-                "product_id": formula_output.get("product_id"),
                 "formula_id": formula_output.get("formula_id"),
             }
         if node_def.node_code == "brand_standardize":
@@ -1500,36 +1486,20 @@ def build_node_input(task: dict[str, Any], node_def: NodeDefinition) -> dict[str
                 "formula_id": formula_output.get("formula_id"),
             }
         if node_def.node_code == "ingredient_standardize":
-            extract_output = _output_for(task, "ingredient_extract")
             formula_input = _output_for(task, "formula_input_build")
             return {
                 "orchestrator_task_id": task["id"],
                 "orchestrator_node_code": node_def.node_code,
-                "source_id": extract_output.get("source_id"),
-                "parsed_row_id": extract_output.get("parsed_row_id"),
-                "product_key": extract_output.get("product_key"),
-                "brand": extract_output.get("brand"),
-                "ingredient_composition": extract_output.get("ingredient_composition"),
-                "ingredients": extract_output.get("ingredients"),
-                "product_name": extract_output.get("product_name") or payload.get("product_name"),
-                "brand_id": formula_input.get("brand_id"),
-                "product_id": formula_input.get("product_id"),
                 "formula_id": formula_input.get("formula_id"),
+                "batch_id": f"upload-{task['id']}",
             }
         if node_def.node_code == "formula_profile":
-            standardize_output = _output_for(task, "ingredient_standardize")
             formula_input = _output_for(task, "formula_input_build")
             return {
                 "orchestrator_task_id": task["id"],
                 "orchestrator_node_code": node_def.node_code,
-                "source_id": standardize_output.get("source_id"),
-                "product_key": standardize_output.get("product_key"),
-                "brand": standardize_output.get("brand"),
-                "standardized_ingredients": standardize_output,
-                "product_name": standardize_output.get("product_name") or payload.get("product_name"),
-                "brand_id": formula_input.get("brand_id"),
-                "product_id": formula_input.get("product_id"),
                 "formula_id": formula_input.get("formula_id"),
+                "batch_id": f"upload-{task['id']}",
             }
 
     return payload

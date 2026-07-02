@@ -49,10 +49,22 @@ type ProductInfo = {
 
 type MaterialRoleEvidence = {
   raw_ingredient_text?: unknown;
+  ingredient_items?: IngredientRoleItem[];
   protein_roles?: Record<string, unknown>;
   protein_score_rules?: Record<string, unknown>;
   fat_roles?: Record<string, unknown>;
   fiber_carb_roles?: Record<string, unknown>;
+};
+
+type IngredientRoleItem = {
+  position?: number | string | null;
+  raw_name?: string | null;
+  standard_name?: string | null;
+  ingredient_family?: string | null;
+  primary_nutrition_role?: string | null;
+  is_protein?: boolean | number | null;
+  is_plant_protein?: boolean | number | null;
+  features_json?: unknown;
 };
 
 type ProductOption = {
@@ -943,7 +955,42 @@ function fiberIngredients(evidence?: MaterialRoleEvidence): string[] {
   return [];
 }
 
+function originalIngredientSegments(evidence?: MaterialRoleEvidence): string[] {
+  const raw = evidence?.raw_ingredient_text;
+  if (typeof raw !== "string") return [];
+  return raw.split(/[、,，;；\n]+/).map((item) => item.trim()).filter(Boolean);
+}
+
+function originalRoleIngredients(evidence?: MaterialRoleEvidence): Record<string, string[]> | null {
+  const items = evidence?.ingredient_items;
+  if (!Array.isArray(items) || !items.length) return null;
+  const segments = originalIngredientSegments(evidence);
+  const roles: Record<string, string[]> = { protein: [], starch: [], fat: [], fiber: [], protection: [] };
+  const add = (key: string, value: string) => {
+    if (value && !roles[key].includes(value)) roles[key].push(value);
+  };
+  for (const item of items) {
+    const position = Number(item.position || 0);
+    const original = segments[position - 1] || item.raw_name || item.standard_name || "";
+    if (!original) continue;
+    const role = String(item.primary_nutrition_role || "");
+    const family = String(item.ingredient_family || "");
+    const features = parseMaybeJson(item.features_json);
+    const featureKeys = features && typeof features === "object" && !Array.isArray(features)
+      ? Object.keys(features as Record<string, unknown>)
+      : [];
+    const hasFeature = (prefix: string) => featureKeys.some((key) => key.startsWith(prefix));
+    if (Boolean(item.is_protein) || role.includes("蛋白")) add("protein", original);
+    if (role.includes("碳水") || family.includes("淀粉") || hasFeature("starch.")) add("starch", original);
+    if (role.includes("脂肪") || family.includes("油脂") || hasFeature("fat.")) add("fat", original);
+    if (role.includes("纤维") || family.includes("纤维") || hasFeature("fiber.")) add("fiber", original);
+    if (role.includes("抗氧化") || role.includes("微量") || role.includes("皮肤") || hasFeature("antioxidant.")) add("protection", original);
+  }
+  return roles;
+}
+
 function buildIngredientRoles(evidence?: MaterialRoleEvidence): IngredientRole[] {
+  const originalRoles = originalRoleIngredients(evidence);
   const protein = evidence?.protein_roles || {};
   const proteinScoreRules = evidence?.protein_score_rules || {};
   const fat = evidence?.fat_roles || {};
@@ -975,11 +1022,11 @@ function buildIngredientRoles(evidence?: MaterialRoleEvidence): IngredientRole[]
     ...collectIngredientNames(fat.omega3_sources),
   ]);
   return [
-    { name: "蛋白来源", tags: proteinTags, tone: "blue" },
-    { name: "碳水和淀粉来源", tags: starchTags, tone: "violet" },
-    { name: "脂肪来源", tags: fatTags, tone: "orange" },
-    { name: "肠道支持和纤维缓冲", tags: fiberTags, tone: "green" },
-    { name: "抗氧化与皮肤屏障支持", tags: protectionTags, tone: "cyan" },
+    { name: "蛋白来源", tags: originalRoles?.protein.length ? uniqueIngredients(originalRoles.protein, 20) : proteinTags, tone: "blue" },
+    { name: "碳水和淀粉来源", tags: originalRoles?.starch.length ? uniqueIngredients(originalRoles.starch, 20) : starchTags, tone: "violet" },
+    { name: "脂肪来源", tags: originalRoles?.fat.length ? uniqueIngredients(originalRoles.fat, 20) : fatTags, tone: "orange" },
+    { name: "肠道支持和纤维缓冲", tags: originalRoles?.fiber.length ? uniqueIngredients(originalRoles.fiber, 20) : fiberTags, tone: "green" },
+    { name: "抗氧化与皮肤屏障支持", tags: originalRoles?.protection.length ? uniqueIngredients(originalRoles.protection, 20) : protectionTags, tone: "cyan" },
   ];
 }
 

@@ -169,31 +169,15 @@ def import_table(path: Path, table: str, if_exists: str) -> None:
 
 
 def command_protein_source(args) -> None:
-    script_args = [
-        "--host",
-        str(DEFAULT_DB["host"]),
-        "--port",
-        str(DEFAULT_DB["port"]),
-        "--user",
-        str(DEFAULT_DB["user"]),
-        "--password",
-        str(DEFAULT_DB["password"]),
-        "--charset",
-        str(DEFAULT_DB["charset"]),
-        "--target-db",
-        str(DEFAULT_DB["database"]),
-        "--input-mode",
-        "direct",
-    ]
-    if args.dry_run:
-        script_args.append("--dry-run")
+    script_path = PROJECT_ROOT.parents[1] / "scripts" / "rebuild_protein_source_from_profiles.py"
+    script_args = []
+    if not args.dry_run:
+        script_args.append("--apply")
     if args.keep_backup:
         script_args.append("--keep-backup")
-    if args.limit:
-        script_args.extend(["--limit", str(args.limit)])
-    if args.concurrency:
-        script_args.extend(["--concurrency", str(args.concurrency)])
-    run_script("rebuild_protein_source_aggregate.py", script_args)
+    cmd = [sys.executable, str(script_path), *script_args]
+    print("+ " + " ".join(cmd), flush=True)
+    subprocess.run(cmd, cwd=str(PROJECT_ROOT.parents[1]), check=True)
 
 
 def command_protein_score(args) -> None:

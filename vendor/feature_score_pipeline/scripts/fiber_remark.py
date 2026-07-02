@@ -1,11 +1,18 @@
 import json
 import os
 import re
+import sys
+from pathlib import Path
 from collections import defaultdict
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Dict, List, Optional, Set, Tuple
 
 import pymysql
+
+APP_DIR = Path(__file__).resolve().parents[3]
+if str(APP_DIR) not in sys.path:
+    sys.path.insert(0, str(APP_DIR))
+from app_config import get_mysql_config
 
 from brand_normalizer import correct_brand
 
@@ -13,14 +20,9 @@ from brand_normalizer import correct_brand
 # =========================
 # 1. 数据库配置
 # =========================
-DB_CONFIG = {
-    "host": os.getenv("MYSQL_HOST", "127.0.0.1"),
-    "port": int(os.getenv("MYSQL_PORT", "3306")),
-    "user": os.getenv("MYSQL_USER", "root"),
-    "password": os.getenv("MYSQL_PASSWORD", ""),
-    "charset": os.getenv("MYSQL_CHARSET", "utf8mb4"),
-    "cursorclass": pymysql.cursors.DictCursor,
-}
+DB_CONFIG = get_mysql_config()
+DB_CONFIG.pop("database", None)
+DB_CONFIG["cursorclass"] = pymysql.cursors.DictCursor
 
 SOURCE_DB = "csv_labeling"
 SOURCE_TABLE = os.getenv("CATFOOD_FORMULA_INPUT_TABLE", "catfood_formula_feature_input")
@@ -799,23 +801,16 @@ def main() -> None:
 
     try:
         read_sql = f"""
-            SELECT s.id, s.formula_id, s.brand, s.product_name, s.image_name, s.image_path, s.ingredient_composition
+            SELECT s.id, s.formula_id, s.brand, s.product_name, s.image_name, s.image_path,
+                   s.ingredient_composition, s.ingredient_fingerprint
             FROM {SOURCE_DB}.{SOURCE_TABLE} s
             WHERE s.ingredient_composition IS NOT NULL
               AND s.ingredient_composition <> ''
               AND EXISTS (
                   SELECT 1
-                  FROM {SOURCE_DB}.{SOURCE_TABLE} changed
-                  LEFT JOIN {TARGET_DB}.{TARGET_TABLE} t
-                    ON t.formula_id = changed.formula_id
-                  WHERE changed.ingredient_composition IS NOT NULL
-                    AND changed.ingredient_composition <> ''
-                    AND changed.formula_id = s.formula_id
-                    AND (
-                        t.id IS NULL
-                        OR t.updated_at IS NULL
-                        OR changed.updated_ts > t.updated_at
-                    )
+                  FROM {SOURCE_DB}.catfood_formula_feature_profile gate
+                  WHERE gate.formula_id = s.formula_id
+                    AND gate.overall_status = 'ready_for_rebuild'
               )
         """
 
@@ -839,18 +834,16 @@ def main() -> None:
 
         upsert_sql = f"""
             INSERT INTO {TARGET_DB}.{TARGET_TABLE}
-                (
-                    formula_id, product_key, brand, product_name, source_ids,
-                    raw_ingredient_text, ingredient_feature_json, starch_ingredients_json
-                )
-            VALUES
-                (%s, %s, %s, %s, %s, %s, %s, %s)
+                (formula_id, raw_ingredient_text, ingredient_feature_json,
+                 starch_ingredients_json, profile_status, profile_version, source_fingerprint)
+            VALUES (%s, %s, %s, %s, 'ready', 'gate-v1', %s)
             ON DUPLICATE KEY UPDATE
-                product_key = VALUES(product_key),
-                source_ids = VALUES(source_ids),
                 raw_ingredient_text = VALUES(raw_ingredient_text),
                 ingredient_feature_json = VALUES(ingredient_feature_json),
                 starch_ingredients_json = VALUES(starch_ingredients_json),
+                profile_status = VALUES(profile_status),
+                profile_version = VALUES(profile_version),
+                source_fingerprint = VALUES(source_fingerprint),
                 updated_at = CURRENT_TIMESTAMP
         """
 
@@ -888,48 +881,6 @@ def main() -> None:
                 )
             cursor.execute(
                 """
-                SELECT COUNT(*) AS index_count
-                FROM INFORMATION_SCHEMA.STATISTICS
-                WHERE TABLE_SCHEMA = %s
-                  AND TABLE_NAME = %s
-                  AND INDEX_NAME = 'uq_formula_id'
-                """,
-                (TARGET_DB, TARGET_TABLE),
-            )
-            if int(cursor.fetchone()["index_count"]) == 0:
-                cursor.execute(
-                    f"""
-                    DELETE FROM {TARGET_DB}.{TARGET_TABLE}
-                    WHERE id IN (
-                        SELECT id FROM (
-                            SELECT older.id
-                            FROM {TARGET_DB}.{TARGET_TABLE} older
-                            JOIN {TARGET_DB}.{TARGET_TABLE} newer
-                              ON older.formula_id = newer.formula_id
-                             AND older.id < newer.id
-                            WHERE older.formula_id IS NOT NULL
-                        ) duplicated_formula_rows
-                    )
-                    """
-                )
-                cursor.execute(
-                    f"ALTER TABLE {TARGET_DB}.{TARGET_TABLE} "
-                    "ADD UNIQUE KEY uq_formula_id (formula_id)"
-                )
-            cursor.execute(
-                """
-                SELECT COLUMN_NAME
-                FROM INFORMATION_SCHEMA.COLUMNS
-                WHERE TABLE_SCHEMA = %s
-                  AND TABLE_NAME = %s
-                  AND COLUMN_NAME = 'product_key'
-                """,
-                (TARGET_DB, TARGET_TABLE),
-            )
-            if cursor.fetchone() is None:
-                cursor.execute(f"ALTER TABLE {TARGET_DB}.{TARGET_TABLE} ADD COLUMN product_key VARCHAR(600) NULL AFTER id")
-            cursor.execute(
-                """
                 SELECT COLUMN_NAME
                 FROM INFORMATION_SCHEMA.COLUMNS
                 WHERE TABLE_SCHEMA = %s
@@ -943,18 +894,6 @@ def main() -> None:
                     f"ALTER TABLE {TARGET_DB}.{TARGET_TABLE} "
                     "ADD COLUMN starch_ingredients_json JSON NULL AFTER ingredient_feature_json"
                 )
-            cursor.execute(
-                """
-                SELECT COUNT(*) AS index_count
-                FROM INFORMATION_SCHEMA.STATISTICS
-                WHERE TABLE_SCHEMA = %s
-                  AND TABLE_NAME = %s
-                  AND INDEX_NAME = 'idx_product_key'
-                """,
-                (TARGET_DB, TARGET_TABLE),
-            )
-            if int(cursor.fetchone()["index_count"]) == 0:
-                cursor.execute(f"ALTER TABLE {TARGET_DB}.{TARGET_TABLE} ADD KEY idx_product_key (product_key)")
 
         with conn.cursor() as cursor:
             cursor.execute(read_sql)
@@ -973,7 +912,7 @@ def main() -> None:
                 row.get("image_path"),
             )
             product_name = (row["product_name"] or "").strip()
-            key = (int(row["formula_id"]), brand, product_name)
+            key = (int(row["formula_id"]), brand, product_name, row.get("ingredient_fingerprint"))
 
             grouped[key]["ids"].append(row["id"])
             grouped[key]["ingredient_texts"].append(row["ingredient_composition"])
@@ -981,7 +920,7 @@ def main() -> None:
         processed_count = 0
 
         with conn.cursor() as cursor:
-            for (formula_id, brand, product_name), payload in grouped.items():
+            for (formula_id, brand, product_name, source_fingerprint), payload in grouped.items():
                 merged_text = "，".join(payload["ingredient_texts"])
                 normalized_text = normalize_text(merged_text)
                 raw_ingredients = split_ingredients(normalized_text)
@@ -1005,13 +944,10 @@ def main() -> None:
                     upsert_sql,
                     (
                         formula_id,
-                        build_product_key(brand, product_name),
-                        brand,
-                        product_name,
-                        json.dumps(payload["ids"], ensure_ascii=False),
                         merged_text,
                         json.dumps(feature_json, ensure_ascii=False),
                         json.dumps(starch_ingredients, ensure_ascii=False),
+                        source_fingerprint,
                     )
                 )
                 processed_count += 1

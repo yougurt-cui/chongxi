@@ -4,6 +4,7 @@ from __future__ import print_function
 import os
 import re
 import sys
+from pathlib import Path
 
 if sys.version_info[0] < 3:
     raise RuntimeError("请使用 Python 3 运行：python3 protein_score1.py")
@@ -11,6 +12,17 @@ if sys.version_info[0] < 3:
 import numpy as np
 import pandas as pd
 from sqlalchemy import Numeric, create_engine, text
+from sqlalchemy.engine import URL
+
+
+APP_DIR = Path(__file__).resolve().parents[3]
+if str(APP_DIR) not in sys.path:
+    sys.path.insert(0, str(APP_DIR))
+
+try:
+    from app_config import get_feature_mysql_config
+except ImportError:
+    get_feature_mysql_config = None
 
 
 # =========================
@@ -31,6 +43,8 @@ OUTPUT_TABLE = os.getenv(
     "protein_business_cluster_product_details_scored",
 )
 OUTPUT_IF_EXISTS = os.getenv("PROTEIN_SCORE_IF_EXISTS", "replace")
+SCORE_CONFIG_DB = os.getenv("PROTEIN_SCORE_CONFIG_DB", "csv_labeling")
+SCORE_CONFIG_VERSION = os.getenv("PROTEIN_SCORE_CONFIG_VERSION", "protein_v1")
 
 VALID_IF_EXISTS = {"fail", "replace", "append"}
 SCORE_DECIMALS = 3
@@ -137,6 +151,27 @@ HYDROLYZED_PROTEIN_RELIEF_MAP = {
     "主要出现": 1.0,
 }
 
+PROTEIN_QUALITY_WEIGHTS = {
+    "animal_protein_dominance": 0.30,
+    "source_clarity": 0.25,
+    "digestibility": 0.20,
+    "low_plant_interference": 0.15,
+    "protein_content_suitability": 0.10,
+}
+
+PROTEIN_PRESSURE_WEIGHTS = {
+    component: 1.0 / len(PROTEIN_STRUCTURE_COMPONENT_SCORE_COLS)
+    for component in PROTEIN_STRUCTURE_COMPONENT_SCORE_COLS
+}
+
+DEFAULT_LABEL_SCORE_MAPS = {
+    "meat_source_complexity": MEAT_SOURCE_COMPLEXITY_MAP,
+    "main_protein_form": MAIN_PROTEIN_FORM_MAP,
+    "secondary_protein_form": SECONDARY_PROTEIN_FORM_MAP,
+    "plant_protein_interference": PLANT_PROTEIN_INTERFERENCE_MAP,
+    "hydrolyzed_protein_role": HYDROLYZED_PROTEIN_RELIEF_MAP,
+}
+
 
 # =========================
 # 3. 工具函数
@@ -149,15 +184,15 @@ def quote_identifier(name):
 
 
 def get_engine():
-    url = (
-        "mysql+pymysql://{user}:{password}@{host}:{port}/{database}"
-        "?charset=utf8mb4"
-    ).format(
-        user=DB_USER,
-        password=DB_PASSWORD,
-        host=DB_HOST,
-        port=DB_PORT,
-        database=DB_NAME,
+    central = get_feature_mysql_config() if get_feature_mysql_config else {}
+    url = URL.create(
+        "mysql+pymysql",
+        username=os.getenv("MYSQL_USER") or central.get("user") or DB_USER,
+        password=os.getenv("MYSQL_PASSWORD") or central.get("password") or DB_PASSWORD,
+        host=os.getenv("MYSQL_HOST") or central.get("host") or DB_HOST,
+        port=int(os.getenv("MYSQL_PORT") or central.get("port") or DB_PORT),
+        database=os.getenv("MYSQL_DATABASE") or central.get("database") or DB_NAME,
+        query={"charset": central.get("charset") or "utf8mb4"},
     )
     return create_engine(url, pool_pre_ping=True, future=True)
 
@@ -348,13 +383,13 @@ def calc_form_mix_complexity(row):
     return 3.0
 
 
-def calc_hydrolyzed_protein_relief_score(row):
+def calc_hydrolyzed_protein_relief_score(row, score_map=None):
     """
     水解蛋白缓释分：作为减分项
     """
     role = normalize_text(row.get("hydrolyzed_protein_role", ""))
     if role:
-        return map_score(role, HYDROLYZED_PROTEIN_RELIEF_MAP, default=0.0)
+        return map_score(role, score_map or HYDROLYZED_PROTEIN_RELIEF_MAP, default=0.0)
 
     primary = normalize_text(row.get("primary_meat_source_type", ""))
     main_form = normalize_text(row.get("main_protein_form", ""))
@@ -542,7 +577,8 @@ def calc_protein_content_suitability_score(value):
     return clamp01(0.85 - 0.35 * (protein_pct - 55) / 25)
 
 
-def calc_protein_quality_score(row):
+def calc_protein_quality_score(row, weights=None):
+    weights = weights or PROTEIN_QUALITY_WEIGHTS
     animal_score = calc_animal_protein_dominance_score(row)
     clarity_score = calc_source_clarity_score(row)
     digestibility_score = calc_digestibility_score(row)
@@ -553,13 +589,72 @@ def calc_protein_quality_score(row):
         row.get("crude_protein_for_score")
     )
 
-    return (
-        0.30 * animal_score
-        + 0.25 * clarity_score
-        + 0.20 * digestibility_score
-        + 0.15 * low_plant_interference_score
-        + 0.10 * content_suitability_score
-    )
+    components = {
+        "animal_protein_dominance": animal_score,
+        "source_clarity": clarity_score,
+        "digestibility": digestibility_score,
+        "low_plant_interference": low_plant_interference_score,
+        "protein_content_suitability": content_suitability_score,
+    }
+    return sum(float(weights[key]) * value for key, value in components.items())
+
+
+def load_score_config(engine):
+    """Load one active version of label score maps and quality weights."""
+    config_db = quote_identifier(SCORE_CONFIG_DB)
+    params = {"config_version": SCORE_CONFIG_VERSION}
+    label_sql = """
+        SELECT l.dimension_code, l.value_name, s.score_value
+        FROM {db}.catfood_label_score_config s
+        JOIN {db}.catfood_feature_label l ON l.label_id=s.label_id
+        WHERE s.active=1 AND l.active=1
+          AND s.config_version=:config_version
+          AND l.config_version=:config_version
+          AND s.score_code='protein_structure_score'
+    """.format(db=config_db)
+    weight_sql = """
+        SELECT score_code, component_code, weight
+        FROM {db}.catfood_score_weight_config
+        WHERE active=1 AND config_version=:config_version
+          AND score_code IN ('protein_quality_score', 'protein_structure_score')
+    """.format(db=config_db)
+    try:
+        label_rows = pd.read_sql(text(label_sql), engine, params=params)
+        weight_rows = pd.read_sql(text(weight_sql), engine, params=params)
+    except Exception as exc:
+        print("评分配置读取失败，使用代码默认值：{}".format(exc))
+        return (
+            dict(DEFAULT_LABEL_SCORE_MAPS),
+            dict(PROTEIN_QUALITY_WEIGHTS),
+            dict(PROTEIN_PRESSURE_WEIGHTS),
+        )
+
+    label_maps = {key: dict(value) for key, value in DEFAULT_LABEL_SCORE_MAPS.items()}
+    for row in label_rows.to_dict("records"):
+        label_maps.setdefault(row["dimension_code"], {})[row["value_name"]] = float(row["score_value"])
+
+    weight_records = weight_rows.to_dict("records")
+    weights = {
+        row["component_code"]: float(row["weight"])
+        for row in weight_records if row["score_code"] == "protein_quality_score"
+    }
+    expected_components = set(PROTEIN_QUALITY_WEIGHTS)
+    if set(weights) != expected_components:
+        raise ValueError("蛋白质量权重组件不完整：expected={} actual={}".format(sorted(expected_components), sorted(weights)))
+    if abs(sum(weights.values()) - 1.0) > 0.000001:
+        raise ValueError("蛋白质量权重合计必须为1，当前为{}".format(sum(weights.values())))
+    pressure_weights = {
+        row["component_code"]: float(row["weight"])
+        for row in weight_records if row["score_code"] == "protein_structure_score"
+    }
+    expected_pressure = set(PROTEIN_STRUCTURE_COMPONENT_SCORE_COLS)
+    if set(pressure_weights) != expected_pressure:
+        raise ValueError("蛋白压力权重组件不完整：expected={} actual={}".format(
+            sorted(expected_pressure), sorted(pressure_weights)
+        ))
+    if abs(sum(pressure_weights.values()) - 1.0) > 0.000001:
+        raise ValueError("蛋白压力权重合计必须为1，当前为{}".format(sum(pressure_weights.values())))
+    return label_maps, weights, pressure_weights
 
 
 def choose_crude_protein_series(df):
@@ -689,22 +784,22 @@ def ensure_output_table_metadata(engine):
                 )
             )
 
-        source_id_index = conn.execute(
+        formula_id_index = conn.execute(
             text(
                 """
                 SELECT COUNT(*)
                 FROM INFORMATION_SCHEMA.STATISTICS
                 WHERE TABLE_SCHEMA = :schema_name
                   AND TABLE_NAME = :table_name
-                  AND INDEX_NAME = 'uq_source_id'
+                  AND INDEX_NAME = 'uq_formula_id'
                 """
             ),
             {"schema_name": DB_NAME, "table_name": OUTPUT_TABLE},
         ).scalar()
-        if not source_id_index and "source_id" in column_map:
+        if not formula_id_index and "formula_id" in column_map:
             conn.execute(
                 text(
-                    "ALTER TABLE {} ADD UNIQUE KEY uq_source_id (source_id)".format(
+                    "ALTER TABLE {} ADD UNIQUE KEY uq_formula_id (formula_id)".format(
                         quote_identifier(OUTPUT_TABLE)
                     )
                 )
@@ -748,7 +843,7 @@ def upsert_scored_dataframe(engine, scored_df):
     columns = list(scored_df.columns)
     insert_columns = ", ".join(quote_identifier(col) for col in columns)
     select_columns = ", ".join(quote_identifier(col) for col in columns)
-    update_columns = [col for col in columns if col != "source_id"]
+    update_columns = [col for col in columns if col != "formula_id"]
     update_sql = ", ".join(
         "{0}=VALUES({0})".format(quote_identifier(col)) for col in update_columns
     )
@@ -781,11 +876,19 @@ def upsert_scored_dataframe(engine, scored_df):
         conn.execute(text("DROP TABLE IF EXISTS {}".format(quoted_temp)))
 
 
-def add_score_columns(df):
+def add_score_columns(
+    df,
+    label_score_maps=None,
+    quality_weights=None,
+    pressure_weights=None,
+):
     if df.empty:
         return df.copy()
 
     scored_df = df.copy()
+    label_score_maps = label_score_maps or DEFAULT_LABEL_SCORE_MAPS
+    quality_weights = quality_weights or PROTEIN_QUALITY_WEIGHTS
+    pressure_weights = pressure_weights or PROTEIN_PRESSURE_WEIGHTS
 
     scored_df["meat_source_complexity_norm"] = scored_df.apply(
         infer_complexity_label,
@@ -809,15 +912,15 @@ def add_score_columns(df):
 
     scored_df["meat_source_complexity_score"] = scored_df[
         "meat_source_complexity_norm"
-    ].apply(calc_complexity_score)
+    ].apply(lambda x: map_score(x, label_score_maps["meat_source_complexity"], default=np.nan))
 
     scored_df["main_protein_form_score"] = scored_df[
         "main_protein_form_norm"
-    ].apply(lambda x: map_score(x, MAIN_PROTEIN_FORM_MAP, default=np.nan))
+    ].apply(lambda x: map_score(x, label_score_maps["main_protein_form"], default=np.nan))
 
     scored_df["secondary_protein_form_score"] = scored_df[
         "secondary_protein_form_norm"
-    ].apply(lambda x: map_score(x, SECONDARY_PROTEIN_FORM_MAP, default=0.0))
+    ].apply(lambda x: map_score(x, label_score_maps["secondary_protein_form"], default=0.0))
 
     scored_df["form_mix_complexity_score"] = scored_df.apply(
         calc_form_mix_complexity,
@@ -825,13 +928,14 @@ def add_score_columns(df):
     )
 
     scored_df["hydrolyzed_protein_relief_score"] = scored_df.apply(
-        calc_hydrolyzed_protein_relief_score,
-        axis=1,
+        lambda row: calc_hydrolyzed_protein_relief_score(
+            row, label_score_maps["hydrolyzed_protein_role"]
+        ), axis=1,
     )
 
     scored_df["plant_protein_interference_score"] = scored_df[
         "plant_protein_interference_norm"
-    ].apply(lambda x: map_score(x, PLANT_PROTEIN_INTERFERENCE_MAP, default=np.nan))
+    ].apply(lambda x: map_score(x, label_score_maps["plant_protein_interference"], default=np.nan))
 
     scored_df["protein_content_score"] = min_max_scale(scored_df[crude_col])
 
@@ -862,9 +966,10 @@ def add_score_columns(df):
     # 分越高 = 越复杂、越重、越偏重配方
     # 分越低 = 越温和、越简单
     # =========================
-    scored_df["protein_structure_score"] = scored_df[
-        [col + "_normalized" for col in PROTEIN_STRUCTURE_COMPONENT_SCORE_COLS]
-    ].mean(axis=1)
+    scored_df["protein_structure_score"] = sum(
+        scored_df[col + "_normalized"] * float(pressure_weights[col])
+        for col in PROTEIN_STRUCTURE_COMPONENT_SCORE_COLS
+    )
 
     scored_df["protein_structure_score_method"] = (
         "component_minmax_normalized_equal_weight"
@@ -872,8 +977,7 @@ def add_score_columns(df):
 
     scored_df["protein_structure_scored_at"] = pd.Timestamp.now()
     scored_df["protein_quality_score"] = scored_df.apply(
-        calc_protein_quality_score,
-        axis=1,
+        lambda row: calc_protein_quality_score(row, quality_weights), axis=1,
     )
 
     output_columns = [col for col in SCORED_OUTPUT_COLUMNS if col in scored_df.columns]
@@ -888,11 +992,29 @@ def main():
     quote_identifier(OUTPUT_TABLE)
 
     df = pd.read_sql("SELECT * FROM {}".format(source_table), engine)
+    formula_id = os.getenv("FORMULA_ID")
+    if formula_id:
+        df = df[pd.to_numeric(df["formula_id"], errors="coerce") == int(formula_id)].copy()
+    if (
+        "protein_profile_status" in df.columns
+        and os.getenv("PROTEIN_SCORE_INCLUDE_BLOCKED", "0").strip().lower()
+        not in {"1", "true", "yes"}
+    ):
+        blocked_count = int((df["protein_profile_status"] != "ready").sum())
+        if blocked_count:
+            print("跳过蛋白画像未就绪记录：{}".format(blocked_count))
+        df = df[df["protein_profile_status"] == "ready"].copy()
     if df.empty:
         print("源表 {} 无数据，未写入结果表。".format(SOURCE_TABLE))
         return
 
-    scored_df = add_score_columns(df)
+    label_score_maps, quality_weights, pressure_weights = load_score_config(engine)
+    scored_df = add_score_columns(
+        df,
+        label_score_maps=label_score_maps,
+        quality_weights=quality_weights,
+        pressure_weights=pressure_weights,
+    )
 
     upsert_scored_dataframe(engine, scored_df)
 

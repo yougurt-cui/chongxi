@@ -23,6 +23,7 @@ DB_CONFIG = {
 
 SOURCE_TABLE = "catfood_fiber_feature_json"
 TARGET_TABLE = "catfood_fiber_feature_score"
+STANDARD_DB = os.getenv("CATFOOD_STANDARD_DB", "csv_labeling")
 LEGACY_COMBO_TABLE = "catfood_fiber_product_combo_result"
 MAIN_COMPONENT_CUMULATIVE_SHARE = 0.70
 MIN_COMPONENT_SCORE = 0.05
@@ -967,17 +968,7 @@ ON DUPLICATE KEY UPDATE
 """
 
 
-UPDATE_SOURCE_SQL = f"""
-UPDATE {SOURCE_TABLE}
-SET
-    product_key = %(product_key)s,
-    starch_ingredients_json = %(starch_ingredients_json)s
-WHERE id = %(id)s;
-"""
-
-
 SOURCE_SCHEMA_COLUMNS = {
-    "product_key": f"ALTER TABLE {SOURCE_TABLE} ADD COLUMN product_key VARCHAR(600) NULL AFTER id",
     "starch_ingredients_json": f"ALTER TABLE {SOURCE_TABLE} ADD COLUMN starch_ingredients_json JSON NULL AFTER ingredient_feature_json",
 }
 
@@ -1010,20 +1001,6 @@ def ensure_source_table_schema(conn) -> None:
             if column_name not in existing_columns:
                 cursor.execute(alter_sql)
 
-        cursor.execute(
-            """
-            SELECT COUNT(*) AS index_count
-            FROM INFORMATION_SCHEMA.STATISTICS
-            WHERE TABLE_SCHEMA = %s
-              AND TABLE_NAME = %s
-              AND INDEX_NAME = 'idx_product_key'
-            """,
-            (DB_CONFIG["database"], SOURCE_TABLE),
-        )
-        if int(cursor.fetchone()["index_count"]) == 0:
-            cursor.execute(f"ALTER TABLE {SOURCE_TABLE} ADD KEY idx_product_key (product_key)")
-
-
 def rebuild_target_table(conn) -> None:
     with conn.cursor() as cursor:
         cursor.execute(CREATE_TARGET_TABLE_SQL)
@@ -1041,17 +1018,23 @@ def batch_process():
         conn.commit()
 
         with conn.cursor() as cursor:
+            formula_id = int(os.environ["FORMULA_ID"]) if os.getenv("FORMULA_ID") else None
             cursor.execute(f"""
                 SELECT
-                    id,
-                    formula_id,
-                    source_ids,
-                    brand,
-                    product_name,
-                    raw_ingredient_text,
-                    ingredient_feature_json
-                FROM {SOURCE_TABLE}
-            """)
+                    s.formula_id,
+                    b.standard_brand_name AS brand,
+                    p.standard_product_name AS product_name,
+                    s.raw_ingredient_text,
+                    s.ingredient_feature_json
+                FROM {SOURCE_TABLE} s
+                JOIN {STANDARD_DB}.catfood_standard_formula f ON f.formula_id=s.formula_id
+                JOIN {STANDARD_DB}.catfood_standard_product p ON p.product_id=f.product_id
+                JOIN {STANDARD_DB}.catfood_standard_brand b ON b.brand_id=p.brand_id
+                JOIN {STANDARD_DB}.catfood_formula_feature_profile gate
+                  ON gate.formula_id=s.formula_id
+                 AND gate.overall_status='ready_for_rebuild'
+                WHERE (%s IS NULL OR s.formula_id=%s)
+            """, (formula_id, formula_id))
             rows = cursor.fetchall()
 
         total_count = 0
@@ -1062,7 +1045,7 @@ def batch_process():
             for row in rows:
                 total_count += 1
 
-                source_id = parse_source_id(row.get("source_ids"), row.get("id"))
+                source_id = row.get("formula_id")
                 brand = row.get("brand")
                 product_name = row.get("product_name")
                 product_key = build_product_key(brand, product_name)
@@ -1097,14 +1080,7 @@ def batch_process():
                         "p_main_ingredients": format_main_ingredients(result["score_detail_json"], "p"),
                         "q_main_ingredients": format_main_ingredients(result["score_detail_json"], "q"),
                     }
-                    source_params = {
-                        "id": row["id"],
-                        "product_key": product_key,
-                        "starch_ingredients_json": json.dumps(result["starch_ingredients_json"], ensure_ascii=False),
-                    }
-
                     cursor.execute(INSERT_TARGET_SQL, params)
-                    cursor.execute(UPDATE_SOURCE_SQL, source_params)
                     success_count += 1
 
                 except Exception as e:

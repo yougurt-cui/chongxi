@@ -190,22 +190,24 @@ def write_wide_incremental(engine, wide_df, score_types):
                 )
             )
         )
-        conn.execute(
-            text(
-                """
-                DELETE output
-                FROM {output} AS output
-                LEFT JOIN {temp} AS latest
-                  ON output.formula_id = latest.formula_id
-                WHERE latest.formula_id IS NULL
-                """.format(output=quoted_output, temp=quoted_temp)
+        if not os.getenv("FORMULA_ID"):
+            conn.execute(
+                text(
+                    """
+                    DELETE output
+                    FROM {output} AS output
+                    LEFT JOIN {temp} AS latest
+                      ON output.formula_id = latest.formula_id
+                    WHERE latest.formula_id IS NULL
+                    """.format(output=quoted_output, temp=quoted_temp)
+                )
             )
-        )
         conn.execute(text("DROP TABLE IF EXISTS {}".format(quoted_temp)))
 
 
 def main():
     engine = get_engine()
+    formula_id = int(os.environ["FORMULA_ID"]) if os.getenv("FORMULA_ID") else None
 
     protein_df = pd.read_sql(
         f"""
@@ -223,6 +225,9 @@ def main():
         FROM {PROTEIN_TABLE} AS protein
         INNER JOIN {PARSED_SOURCE_TABLE} AS parsed
           ON parsed.formula_id = protein.formula_id
+        INNER JOIN csv_labeling.catfood_formula_feature_profile AS gate
+          ON gate.formula_id = protein.formula_id
+         AND gate.overall_status = 'ready_for_rebuild'
         """,
         engine,
     )
@@ -267,6 +272,10 @@ def main():
         """,
         engine,
     )
+    if formula_id is not None:
+        protein_df = protein_df[protein_df["formula_id"] == formula_id].copy()
+        fat_df = fat_df[fat_df["formula_id"] == formula_id].copy()
+        fiber_df = fiber_df[fiber_df["formula_id"] == formula_id].copy()
 
     linked_protein = (
         protein_df[protein_df["formula_id"].notna()]

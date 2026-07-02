@@ -1043,6 +1043,25 @@ def get_material_role_evidence(
     ingredient_composition: str,
     formula_id: Any = None,
 ) -> dict:
+    ingredient_items: list[dict[str, Any]] = []
+    if formula_id is not None and not pd.isna(formula_id):
+        try:
+            ingredient_items = pd.read_sql(
+                text(
+                    """
+                    SELECT position, raw_name, standard_name, ingredient_family,
+                           primary_nutrition_role, is_protein, is_plant_protein,
+                           features_json
+                    FROM csv_labeling.catfood_formula_ingredient_item
+                    WHERE formula_id=:formula_id AND is_ignored=0
+                    ORDER BY position
+                    """
+                ),
+                engine,
+                params={"formula_id": int(formula_id)},
+            ).to_dict(orient="records")
+        except Exception:
+            ingredient_items = []
     protein_roles = _fetch_feature_row(
         engine,
         "protein_source_aggregate",
@@ -1124,6 +1143,7 @@ def get_material_role_evidence(
 
     return make_json_safe({
         "raw_ingredient_text": ingredient_composition or fiber_carb_roles.get("raw_ingredient_text") or "",
+        "ingredient_items": ingredient_items,
         "protein_roles": protein_roles,
         "protein_score_rules": protein_score_rules,
         "fat_roles": fat_roles,

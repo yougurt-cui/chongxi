@@ -18,6 +18,11 @@ from services.catfood_standardization_service import (
     standardize_product,
 )
 from services.formula_feature_link_service import backfill_formula_ids
+from services.formula_incremental_service import (
+    build_formula_profile,
+    materialize_formula_risks,
+    materialize_formula_scores,
+)
 
 
 catfood_standardization_api = Blueprint(
@@ -156,6 +161,34 @@ def standardization_formula_input_build():
 def standardization_formula_input_rebuild():
     try:
         return jsonify(rebuild_formula_feature_inputs(apply=True)), 200
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+
+
+@catfood_standardization_api.post("/formula-profile/build")
+def standardization_formula_profile_build():
+    try:
+        payload = request.get_json(silent=True) or {}
+        return jsonify(build_formula_profile(formula_id=int(payload["formula_id"]), apply=True)), 200
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+
+
+@catfood_standardization_api.post("/formula-materialize")
+def standardization_formula_materialize():
+    try:
+        payload = request.get_json(silent=True) or {}
+        result = materialize_formula_scores(formula_id=int(payload["formula_id"]), batch_id=payload.get("batch_id"))
+        return jsonify(result), 200 if result.get("ok") else 409
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+
+
+@catfood_standardization_api.post("/formula-risk/materialize")
+def standardization_formula_risk_materialize():
+    try:
+        payload = request.get_json(silent=True) or {}
+        return jsonify(materialize_formula_risks(formula_id=int(payload["formula_id"]), batch_id=payload.get("batch_id"))), 200
     except Exception as exc:
         return jsonify({"ok": False, "error": str(exc)}), 400
 

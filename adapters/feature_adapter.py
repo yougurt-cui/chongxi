@@ -481,6 +481,13 @@ def run_consumer_feature_engineering(
     timeout_seconds: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Run C-side feature engineering source-table builders."""
+    if os.getenv("FORMULA_FEATURE_MATERIALIZATION_MODE", "gate_only").strip().lower() != "legacy":
+        return {
+            "ok": False,
+            "status": "blocked",
+            "reason": "Profile 已切换为领域准入开关；下游特征物化暂时关闭，等待新生成器接入 domain_gate_json。",
+            "required_mode": "legacy",
+        }
     db_config = _db_config(db)
     selected_steps = [str(step).strip() for step in (steps or ["protein", "fiber", "fat"]) if str(step).strip()]
     allowed = {"protein", "fiber", "fat"}

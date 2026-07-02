@@ -1,7 +1,14 @@
 import re
 import os
+import sys
+from pathlib import Path
 import pymysql
 import pandas as pd
+
+APP_DIR = Path(__file__).resolve().parents[3]
+if str(APP_DIR) not in sys.path:
+    sys.path.insert(0, str(APP_DIR))
+from app_config import get_mysql_config
 
 from brand_normalizer import build_product_key as build_corrected_product_key
 from brand_normalizer import correct_brand
@@ -10,14 +17,9 @@ from brand_normalizer import correct_brand
 # =====================================
 # 1. 数据库配置
 # =====================================
-DB_CONFIG = {
-    "host": os.getenv("MYSQL_HOST", "127.0.0.1"),
-    "port": int(os.getenv("MYSQL_PORT", "3306")),
-    "user": os.getenv("MYSQL_USER", "root"),
-    "password": os.getenv("MYSQL_PASSWORD", ""),
-    "charset": os.getenv("MYSQL_CHARSET", "utf8mb4"),
-    "cursorclass": pymysql.cursors.Cursor,
-}
+DB_CONFIG = get_mysql_config()
+DB_CONFIG.pop("database", None)
+DB_CONFIG["cursorclass"] = pymysql.cursors.Cursor
 
 # 跨库表名
 SOURCE_TABLE = os.getenv(
@@ -446,30 +448,14 @@ def fetch_source_data(conn):
             rg.basis AS guarantee_crude_fat_basis,
             rg.raw_text AS guarantee_crude_fat_raw_text
         FROM {SOURCE_TABLE} s
+        JOIN csv_labeling.catfood_formula_feature_profile gate
+          ON gate.formula_id = s.formula_id
+         AND gate.overall_status = 'ready_for_rebuild'
         LEFT JOIN ranked_fat_guarantee rg
           ON rg.source_id = s.source_id
          AND rg.rn = 1
-        LEFT JOIN {TARGET_TABLE} t
-          ON t.source_row_id = s.id
-          OR (s.source_id IS NOT NULL AND t.source_id = s.source_id)
         WHERE s.ingredient_composition IS NOT NULL
           AND TRIM(s.ingredient_composition) <> ''
-          AND (
-              t.id IS NULL
-              OR t.source_updated_ts IS NULL
-              OR s.updated_ts > t.source_updated_ts
-              OR (
-                  rg.metric_value IS NOT NULL
-                  AND (
-                      t.guarantee_crude_fat_value IS NULL
-                      OR t.guarantee_crude_fat_value <> rg.metric_value
-                      OR COALESCE(t.guarantee_crude_fat_unit, '') <> COALESCE(rg.metric_unit, '')
-                      OR COALESCE(t.guarantee_crude_fat_operator, '') <> COALESCE(rg.operator_symbol, '')
-                      OR COALESCE(t.guarantee_crude_fat_basis, '') <> COALESCE(rg.basis, '')
-                      OR COALESCE(t.guarantee_crude_fat_raw_text, '') <> COALESCE(rg.raw_text, '')
-                  )
-              )
-          )
     """
     df = pd.read_sql(sql, conn)
 
@@ -519,7 +505,6 @@ def upsert_results(conn, df_result):
 
     sql = f"""
         INSERT INTO {TARGET_TABLE} (
-            id,
             formula_id,
             source_row_id,
             source_id,
@@ -550,7 +535,7 @@ def upsert_results(conn, df_result):
             needs_review,
             review_reason
         )
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         ON DUPLICATE KEY UPDATE
             formula_id = VALUES(formula_id),
             source_row_id = VALUES(source_row_id),
@@ -585,7 +570,6 @@ def upsert_results(conn, df_result):
 
     data = [
         tuple(mysql_safe_value(value) for value in (
-            row["id"],
             row["formula_id"],
             row["source_row_id"],
             row["source_id"],
@@ -620,26 +604,6 @@ def upsert_results(conn, df_result):
     ]
 
     with conn.cursor() as cursor:
-        ids = [
-            int(value)
-            for value in df_result["id"].dropna().tolist()
-            if str(value).strip() and str(value).replace(".", "", 1).isdigit()
-        ]
-        source_ids = [
-            int(value)
-            for value in df_result["source_id"].dropna().tolist()
-            if str(value).strip() and str(value).replace(".", "", 1).isdigit()
-        ]
-        if ids or source_ids:
-            clauses = []
-            params = []
-            if ids:
-                clauses.append("id IN (" + ",".join(["%s"] * len(ids)) + ")")
-                params.extend(ids)
-            if source_ids:
-                clauses.append("source_id IN (" + ",".join(["%s"] * len(source_ids)) + ")")
-                params.extend(source_ids)
-            cursor.execute(f"DELETE FROM {TARGET_TABLE} WHERE {' OR '.join(clauses)}", params)
         cursor.executemany(sql, data)
     conn.commit()
 

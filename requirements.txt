@@ -4,6 +4,7 @@ SQLAlchemy
 PyYAML
 numpy
 openai
+opencc-python-reimplemented
 pandas
 rich
 tenacity

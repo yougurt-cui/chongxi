@@ -7,12 +7,14 @@ import json
 import os
 import re
 import sys
+import unicodedata
 import uuid
 from pathlib import Path
 from typing import Any, Optional
 
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
+from opencc import OpenCC
 
 from brand_normalizer import build_product_key as build_corrected_product_key
 from brand_normalizer import correct_brand
@@ -20,6 +22,20 @@ from brand_normalizer import correct_brand
 
 NAME_RE = re.compile(r"^[A-Za-z0-9_]+$")
 SPLIT_SOURCE_RE = re.compile(r"[、,，/|]+")
+ADDITIVE_SECTION_RE = re.compile(
+    r"(?:添加剂组成|添加剂|营养添加剂|营养性添加剂|产品成分分析|营养分析|保证值)",
+    re.I,
+)
+TRADITIONAL_TO_SIMPLIFIED = OpenCC("t2s")
+BRACKET_OPENERS = frozenset("(（[［【{｛〔〈《「『")
+BRACKET_CLOSERS = frozenset(")）]］】}｝〕〉》」』")
+DOSAGE_FRAGMENT_RE = re.compile(
+    r"(?i)(?<![a-z])(?:\d+(?:\.\d+)?\s*[×x]\s*)?\d+(?:\.\d+)?\s*"
+    r"(?:mgkg|gkg|ugkg|mcgkg|iukg|cfukg|kcal(?:kg)?|"
+    r"mg|kg|ug|mcg|iu|cfu|ppm|ml|g|%|％|"
+    r"毫克|千克|公斤|微克|克|国际单位|菌落形成单位|千卡|卡路里|毫升|升)"
+    r"(?:\s*[/／]\s*(?:kg|g|ml|l|千克|公斤|克|毫升|升|杯))?"
+)
 CSV_LABELING_PROJECT = Path(
     os.getenv(
         "CSV_LABELING_PROJECT",
@@ -88,6 +104,91 @@ def _clean_text(value: Any) -> Optional[str]:
     return text_value or None
 
 
+def _strip_bracketed_content(value: Any) -> str:
+    """Remove balanced or half-open bracket groups while keeping outside text."""
+    text_value = str(value or "")
+    result: list[str] = []
+    depth = 0
+    for char in text_value:
+        if char in BRACKET_OPENERS:
+            depth += 1
+            continue
+        if char in BRACKET_CLOSERS:
+            if depth > 0:
+                depth -= 1
+            continue
+        if depth == 0:
+            result.append(char)
+    return "".join(result)
+
+
+def _normalize_ingredient_display_name(value: Any) -> str:
+    text_value = unicodedata.normalize("NFKC", str(value or "")).strip()
+    text_value = _strip_bracketed_content(text_value)
+    text_value = TRADITIONAL_TO_SIMPLIFIED.convert(text_value)
+    return DOSAGE_FRAGMENT_RE.sub("", text_value).strip()
+
+
+def _normalize_ingredient_key(value: Any) -> str:
+    text_value = _normalize_ingredient_display_name(value).lower()
+    return re.sub(r"[\s·•._\-—–/\\|,:：;；，。()（）\[\]【】'\"®™]+", "", text_value)
+
+
+def _normalize_ingredient_literal_key(value: Any) -> str:
+    """Normalize punctuation while retaining bracket contents for exact alias matching."""
+    text_value = unicodedata.normalize("NFKC", str(value or "")).strip().lower()
+    text_value = TRADITIONAL_TO_SIMPLIFIED.convert(text_value)
+    text_value = DOSAGE_FRAGMENT_RE.sub("", text_value)
+    return re.sub(r"[\s·•._\-—–/\\|,:：;；，。()（）\[\]【】'\"®™]+", "", text_value)
+
+
+def _split_grouped_alias_names(value: Any) -> list[str]:
+    result: list[str] = []
+    buffer: list[str] = []
+    depth = 0
+    for char in str(value or ""):
+        if char in "([（【":
+            depth += 1
+        elif char in ")]）】" and depth:
+            depth -= 1
+        if char == "、" and depth == 0:
+            item = "".join(buffer).strip()
+            if item and item not in result:
+                result.append(item)
+            buffer = []
+        else:
+            buffer.append(char)
+    item = "".join(buffer).strip()
+    if item and item not in result:
+        result.append(item)
+    return result
+
+
+def _ingredient_candidate_noise_reason(normalized_key: str) -> str | None:
+    if not normalized_key:
+        return "empty"
+    if normalized_key.isdigit():
+        return "pure_numeric"
+    if re.fullmatch(r"[a-z]+", normalized_key, re.I):
+        return "pure_latin_letters"
+    if re.fullmatch(r"[\u3400-\u4dbf\u4e00-\u9fff]", normalized_key):
+        return "single_han_character"
+    return None
+
+
+def _strip_additive_section(value: Any) -> str:
+    text_value = str(value or "")
+    return ADDITIVE_SECTION_RE.split(text_value, maxsplit=1)[0]
+
+
+def _clean_ingredient_token(value: Any) -> str:
+    token = str(value or "").strip(" \t\r\n。.")
+    token = re.sub(r"\d+(?:\.\d+)?\s*[%％]", "", token)
+    token = re.sub(r"\(\s*\)|（\s*）", "", token)
+    token = re.sub(r"^[：:]+", "", token)
+    return token.strip(" \t\r\n。.")
+
+
 def _split_source_tokens(value: Any) -> list[str]:
     text_value = _clean_text(value)
     if not text_value:
@@ -96,7 +197,7 @@ def _split_source_tokens(value: Any) -> list[str]:
 
 
 def _split_ingredient_tokens(value: Any) -> list[str]:
-    text_value = _clean_text(value)
+    text_value = _clean_text(_strip_additive_section(value))
     if not text_value:
         return []
     tokens: list[str] = []
@@ -108,13 +209,13 @@ def _split_ingredient_tokens(value: Any) -> list[str]:
         elif char in ")）]】" and depth > 0:
             depth -= 1
         if char in "、,，;；\n" and depth == 0:
-            token = "".join(buffer).strip(" \t\r\n。.")
+            token = _clean_ingredient_token("".join(buffer))
             if token:
                 tokens.append(token)
             buffer = []
             continue
         buffer.append(char)
-    token = "".join(buffer).strip(" \t\r\n。.")
+    token = _clean_ingredient_token("".join(buffer))
     if token:
         tokens.append(token)
     return tokens
@@ -230,6 +331,368 @@ NON_PROTEIN_MARKERS = (
     "磷酸",
     "碳酸",
 )
+
+PLANT_PROTEIN_MARKERS = (
+    "豌豆蛋白",
+    "马铃薯蛋白",
+    "玉米蛋白",
+    "玉米蛋白粉",
+    "大米蛋白",
+    "大米蛋白粉",
+    "小麦蛋白",
+    "谷朊粉",
+    "大豆蛋白",
+    "黄豆蛋白",
+    "浓缩米蛋白",
+    "濃縮米蛋白",
+    "植物蛋白",
+)
+
+
+def _load_standard_ingredient_lookup(
+    engine: Engine,
+    *,
+    standard_db: str,
+    ingredient_table: str,
+    alias_table: str,
+) -> dict[str, dict[str, Any]]:
+    if not _table_exists(engine, standard_db, ingredient_table):
+        return {}
+    ingredient_fq = _fq(standard_db, ingredient_table)
+    alias_fq = _fq(standard_db, alias_table)
+    alias_exists = _table_exists(engine, standard_db, alias_table)
+    if alias_exists:
+        sql = f"""
+        SELECT
+          a.alias_names,
+          i.standard_ingredient_id,
+          i.standard_name,
+          i.ingredient_family,
+          i.source_type,
+          i.animal_source,
+          i.primary_nutrition_role
+        FROM {alias_fq} a
+        JOIN {ingredient_fq} i
+          ON i.standard_ingredient_id = a.standard_ingredient_id
+        WHERE i.active = 1
+        """
+    else:
+        sql = f"""
+        SELECT
+          i.standard_name AS alias_name,
+          NULL AS normalized_alias,
+          1.0 AS confidence,
+          i.standard_ingredient_id,
+          i.standard_name,
+          i.ingredient_family,
+          i.source_type,
+          i.animal_source,
+          i.primary_nutrition_role
+        FROM {ingredient_fq} i
+        WHERE i.active = 1
+        """
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    with engine.connect() as conn:
+        for row in conn.execute(text(sql)).mappings().all():
+            item = dict(row)
+            aliases = _split_grouped_alias_names(item.pop("alias_names", None))
+            if item.get("standard_name") not in aliases:
+                aliases.append(str(item.get("standard_name") or ""))
+            for alias_name in aliases:
+                alias_key = _normalize_ingredient_key(alias_name)
+                if alias_key:
+                    grouped.setdefault(str(alias_key), []).append(item)
+                literal_key = _normalize_ingredient_literal_key(alias_name)
+                if literal_key:
+                    grouped.setdefault(f"literal:{literal_key}", []).append(item)
+    lookup: dict[str, dict[str, Any]] = {}
+    for key, items in grouped.items():
+        target_ids = {str(item.get("standard_ingredient_id") or "") for item in items}
+        if len(target_ids) != 1:
+            continue
+        lookup[key] = items[0]
+    return lookup
+
+
+def _match_standard_ingredient(
+    raw_name: str,
+    lookup: dict[str, dict[str, Any]],
+) -> dict[str, Any] | None:
+    if not lookup:
+        return None
+    literal_key = _normalize_ingredient_literal_key(raw_name)
+    if f"literal:{literal_key}" in lookup:
+        return lookup[f"literal:{literal_key}"]
+    key = _normalize_ingredient_key(raw_name)
+    if key in lookup:
+        return lookup[key]
+    no_paren = re.sub(r"\([^)]*\)|（[^）]*）", "", raw_name)
+    key = _normalize_ingredient_key(no_paren)
+    return lookup.get(key)
+
+
+def _infer_protein_form(raw_name: Any, standard_name: Any = None) -> Optional[str]:
+    text_pool = f"{raw_name or ''} {standard_name or ''}"
+    if "水解" in text_pool:
+        return "水解蛋白"
+    if "肉粉" in text_pool or "鱼粉" in text_pool or "虾粉" in text_pool or "磷虾粉" in text_pool:
+        return "肉粉"
+    if "冻" in text_pool and "冻干" not in text_pool:
+        return "冻肉"
+    if "鲜" in text_pool or "新鲜" in text_pool:
+        return "鲜肉"
+    if "蛋" in text_pool:
+        return "鲜肉"
+    if "肉" in text_pool or "鱼" in text_pool or "虾" in text_pool:
+        return "鲜肉"
+    return None
+
+
+def _is_standard_protein_item(item: dict[str, Any]) -> bool:
+    raw_name = str(item.get("raw_name") or "")
+    standard_name = str(item.get("standard_name") or "")
+    source_type = str(item.get("source_type") or "")
+    family = str(item.get("ingredient_family") or "")
+    role = str(item.get("primary_nutrition_role") or "")
+    text_pool = f"{raw_name} {standard_name} {family} {role}"
+    if any(marker in text_pool for marker in PLANT_PROTEIN_MARKERS):
+        return True
+    if source_type == "animal" and ("蛋白" in role or any(marker in text_pool for marker in PROTEIN_ANIMAL_MARKERS)):
+        return _is_protein_ingredient(raw_name) or _is_protein_ingredient(standard_name)
+    return _is_protein_ingredient(raw_name) or _is_protein_ingredient(standard_name)
+
+
+def _is_plant_protein_item(item: dict[str, Any]) -> bool:
+    text_pool = " ".join(
+        str(item.get(key) or "")
+        for key in ("raw_name", "standard_name", "ingredient_family", "primary_nutrition_role")
+    )
+    return any(marker in text_pool for marker in PLANT_PROTEIN_MARKERS)
+
+
+def _feature_rule_matches(item: dict[str, Any], rule: dict[str, Any]) -> bool:
+    """Match one DB-backed ingredient feature rule against a standardized item."""
+    scope = str(rule.get("match_scope") or "").strip()
+    expected = str(rule.get("match_value") or "").strip()
+    if not scope or not expected:
+        return False
+
+    actual = str(item.get(scope) or "").strip()
+    if not actual:
+        return False
+    excluded = str(rule.get("exclude_value") or "").strip()
+    if excluded and excluded.lower() in actual.lower():
+        return False
+    operator = str(rule.get("match_operator") or "").strip().lower()
+    if not operator:
+        operator = "contains" if scope in {"raw_name", "standard_name", "primary_nutrition_role"} else "exact"
+    if operator == "contains":
+        return expected.lower() in actual.lower()
+    if operator == "exact":
+        return actual.lower() == expected.lower()
+    if operator == "regex":
+        return re.search(expected, actual, re.I) is not None
+    raise ValueError(f"unsupported ingredient feature match operator: {operator!r}")
+
+
+def _parse_rule_bool(value: Any) -> bool:
+    normalized = str(value or "").strip().lower()
+    if normalized in {"1", "true", "yes", "y", "是"}:
+        return True
+    if normalized in {"0", "false", "no", "n", "否"}:
+        return False
+    raise ValueError(f"invalid boolean ingredient feature rule value: {value!r}")
+
+
+def _apply_protein_feature_rules(
+    item: dict[str, Any],
+    feature_rules: list[dict[str, Any]] | None,
+) -> dict[str, Any]:
+    """Apply highest-priority protein rules while retaining heuristic fallback values."""
+    if not feature_rules:
+        return item
+
+    matched_by_key: dict[str, dict[str, Any]] = {}
+    ordered_rules = sorted(
+        feature_rules,
+        key=lambda rule: (-int(rule.get("priority") or 0), int(rule.get("rule_id") or 0)),
+    )
+    for rule in ordered_rules:
+        if str(rule.get("feature_domain") or "") != "protein":
+            continue
+        feature_key = str(rule.get("dimension_code") or rule.get("feature_key") or "").strip()
+        if not feature_key or feature_key in matched_by_key:
+            continue
+        if _feature_rule_matches(item, rule):
+            matched_by_key[feature_key] = rule
+
+    if not matched_by_key:
+        return item
+
+    is_protein_rule = matched_by_key.get("is_protein")
+    is_plant_rule = matched_by_key.get("is_plant_protein")
+    plant_level_rule = matched_by_key.get("plant_protein")
+    plant_class_rule = matched_by_key.get("ingredient_plant_protein_class")
+    if is_protein_rule:
+        item["is_protein"] = _parse_rule_bool(is_protein_rule.get("feature_value"))
+    if is_plant_rule:
+        item["is_plant_protein"] = _parse_rule_bool(is_plant_rule.get("feature_value"))
+    if plant_level_rule:
+        item["is_protein"] = True
+        item["is_plant_protein"] = True
+        item["plant_protein_level"] = plant_level_rule.get("feature_value")
+    if plant_class_rule:
+        item["is_protein"] = True
+        item["is_plant_protein"] = True
+        item["plant_protein_class"] = plant_class_rule.get("value_name") or plant_class_rule.get("feature_value")
+
+    form_rule = matched_by_key.get("ingredient_protein_form") or matched_by_key.get("form")
+    if form_rule and item.get("is_protein"):
+        item["protein_form"] = form_rule.get("value_name") or form_rule.get("feature_value")
+    animal_source_rule = matched_by_key.get("animal_source")
+    if animal_source_rule and item.get("is_protein"):
+        item["animal_source"] = animal_source_rule.get("feature_value")
+    if not item.get("is_protein"):
+        item["protein_form"] = None
+        item["is_plant_protein"] = False
+
+    item["protein_rule_features"] = {
+        f"protein.{key}": rule.get("value_name") or rule.get("feature_value")
+        for key, rule in matched_by_key.items()
+    }
+    item["protein_rule_ids"] = [
+        int(rule["rule_id"])
+        for rule in matched_by_key.values()
+        if rule.get("rule_id") is not None
+    ]
+    return item
+
+
+def _standardize_ingredient_items(
+    ingredient_composition: Any,
+    lookup: dict[str, dict[str, Any]] | None = None,
+    feature_rules: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    lookup = lookup or {}
+    items: list[dict[str, Any]] = []
+    for index, token in enumerate(_split_ingredient_tokens(ingredient_composition), start=1):
+        matched = _match_standard_ingredient(token, lookup)
+        standard_name = matched.get("standard_name") if matched else None
+        item = {
+            "position": index,
+            "raw_name": token,
+            "standard_ingredient_id": matched.get("standard_ingredient_id") if matched else None,
+            "standard_name": standard_name,
+            "ingredient_family": matched.get("ingredient_family") if matched else None,
+            "source_type": matched.get("source_type") if matched else None,
+            "animal_source": matched.get("animal_source") if matched else _normalize_source_token(token),
+            "primary_nutrition_role": matched.get("primary_nutrition_role") if matched else None,
+            "protein_form": _infer_protein_form(token, standard_name),
+            "match_method": "standard_alias" if matched else "rule_fallback",
+            "confidence": float(matched.get("confidence") or 1.0) if matched else 0.0,
+            "is_protein": False,
+            "is_plant_protein": False,
+        }
+        item["is_protein"] = _is_standard_protein_item(item)
+        item["is_plant_protein"] = _is_plant_protein_item(item)
+        if not item["is_protein"]:
+            item["protein_form"] = None
+        _apply_protein_feature_rules(item, feature_rules)
+        items.append(item)
+    return items
+
+
+def _join_unique(values: list[Any]) -> Optional[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        text_value = _clean_text(value)
+        if not text_value or text_value in seen:
+            continue
+        seen.add(text_value)
+        result.append(text_value)
+    return "、".join(result) if result else None
+
+
+def _infer_main_form(forms: list[Any]) -> Optional[str]:
+    cleaned = [_clean_text(form) for form in forms if _clean_text(form)]
+    if not cleaned:
+        return None
+    head_forms = set(cleaned[:2])
+    if {"鲜肉", "冻肉"} <= head_forms:
+        return "鲜肉/冻肉"
+    return cleaned[0]
+
+
+def _infer_meat_source_complexity(animal_items: list[dict[str, Any]]) -> Optional[str]:
+    if not animal_items:
+        return None
+    source_count = len(
+        {
+            _clean_text(item.get("animal_source"))
+            for item in animal_items
+            if _clean_text(item.get("animal_source"))
+        }
+    )
+    category_count = len(
+        {
+            ANIMAL_SOURCE_LEVEL2_TO_LEVEL1.get(str(item.get("animal_source") or ""))
+            for item in animal_items
+            if ANIMAL_SOURCE_LEVEL2_TO_LEVEL1.get(str(item.get("animal_source") or ""))
+        }
+    )
+    item_count = len(animal_items)
+    if source_count <= 1:
+        if item_count <= 1:
+            return "单一来源"
+        if item_count == 2:
+            return "同类双源"
+        return "同类多源"
+    if category_count <= 1:
+        return "同类双源" if source_count == 2 else "同类多源"
+    return "跨类双源" if source_count == 2 else "跨类多源"
+
+
+def _protein_labels_from_standard_items(
+    ingredient_composition: Any,
+    lookup: dict[str, dict[str, Any]] | None = None,
+    feature_rules: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    items = _standardize_ingredient_items(ingredient_composition, lookup, feature_rules)
+    protein_items = [item for item in items if item["is_protein"]]
+    animal_items = [
+        item
+        for item in protein_items
+        if not item["is_plant_protein"] and _clean_text(item.get("animal_source"))
+    ]
+    plant_items = [item for item in protein_items if item["is_plant_protein"]]
+    animal_sources = _join_unique([item.get("animal_source") for item in animal_items])
+    level1, level2 = _classify_animal_sources(
+        animal_sources,
+        _join_unique([item.get("raw_name") for item in animal_items]),
+    )
+    forms = [item.get("protein_form") for item in animal_items if item.get("protein_form")]
+    primary_form = _infer_main_form(forms)
+    secondary_start = 2 if primary_form == "鲜肉/冻肉" else 1
+    secondary_form = _join_unique(forms[secondary_start:]) if len(forms) > secondary_start else None
+    primary_species = _clean_text(animal_items[0].get("animal_source")) if animal_items else None
+    secondary_species = _join_unique([item.get("animal_source") for item in animal_items[1:]]) if len(animal_items) > 1 else None
+    return {
+        "standardized_ingredient_items": items,
+        "protein_source_details": _join_unique([item.get("raw_name") for item in protein_items]),
+        "animal_sources": animal_sources,
+        "animal_source_level1_categories": level1,
+        "animal_source_level2_sources": level2,
+        "primary_meat_source_species": primary_species,
+        "secondary_meat_source_species": secondary_species,
+        "primary_meat_source_type": primary_form,
+        "secondary_meat_source_type": secondary_form,
+        "primary_meat_source_count": 1 if primary_species else None,
+        "secondary_meat_source_count": len(_split_source_tokens(secondary_species)) if secondary_species else None,
+        "meat_source_complexity": _infer_meat_source_complexity(animal_items),
+        "plant_protein_labels": _join_unique([item.get("raw_name") for item in plant_items]),
+        "protein_source_origin": "standard_ingredient_match" if lookup else "standard_rule_fallback",
+    }
 
 
 def _is_protein_ingredient(token: str) -> bool:
@@ -486,6 +949,7 @@ def _target_table_ddl(table_name: str) -> str:
       `secondary_meat_source_species` VARCHAR(255) DEFAULT NULL,
       `primary_meat_source_type` VARCHAR(255) DEFAULT NULL,
       `secondary_meat_source_type` VARCHAR(255) DEFAULT NULL,
+      `meat_source_complexity` VARCHAR(255) DEFAULT NULL,
       `primary_meat_source_count` INT DEFAULT NULL,
       `secondary_meat_source_count` INT DEFAULT NULL,
       `protein_source_origin` VARCHAR(255) DEFAULT NULL,
@@ -497,6 +961,31 @@ def _target_table_ddl(table_name: str) -> str:
       PRIMARY KEY (`source_id`)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     """
+
+
+def _ensure_target_columns(conn, *, target_db: str, target_table: str) -> None:
+    existing = {
+        row["COLUMN_NAME"]
+        for row in conn.execute(
+            text(
+                """
+                SELECT COLUMN_NAME
+                FROM INFORMATION_SCHEMA.COLUMNS
+                WHERE TABLE_SCHEMA = :schema_name
+                  AND TABLE_NAME = :table_name
+                """
+            ),
+            {"schema_name": target_db, "table_name": target_table},
+        ).mappings().all()
+    }
+    if "meat_source_complexity" not in existing:
+        conn.execute(
+            text(
+                f"ALTER TABLE {_fq(target_db, target_table)} "
+                "ADD COLUMN `meat_source_complexity` VARCHAR(255) DEFAULT NULL "
+                "AFTER `secondary_meat_source_type`"
+            )
+        )
 
 
 def load_rows(
@@ -1016,27 +1505,52 @@ def load_rows_from_parsed_incremental(
     return out
 
 
-def transform_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def transform_rows(
+    rows: list[dict[str, Any]],
+    standard_lookup: dict[str, dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     for row in rows:
+        standard_labels = (
+            _protein_labels_from_standard_items(row.get("ingredient_composition"), standard_lookup)
+            if standard_lookup
+            else {}
+        )
         protein_source_details = _normalize_protein_source_details(
             row.get("ingredient_composition"),
             row.get("protein_source_details"),
         )
+        protein_source_details = standard_labels.get("protein_source_details") or protein_source_details
         level1_categories, level2_sources = _classify_animal_sources(
             row.get("animal_sources"),
             protein_source_details,
         )
-        primary_species = _clean_text(row.get("primary_meat_source_species"))
-        secondary_species = _clean_text(row.get("secondary_meat_source_species"))
-        primary_type = _clean_text(row.get("primary_meat_source_type")) or _clean_text(row.get("feature_primary_meat_source_type"))
-        secondary_type = _clean_text(row.get("secondary_meat_source_type")) or _clean_text(row.get("feature_secondary_meat_source_type"))
+        level1_categories = standard_labels.get("animal_source_level1_categories") or level1_categories
+        level2_sources = standard_labels.get("animal_source_level2_sources") or level2_sources
+        primary_species = (
+            _clean_text(standard_labels.get("primary_meat_source_species"))
+            or _clean_text(row.get("primary_meat_source_species"))
+        )
+        secondary_species = (
+            _clean_text(standard_labels.get("secondary_meat_source_species"))
+            or _clean_text(row.get("secondary_meat_source_species"))
+        )
+        primary_type = (
+            _clean_text(standard_labels.get("primary_meat_source_type"))
+            or _clean_text(row.get("primary_meat_source_type"))
+            or _clean_text(row.get("feature_primary_meat_source_type"))
+        )
+        secondary_type = (
+            _clean_text(standard_labels.get("secondary_meat_source_type"))
+            or _clean_text(row.get("secondary_meat_source_type"))
+            or _clean_text(row.get("feature_secondary_meat_source_type"))
+        )
 
-        primary_count = row.get("feature_primary_meat_source_count")
+        primary_count = standard_labels.get("primary_meat_source_count") or row.get("feature_primary_meat_source_count")
         if primary_count is None:
             primary_count = _count_multi_values(primary_species)
 
-        secondary_count = row.get("feature_secondary_meat_source_count")
+        secondary_count = standard_labels.get("secondary_meat_source_count") or row.get("feature_secondary_meat_source_count")
         if secondary_count is None:
             secondary_count = _count_multi_values(secondary_species)
 
@@ -1064,7 +1578,7 @@ def transform_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "guarantee_product_id": row.get("product_info_id") or row.get("guarantee_product_id"),
                 "brand_name": brand_name,
                 "product_name": product_name,
-                "animal_sources": level2_sources or _clean_text(row.get("animal_sources")),
+                "animal_sources": standard_labels.get("animal_sources") or level2_sources or _clean_text(row.get("animal_sources")),
                 "animal_source_level1_categories": level1_categories,
                 "animal_source_level2_sources": level2_sources,
                 "protein_source_details": protein_source_details,
@@ -1072,10 +1586,11 @@ def transform_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "secondary_meat_source_species": secondary_species,
                 "primary_meat_source_type": primary_type,
                 "secondary_meat_source_type": secondary_type,
+                "meat_source_complexity": standard_labels.get("meat_source_complexity") or _clean_text(row.get("meat_source_complexity")) or _clean_text(row.get("source_complexity_label")),
                 "primary_meat_source_count": primary_count,
                 "secondary_meat_source_count": secondary_count,
-                "protein_source_origin": _clean_text(row.get("protein_source_origin")),
-                "plant_protein_labels": _clean_text(row.get("plant_protein_labels")),
+                "protein_source_origin": standard_labels.get("protein_source_origin") or _clean_text(row.get("protein_source_origin")),
+                "plant_protein_labels": standard_labels.get("plant_protein_labels") or _clean_text(row.get("plant_protein_labels")),
                 "guarantee_crude_protein_metric_name": guarantee_metric_name,
                 "guarantee_crude_protein_value": guarantee_value,
                 "guarantee_crude_protein_unit": guarantee_metric_unit,
@@ -1113,6 +1628,7 @@ def write_rows(
           secondary_meat_source_species,
           primary_meat_source_type,
           secondary_meat_source_type,
+          meat_source_complexity,
           primary_meat_source_count,
           secondary_meat_source_count,
           protein_source_origin,
@@ -1135,6 +1651,7 @@ def write_rows(
           :secondary_meat_source_species,
           :primary_meat_source_type,
           :secondary_meat_source_type,
+          :meat_source_complexity,
           :primary_meat_source_count,
           :secondary_meat_source_count,
           :protein_source_origin,
@@ -1157,6 +1674,7 @@ def write_rows(
           secondary_meat_source_species = VALUES(secondary_meat_source_species),
           primary_meat_source_type = VALUES(primary_meat_source_type),
           secondary_meat_source_type = VALUES(secondary_meat_source_type),
+          meat_source_complexity = VALUES(meat_source_complexity),
           primary_meat_source_count = VALUES(primary_meat_source_count),
           secondary_meat_source_count = VALUES(secondary_meat_source_count),
           protein_source_origin = VALUES(protein_source_origin),
@@ -1170,6 +1688,7 @@ def write_rows(
 
     with engine.begin() as conn:
         conn.execute(text(_target_table_ddl(target_table).replace(f"`{target_table}`", f"{target_fq}", 1)))
+        _ensure_target_columns(conn, target_db=target_db, target_table=target_table)
         if keep_backup:
             backup_table = _limit_table_name(target_table, "bak", batch_id)
             backup_fq = _fq(target_db, backup_table)
@@ -1249,6 +1768,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--guarantee-db", default="csv_labeling", help="database containing product_info/product_guarantee")
     parser.add_argument("--product-info-table", default="product_info", help="product info table")
     parser.add_argument("--product-guarantee-table", default="product_guarantee", help="product guarantee table")
+    parser.add_argument("--standard-db", default="csv_labeling", help="database containing standard ingredient master")
+    parser.add_argument("--standard-ingredient-table", default="catfood_standard_ingredient", help="standard ingredient table")
+    parser.add_argument("--standard-alias-table", default="catfood_standard_ingredient_alias", help="standard ingredient alias table")
     parser.add_argument("--target-db", default="protein_feature_platform", help="target database")
     parser.add_argument("--target-table", default="protein_source_aggregate", help="target aggregate table")
     parser.add_argument("--limit", type=int, default=0, help="max parsed OCR rows to process in direct mode, 0 means all new rows")
@@ -1270,6 +1792,9 @@ def main() -> int:
     guarantee_db = _safe_name(args.guarantee_db, "guarantee db")
     product_info_table = _safe_name(args.product_info_table, "product info table")
     product_guarantee_table = _safe_name(args.product_guarantee_table, "product guarantee table")
+    standard_db = _safe_name(args.standard_db, "standard db")
+    standard_ingredient_table = _safe_name(args.standard_ingredient_table, "standard ingredient table")
+    standard_alias_table = _safe_name(args.standard_alias_table, "standard alias table")
     target_db = _safe_name(args.target_db, "target db")
     target_table = _safe_name(args.target_table, "target table")
 
@@ -1310,7 +1835,13 @@ def main() -> int:
             target_db=target_db,
             target_table=target_table,
         )
-    rows = transform_rows(raw_rows)
+    standard_lookup = _load_standard_ingredient_lookup(
+        engine,
+        standard_db=standard_db,
+        ingredient_table=standard_ingredient_table,
+        alias_table=standard_alias_table,
+    )
+    rows = transform_rows(raw_rows, standard_lookup=standard_lookup)
     summary = summarize(rows)
     summary.update(
         {
@@ -1324,6 +1855,9 @@ def main() -> int:
             ),
             "parsed_filter": f"{parsed_db}.{parsed_table}",
             "feature": f"{feature_db}.{feature_table}",
+            "standard_ingredient": f"{standard_db}.{standard_ingredient_table}",
+            "standard_alias": f"{standard_db}.{standard_alias_table}",
+            "standard_alias_count": len(standard_lookup),
             "target": f"{target_db}.{target_table}",
             "write_mode": (
                 "replace_all"

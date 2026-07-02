@@ -26,6 +26,8 @@ git fetch origin "$REMOTE_BRANCH"
 git checkout "$REMOTE_BRANCH"
 git pull --ff-only origin "$REMOTE_BRANCH"
 
+.venv/bin/python -m pip install -r requirements.txt
+
 .venv/bin/python -m py_compile \
   main.py \
   app_config.py \
@@ -37,6 +39,7 @@ git pull --ff-only origin "$REMOTE_BRANCH"
   api/taobao_sku_api.py \
   services/catfood_standardization_service.py \
   services/formula_feature_link_service.py \
+  services/formula_incremental_service.py \
   services/consumer_analysis_service.py \
   services/orchestrator_service.py \
   services/cat_food_task_service.py \
@@ -54,6 +57,7 @@ git pull --ff-only origin "$REMOTE_BRANCH"
   vendor/feature_score_pipeline/scripts/fiber_remark_score.py \
   vendor/feature_score_pipeline/scripts/protein_score1.py \
   vendor/feature_score_pipeline/scripts/rebuild_protein_source_aggregate.py \
+  scripts/rebuild_protein_source_from_profiles.py \
   vendor/csv_mysql_labeling/src/parse_catfood_ocr.py \
   vendor/csv_mysql_labeling/src/extract_catfood_brand_relations.py \
   vendor/feature_score_pipeline/scripts/brand_normalizer.py
