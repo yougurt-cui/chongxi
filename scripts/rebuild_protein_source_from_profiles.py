@@ -21,6 +21,16 @@ from app_config import get_feature_mysql_config, get_mysql_config  # noqa: E402
 
 
 TARGET_TABLE = "protein_source_aggregate"
+DEFAULT_POSITION_WEIGHTS = [(1, 1, 1.2), (2, 3, 1.0), (4, 5, 0.8),
+                            (6, 8, 0.6), (9, 12, 0.4), (13, 9999, 0.2)]
+
+
+def _position_weight(position: Any, rules: list[tuple[int, int, float]], unknown: float) -> float:
+    try:
+        rank = int(position)
+    except (TypeError, ValueError):
+        return unknown
+    return next((weight for start, end, weight in rules if start <= rank <= end), unknown)
 
 
 def _json(value: Any, default: Any) -> Any:
@@ -101,6 +111,16 @@ def load_rows(formula_id: int | None = None) -> list[dict[str, Any]]:
                 """
             cursor.execute(sql, (formula_id, formula_id))
             source_rows = list(cursor.fetchall())
+            cursor.execute("""SELECT rank_start,rank_end,position_weight,is_unknown
+              FROM catfood_score_position_weight_config
+              WHERE active=1 AND config_version='v1' AND domain_code='global'
+              ORDER BY is_unknown,rank_start""")
+            position_rows = cursor.fetchall()
+    position_rules = [
+        (int(row["rank_start"]), int(row["rank_end"]), float(row["position_weight"]))
+        for row in position_rows if not row["is_unknown"]
+    ] or DEFAULT_POSITION_WEIGHTS
+    unknown_weight = next((float(row["position_weight"]) for row in position_rows if row["is_unknown"]), 0.5)
 
     grouped: dict[int, dict[str, Any]] = {}
     for source in source_rows:
@@ -120,19 +140,27 @@ def load_rows(formula_id: int | None = None) -> list[dict[str, Any]]:
         forms = [str(item.get("protein_form") or "").strip() for item in animal_items if str(item.get("protein_form") or "").strip()]
         main_form = _main_form(forms)
         secondary_forms = list(dict.fromkeys(forms[1:]))
-        plant_level = max(
-            [str(_json(item.get("features_json"), {}).get("protein.plant_protein_level") or "") for item in plant_items] or [""]
-        )
+        plant_levels = []
+        for item in plant_items:
+            features = _json(item.get("features_json"), {})
+            plant_levels.append(str(
+                features.get("protein.plant_protein_level")
+                or features.get("protein.ingredient_plant_protein_class")
+                or ""
+            ))
         if not plant_items:
             plant_interference = "无植物蛋白"
         elif len(plant_items) > 1:
             plant_interference = "3级｜多源植物蛋白补强型"
-        elif "高浓缩" in plant_level:
+        elif any("高浓缩" in level for level in plant_levels):
             plant_interference = "2级｜单一高浓缩型植物蛋白"
         else:
             plant_interference = "1级｜单一温和型植物蛋白"
         hydrolyzed_count = sum(form == "水解蛋白" for form in forms)
         hydrolyzed_role = "主要出现" if forms and forms[0] == "水解蛋白" else "少量辅助" if hydrolyzed_count else None
+        protein_weights = [_position_weight(item.get("position"), position_rules, unknown_weight) for item in protein_items]
+        animal_weights = [_position_weight(item.get("position"), position_rules, unknown_weight) for item in animal_items]
+        plant_weights = [_position_weight(item.get("position"), position_rules, unknown_weight) for item in plant_items]
         _, metric_value, _ = _crude_protein(source.get("nutrition_json"))
         rows.append(
             {
@@ -151,6 +179,10 @@ def load_rows(formula_id: int | None = None) -> list[dict[str, Any]]:
                 "plant_protein_labels": _join([item.get("standard_name") or item.get("raw_name") for item in plant_items]),
                 "plant_protein_interference": plant_interference,
                 "hydrolyzed_protein_role": hydrolyzed_role,
+                "protein_position_weight": sum(protein_weights) / len(protein_weights) if protein_weights else unknown_weight,
+                "main_protein_position_weight": animal_weights[0] if animal_weights else unknown_weight,
+                "secondary_protein_position_weight": sum(animal_weights[1:]) / len(animal_weights[1:]) if len(animal_weights) > 1 else unknown_weight,
+                "plant_protein_position_weight": sum(plant_weights) / len(plant_weights) if plant_weights else unknown_weight,
                 "profile_status": "ready",
                 "profile_version": source.get("profile_version"),
                 "guarantee_crude_protein_value": metric_value,
@@ -178,6 +210,10 @@ def _ddl(table: str) -> str:
           plant_protein_labels TEXT,
           plant_protein_interference VARCHAR(255) DEFAULT NULL,
           hydrolyzed_protein_role VARCHAR(255) DEFAULT NULL,
+          protein_position_weight DECIMAL(8,4) DEFAULT NULL,
+          main_protein_position_weight DECIMAL(8,4) DEFAULT NULL,
+          secondary_protein_position_weight DECIMAL(8,4) DEFAULT NULL,
+          plant_protein_position_weight DECIMAL(8,4) DEFAULT NULL,
           profile_status VARCHAR(32) DEFAULT NULL,
           profile_version VARCHAR(32) DEFAULT NULL,
           guarantee_crude_protein_value DECIMAL(8,2) DEFAULT NULL,
@@ -236,6 +272,11 @@ def upsert_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
     )
     with pymysql.connect(**cfg, cursorclass=pymysql.cursors.DictCursor, autocommit=False) as conn:
         with conn.cursor() as cursor:
+            cursor.execute(f"SHOW COLUMNS FROM `{TARGET_TABLE}`")
+            existing = {row["Field"] for row in cursor.fetchall()}
+            for name in ("protein_position_weight", "main_protein_position_weight", "secondary_protein_position_weight", "plant_protein_position_weight"):
+                if name not in existing:
+                    cursor.execute(f"ALTER TABLE `{TARGET_TABLE}` ADD COLUMN `{name}` DECIMAL(8,4) NULL")
             cursor.executemany(sql, [tuple(row[name] for name in columns) for row in rows])
         conn.commit()
     return {"written": len(rows), "backup_table": None}

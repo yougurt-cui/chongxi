@@ -20,6 +20,9 @@ OUTPUT_IF_EXISTS = os.getenv("FAT_SCORE_IF_EXISTS", "append")
 SCORE_DECIMALS = 3
 LOW_LEVEL_CUT = 1.0 / 3.0
 HIGH_LEVEL_CUT = 2.0 / 3.0
+POSITION_WEIGHT_RULES = [(1, 1, 1.2), (2, 3, 1.0), (4, 5, 0.8),
+                         (6, 8, 0.6), (9, 12, 0.4), (13, 9999, 0.2)]
+UNKNOWN_POSITION_WEIGHT = 0.5
 
 engine = create_engine(
     f"mysql+pymysql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}?charset=utf8mb4"
@@ -66,13 +69,68 @@ def split_items(text):
     return [x.strip() for x in text.split(",") if x.strip()]
 
 
-def normalize_score(series):
+FAT_SCORE_RANGES = {
+    "animal_fat_load_score_raw": (0.0, 4.0),
+    "plant_fat_interference_score_raw": (0.0, 3.0),
+    "fish_oil_load_score_raw": (0.0, 2.0),
+    "fish_source_score_raw": (0.0, 2.0),
+    "antioxidant_protection_score_raw": (0.0, 4.0),
+    "micronutrient_support_score_raw": (0.0, 3.0),
+    "omega3_score_raw": (0.0, 4.0),
+    "omega6_animal_score_raw": (0.0, 4.0),
+    "omega6_plant_score_raw": (0.0, 3.0),
+    "omega6_score_raw": (0.0, 4.0),
+    "fat_mix_complexity_score_raw": (0.0, 3.0),
+}
+
+
+def load_fat_score_ranges():
+    global POSITION_WEIGHT_RULES, UNKNOWN_POSITION_WEIGHT
+    config_db = os.getenv("FAT_SCORE_CONFIG_DB", "csv_labeling")
+    sql = """SELECT dimension_code,range_min,range_max
+             FROM `{}`.catfood_score_enum_config
+             WHERE active=1 AND config_version='v1' AND domain_code='fat'
+               AND range_min IS NOT NULL AND range_max IS NOT NULL""".format(config_db)
+    try:
+        rows = pd.read_sql(text(sql), engine)
+    except Exception as exc:
+        print("脂肪评分区间配置读取失败，使用代码默认值：{}".format(exc))
+        return
+    key_map = {
+        key.replace("_score_raw", ""): key for key in FAT_SCORE_RANGES
+    }
+    for row in rows.to_dict("records"):
+        key = key_map.get(row["dimension_code"])
+        if key:
+            FAT_SCORE_RANGES[key] = (float(row["range_min"]), float(row["range_max"]))
+    position_sql = """SELECT rank_start,rank_end,position_weight,is_unknown
+      FROM `{}`.catfood_score_position_weight_config
+      WHERE active=1 AND config_version='v1' AND domain_code='global'
+      ORDER BY is_unknown,rank_start""".format(config_db)
+    try:
+        position_rows = pd.read_sql(text(position_sql), engine).to_dict("records")
+    except Exception as exc:
+        print("位置权重配置读取失败，使用代码默认值：{}".format(exc))
+        return
+    configured = []
+    for row in position_rows:
+        if row["is_unknown"]:
+            UNKNOWN_POSITION_WEIGHT = float(row["position_weight"])
+        else:
+            configured.append((int(row["rank_start"]), int(row["rank_end"]), float(row["position_weight"])))
+    if configured:
+        POSITION_WEIGHT_RULES = configured
+
+
+load_fat_score_ranges()
+
+
+def normalize_score(series, lower=0.0, upper=1.0):
     s = pd.to_numeric(series, errors="coerce").fillna(0)
-    min_val = s.min()
-    max_val = s.max()
-    if max_val == min_val:
-        return pd.Series([0.0] * len(s), index=s.index)
-    return (s - min_val) / (max_val - min_val)
+    width = float(upper) - float(lower)
+    if width <= 0:
+        raise ValueError("固定评分区间上限必须大于下限")
+    return ((s - float(lower)) / width).clip(0.0, 1.0)
 
 
 def parse_position_mapping(text):
@@ -101,18 +159,15 @@ def get_position_weight(position):
     缺失          = 0.5
     """
     if position is None or pd.isna(position):
-        return 0.5
+        return UNKNOWN_POSITION_WEIGHT
     try:
         p = int(position)
     except Exception:
-        return 0.5
-
-    if p <= 5:
-        return 1.0
-    elif p <= 10:
-        return 0.6
-    else:
-        return 0.3
+        return UNKNOWN_POSITION_WEIGHT
+    for start, end, weight in POSITION_WEIGHT_RULES:
+        if start <= p <= end:
+            return weight
+    return UNKNOWN_POSITION_WEIGHT
 
 
 def match_best_position(item, position_map):
@@ -931,14 +986,17 @@ for source_col, position_col in POSITION_SOURCE_COLS:
         axis=1,
     )
 
-df["fat_position_item_count"] = df.apply(
-    lambda row: sum(len(split_items(row.get(source_col, ""))) for source_col, _ in POSITION_SOURCE_COLS),
-    axis=1,
-)
-df["fat_position_match_count"] = df.apply(
-    lambda row: sum(position_match_count(row.get(position_col, "")) for _, position_col in POSITION_SOURCE_COLS),
-    axis=1,
-)
+def assign_rowwise(column, func, dtype=None):
+    """Assign a scalar row function without pandas' empty-frame shape inference."""
+    df[column] = pd.Series(
+        (func(row) for _, row in df.iterrows()),
+        index=df.index,
+        dtype=dtype,
+    )
+
+
+assign_rowwise("fat_position_item_count", lambda row: sum(len(split_items(row.get(source_col, ""))) for source_col, _ in POSITION_SOURCE_COLS))
+assign_rowwise("fat_position_match_count", lambda row: sum(position_match_count(row.get(position_col, "")) for _, position_col in POSITION_SOURCE_COLS))
 df["fat_position_match_rate"] = np.where(
     df["fat_position_item_count"] > 0,
     df["fat_position_match_count"] / df["fat_position_item_count"],
@@ -948,29 +1006,32 @@ df["fat_position_match_rate"] = np.where(
 # =========================
 # 12. 类型字段
 # =========================
-df["has_explicit_fish_oil"] = df.apply(lambda row: 1 if has_explicit_fish_oil(row) else 0, axis=1)
-df["has_fish_source"] = df.apply(lambda row: 1 if has_fish_source(row) else 0, axis=1)
-df["has_animal_fat"] = df.apply(lambda row: 1 if has_animal_fat(row) else 0, axis=1)
-df["has_plant_fat"] = df.apply(lambda row: 1 if has_plant_fat(row) else 0, axis=1)
+assign_rowwise("has_explicit_fish_oil", lambda row: 1 if has_explicit_fish_oil(row) else 0)
+assign_rowwise("has_fish_source", lambda row: 1 if has_fish_source(row) else 0)
+assign_rowwise("has_animal_fat", lambda row: 1 if has_animal_fat(row) else 0)
+assign_rowwise("has_plant_fat", lambda row: 1 if has_plant_fat(row) else 0)
 
-df["fat_structure_type"] = df.apply(infer_fat_structure_type, axis=1)
+# Force a one-dimensional result even when the filtered frame is empty. Pandas
+# may infer ``DataFrame`` for ``apply(axis=1)`` on an empty frame, which cannot
+# be assigned to a single column.
+assign_rowwise("fat_structure_type", infer_fat_structure_type, dtype="object")
 
 # =========================
 # 13. 原始子分
 # =========================
-df["animal_fat_load_score_raw"] = df.apply(calc_animal_fat_load_score, axis=1)
-df["plant_fat_interference_score_raw"] = df.apply(calc_plant_fat_interference_score, axis=1)
-df["fish_oil_load_score_raw"] = df.apply(calc_fish_oil_load_score, axis=1)
-df["fish_source_score_raw"] = df.apply(calc_fish_source_score, axis=1)
-
-df["antioxidant_protection_score_raw"] = df.apply(calc_antioxidant_protection_score, axis=1)
-df["micronutrient_support_score_raw"] = df.apply(calc_micronutrient_support_score, axis=1)
-
-df["omega3_score_raw"] = df.apply(calc_omega3_raw_score, axis=1)
-df["omega6_animal_score_raw"] = df.apply(calc_omega6_animal_raw_score, axis=1)
-df["omega6_plant_score_raw"] = df.apply(calc_omega6_plant_raw_score, axis=1)
-
-df["fat_mix_complexity_score_raw"] = df.apply(calc_fat_mix_complexity_score, axis=1)
+for column, func in (
+    ("animal_fat_load_score_raw", calc_animal_fat_load_score),
+    ("plant_fat_interference_score_raw", calc_plant_fat_interference_score),
+    ("fish_oil_load_score_raw", calc_fish_oil_load_score),
+    ("fish_source_score_raw", calc_fish_source_score),
+    ("antioxidant_protection_score_raw", calc_antioxidant_protection_score),
+    ("micronutrient_support_score_raw", calc_micronutrient_support_score),
+    ("omega3_score_raw", calc_omega3_raw_score),
+    ("omega6_animal_score_raw", calc_omega6_animal_raw_score),
+    ("omega6_plant_score_raw", calc_omega6_plant_raw_score),
+    ("fat_mix_complexity_score_raw", calc_fat_mix_complexity_score),
+):
+    assign_rowwise(column, func)
 
 # 合成 omega6 总分，保留来源拆分
 df["omega6_score_raw"] = (
@@ -996,7 +1057,7 @@ norm_cols = [
 ]
 
 for col in norm_cols:
-    df[col.replace("_raw", "")] = normalize_score(df[col])
+    df[col.replace("_raw", "")] = normalize_score(df[col], *FAT_SCORE_RANGES[col])
 
 # =========================
 # 15. 双分制 + Omega失衡 + 脂肪风险分
@@ -1036,12 +1097,12 @@ df["fat_score"] = (
 )
 
 # 可解释标签：用于定位脂肪风险的主要来源。
-df["fat_reason_tags"] = df.apply(build_fat_reason_tags, axis=1)
+assign_rowwise("fat_reason_tags", build_fat_reason_tags, dtype="object")
 
 # =========================
 # 16. 复核标记
 # =========================
-df["needs_review_flag"] = df.apply(calc_needs_review_flag, axis=1)
+assign_rowwise("needs_review_flag", calc_needs_review_flag)
 
 # 可选：时间戳
 df["fat_scored_at"] = pd.Timestamp.now()

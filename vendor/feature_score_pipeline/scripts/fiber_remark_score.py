@@ -28,6 +28,9 @@ LEGACY_COMBO_TABLE = "catfood_fiber_product_combo_result"
 MAIN_COMPONENT_CUMULATIVE_SHARE = 0.70
 MIN_COMPONENT_SCORE = 0.05
 MAX_MAIN_COMPONENT_COUNT = 2
+POSITION_WEIGHT_RULES = [(1, 1, 1.2), (2, 3, 1.0), (4, 5, 0.8),
+                         (6, 8, 0.6), (9, 12, 0.4), (13, 9999, 0.2)]
+UNKNOWN_POSITION_WEIGHT = 0.5
 
 
 # =========================================================
@@ -93,10 +96,12 @@ STARCH_EXCLUDE_KEYWORDS = [
     "酵母", "维生素", "矿物质", "益生菌",
 ]
 
+STARCH_LEVEL_SCORES = {1: 1.2, 2: 1.3, 3: 1.5, 4: 1.8, 5: 2.0}
+
 STARCH_BASE_RULES = [
     {
         "category": "精制淀粉/纯淀粉",
-        "base_score": 2.0,
+        "level": 5,
         "keywords": [
             "玉米淀粉", "小麦淀粉", "马铃薯淀粉", "木薯淀粉",
             "豌豆淀粉", "变性淀粉", "淀粉"
@@ -104,7 +109,7 @@ STARCH_BASE_RULES = [
     },
     {
         "category": "高淀粉粉类",
-        "base_score": 1.8,
+        "level": 4,
         "keywords": [
             "木薯粉", "马铃薯粉", "土豆粉", "玉米粉",
             "小麦粉", "大米粉", "米粉"
@@ -112,14 +117,14 @@ STARCH_BASE_RULES = [
     },
     {
         "category": "薯类淀粉来源",
-        "base_score": 1.5,
+        "level": 3,
         "keywords": [
             "木薯", "马铃薯", "土豆", "红薯", "甘薯", "紫薯", "地瓜"
         ],
     },
     {
         "category": "谷物淀粉来源",
-        "base_score": 1.3,
+        "level": 2,
         "keywords": [
             "碎米", "大米", "白米", "糙米", "酿酒米", "酿造米", "燕麦", "小麦", "玉米", "高粱",
             "大麦", "小米", "藜麦"
@@ -127,7 +132,7 @@ STARCH_BASE_RULES = [
     },
     {
         "category": "豆类碳水来源",
-        "base_score": 1.2,
+        "level": 1,
         "keywords": [
             "豌豆", "鹰嘴豆", "扁豆", "绿豆", "蚕豆"
         ],
@@ -139,17 +144,12 @@ STARCH_BASE_RULES = [
 # 4. 排位权重
 # =========================================================
 def rank_weight(rank):
-    if rank == 1:
-        return 1.2
-    if rank <= 3:
-        return 1.0
-    if rank <= 5:
-        return 0.8
-    if rank <= 8:
-        return 0.6
-    if rank <= 12:
-        return 0.4
-    return 0.2
+    if rank is None:
+        return UNKNOWN_POSITION_WEIGHT
+    for start, end, weight in POSITION_WEIGHT_RULES:
+        if start <= int(rank) <= end:
+            return weight
+    return UNKNOWN_POSITION_WEIGHT
 
 
 def get_rank_weight(rank_index_1_based: int) -> float:
@@ -173,18 +173,32 @@ PREBIOTIC_FUNCTION_RULES = {
     "SCFA支持": {"q_scfa": 1.0, "g": 0.2},
 }
 
+FERMENTABILITY_LEVELS = {"低": 1, "中低": 2, "中": 3, "高": 4}
+FERMENTABILITY_LEVEL_SCORES = {
+    1: {"q_feed": 0.1, "q_scfa": 0.0, "g": 0.0},
+    2: {"q_feed": 0.3, "q_scfa": 0.2, "g": 0.2},
+    3: {"q_feed": 0.5, "q_scfa": 0.4, "g": 0.5},
+    4: {"q_feed": 0.8, "q_scfa": 0.6, "g": 1.0},
+}
 FERMENTABILITY_RULES = {
-    "高": {"q_feed": 0.8, "q_scfa": 0.6, "g": 1.0},
-    "中": {"q_feed": 0.5, "q_scfa": 0.4, "g": 0.5},
-    "中低": {"q_feed": 0.3, "q_scfa": 0.2, "g": 0.2},
-    "低": {"q_feed": 0.1, "q_scfa": 0.0, "g": 0.0},
+    label: FERMENTABILITY_LEVEL_SCORES[level]
+    for label, level in FERMENTABILITY_LEVELS.items()
 }
 
-FIBER_SOLUBILITY_RULES = {
-    "不可溶": {"p_bulk": 0.8, "p_form": 0.2},
-    "混合": {"p_form": 0.4, "p_bulk": 0.4, "p_buffer": 0.2},
-    "可溶": {"p_form": 0.8},
+FIBER_SOLUBILITY_LEVELS = {"不可溶": 1, "混合": 2, "可溶": 3}
+FIBER_SOLUBILITY_LEVEL_SCORES = {
+    1: {"p_bulk": 0.8, "p_form": 0.2},
+    2: {"p_form": 0.4, "p_bulk": 0.4, "p_buffer": 0.2},
+    3: {"p_form": 0.8},
 }
+FIBER_SOLUBILITY_RULES = {
+    label: FIBER_SOLUBILITY_LEVEL_SCORES[level]
+    for label, level in FIBER_SOLUBILITY_LEVELS.items()
+}
+
+# Thresholds are expressed on the normalized 0-100 business scale.
+BUSINESS_LEVEL_THRESHOLDS = {"low_upper": 40.0, "high_lower": 60.0}
+FIBER_DISPLAY_SCALE_MAX = 5.0
 
 INGREDIENT_CATEGORY_RULES = {
     "益生元": {"q_feed": 0.6, "q_scfa": 0.4, "g": 0.3},
@@ -334,7 +348,8 @@ def classify_starch_ingredient(ingredient: str) -> Optional[Dict[str, Any]]:
         if matched_keywords:
             return {
                 "category": rule["category"],
-                "base_score": float(rule["base_score"]),
+                "level": int(rule["level"]),
+                "base_score": float(STARCH_LEVEL_SCORES[int(rule["level"])]),
                 "matched_keywords": matched_keywords,
             }
 
@@ -483,9 +498,10 @@ def get_level(value: float, low: float, high: float) -> str:
 def get_p_level(p_total: Optional[float]) -> Optional[str]:
     if p_total is None:
         return None
-    if p_total < 4.5:
+    normalized = min(100.0, max(0.0, p_total / FIBER_DISPLAY_SCALE_MAX * 100.0))
+    if normalized < BUSINESS_LEVEL_THRESHOLDS["low_upper"]:
         return "低P"
-    if p_total <= 6.5:
+    if normalized < BUSINESS_LEVEL_THRESHOLDS["high_lower"]:
         return "中P"
     return "高P"
 
@@ -493,9 +509,10 @@ def get_p_level(p_total: Optional[float]) -> Optional[str]:
 def get_q_level(q_total: Optional[float]) -> Optional[str]:
     if q_total is None:
         return None
-    if q_total < 2.5:
+    normalized = min(100.0, max(0.0, q_total / FIBER_DISPLAY_SCALE_MAX * 100.0))
+    if normalized < BUSINESS_LEVEL_THRESHOLDS["low_upper"]:
         return "低Q"
-    if q_total <= 4.5:
+    if normalized < BUSINESS_LEVEL_THRESHOLDS["high_lower"]:
         return "中Q"
     return "高Q"
 
@@ -798,8 +815,8 @@ def build_portrait(
     risk = classify_fermentation_risk(g, score_details)
 
     # 强度描述
-    p_level = get_level(p_total, low=1.5, high=3.5)
-    q_level = get_level(q_total, low=1.5, high=3.5)
+    p_level = (get_p_level(p_total) or "低P").replace("P", "")
+    q_level = (get_q_level(q_total) or "低Q").replace("Q", "")
 
     portrait = f"{overall}；物理调节{p_level}（{p_shape}）；菌群调节{q_level}（{q_shape}）；{risk}"
     function_score_summary = format_function_score_summary(function_scores or {})
@@ -833,7 +850,7 @@ def compute_scores(raw_ingredient_text: str, ingredient_feature_json: Dict[str, 
         matched_ing, rank = find_best_match_rank(tag_name, ingredient_list)
         if should_skip_score_match(tag_name, matched_ing):
             continue
-        weight = get_rank_weight(rank) if rank is not None else 0.0
+        weight = get_rank_weight(rank)
 
         base_score = calc_single_ingredient_base_score(detail)
         final_score = weighted_score(base_score, weight)
@@ -1006,6 +1023,42 @@ def rebuild_target_table(conn) -> None:
         cursor.execute(CREATE_TARGET_TABLE_SQL)
 
 
+def load_editable_score_config(conn) -> None:
+    """Overlay code defaults with active database configuration."""
+    global POSITION_WEIGHT_RULES, UNKNOWN_POSITION_WEIGHT
+    with conn.cursor() as cursor:
+        cursor.execute(f"""SELECT dimension_code,enum_value,score_value
+          FROM {STANDARD_DB}.catfood_score_enum_config
+          WHERE active=1 AND config_version='v1' AND domain_code IN ('fiber','carb')
+            AND score_value IS NOT NULL""")
+        rows = cursor.fetchall()
+        cursor.execute(f"""SELECT rank_start,rank_end,position_weight,is_unknown
+          FROM {STANDARD_DB}.catfood_score_position_weight_config
+          WHERE active=1 AND config_version='v1' AND domain_code='global'
+          ORDER BY is_unknown,rank_start""")
+        position_rows = cursor.fetchall()
+    by_dimension = {}
+    for row in rows:
+        by_dimension.setdefault(row["dimension_code"], {})[row["enum_value"]] = float(row["score_value"])
+    for label in FERMENTABILITY_LEVELS:
+        if label in by_dimension.get("fermentability_q_feed", {}):
+            FERMENTABILITY_RULES[label]["q_feed"] = by_dimension["fermentability_q_feed"][label]
+        if label in by_dimension.get("fermentability_q_scfa", {}):
+            FERMENTABILITY_RULES[label]["q_scfa"] = by_dimension["fermentability_q_scfa"][label]
+    for rule in STARCH_BASE_RULES:
+        configured = by_dimension.get("starch_category", {}).get(rule["category"])
+        if configured is not None:
+            STARCH_LEVEL_SCORES[int(rule["level"])] = configured
+    configured_ranges = []
+    for row in position_rows:
+        if row["is_unknown"]:
+            UNKNOWN_POSITION_WEIGHT = float(row["position_weight"])
+        else:
+            configured_ranges.append((int(row["rank_start"]), int(row["rank_end"]), float(row["position_weight"])))
+    if configured_ranges:
+        POSITION_WEIGHT_RULES = configured_ranges
+
+
 # =========================================================
 # 10. 主流程
 # =========================================================
@@ -1013,6 +1066,7 @@ def batch_process():
     conn = pymysql.connect(**DB_CONFIG)
 
     try:
+        load_editable_score_config(conn)
         ensure_source_table_schema(conn)
         rebuild_target_table(conn)
         conn.commit()

@@ -13,6 +13,7 @@ from services.product_identity_service import (
     lookup_identity,
     review_product_candidate,
 )
+from services.orchestrator_service import complete_duplicate_formula_tasks, resume_product_tasks_for_source_ids
 
 
 product_identity_api = Blueprint("product_identity_api", __name__, url_prefix="/api/product-identity")
@@ -89,13 +90,19 @@ def product_candidate_reviews():
 @product_identity_api.post("/product-reviews/<int:product_id>/approve")
 def product_candidate_approve(product_id: int):
     try:
-        return jsonify(
-            review_product_candidate(
-                product_id,
-                request.get_json(silent=True) or {},
-                action="approve",
+        result = review_product_candidate(
+            product_id,
+            request.get_json(silent=True) or {},
+            action="approve",
+        )
+        if result.get("identity_mode") == "duplicate":
+            result["completed_task_ids"] = complete_duplicate_formula_tasks(result.get("source_ids") or [])
+            result["resumed_task_ids"] = []
+        else:
+            result["resumed_task_ids"] = resume_product_tasks_for_source_ids(
+                result.get("source_ids") or []
             )
-        ), 200
+        return jsonify(result), 200
     except KeyError as exc:
         return jsonify({"ok": False, "error": str(exc)}), 404
     except Exception as exc:

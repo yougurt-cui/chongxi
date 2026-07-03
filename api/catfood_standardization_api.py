@@ -9,9 +9,14 @@ from services.catfood_standardization_service import (
     init_standardization_db,
     list_brand_candidates,
     list_standard_brands,
+    list_standard_products,
+    list_standard_ingredients,
+    list_ingredient_review_items,
+    resolve_ingredient_review,
     review_brand_candidate,
     resolve_brand_mapping,
     resolve_formula_mapping,
+    resolve_duplicate_formula_mapping,
     rebuild_formula_feature_inputs,
     standardize_brand,
     standardize_formula,
@@ -23,6 +28,7 @@ from services.formula_incremental_service import (
     materialize_formula_risks,
     materialize_formula_scores,
 )
+from services.orchestrator_service import resume_brand_tasks_for_source_ids, resume_ingredient_tasks_for_formula_ids
 
 
 catfood_standardization_api = Blueprint(
@@ -117,16 +123,64 @@ def standardization_brand_candidates():
         return jsonify({"ok": False, "error": str(exc)}), 400
 
 
+@catfood_standardization_api.get("/ingredient-reviews")
+def standardization_ingredient_reviews():
+    try:
+        formula_id = request.args.get("formula_id")
+        return jsonify(list_ingredient_review_items(formula_id=int(formula_id) if formula_id else None,
+                                                    limit=int(request.args.get("limit") or 200))), 200
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+
+
+@catfood_standardization_api.get("/ingredients")
+def standardization_ingredients():
+    try:
+        return jsonify({"ok": True, "items": list_standard_ingredients(query=request.args.get("q") or "",
+                                                                         limit=int(request.args.get("limit") or 1000))}), 200
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+
+
+@catfood_standardization_api.get("/products")
+def standardization_products():
+    try:
+        brand_id = request.args.get("brand_id")
+        return jsonify({"ok": True, "items": list_standard_products(
+            brand_id=int(brand_id) if brand_id else None,
+            query=request.args.get("q") or "",
+            limit=int(request.args.get("limit") or 1000),
+        )}), 200
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+
+
+@catfood_standardization_api.post("/ingredient-reviews/<int:item_id>/resolve")
+def standardization_ingredient_review_resolve(item_id: int):
+    try:
+        result = resolve_ingredient_review(item_id, request.get_json(silent=True) or {})
+        result["resumed_task_ids"] = resume_ingredient_tasks_for_formula_ids([result["formula_id"]])
+        return jsonify(result), 200
+    except KeyError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 404
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+
+
 @catfood_standardization_api.post("/brand-candidates/<int:candidate_id>/<action>")
 def standardization_brand_candidate_review(candidate_id: int, action: str):
     try:
-        return jsonify(
-            review_brand_candidate(
-                candidate_id,
-                request.get_json(silent=True) or {},
-                action=action,
-            )
-        ), 200
+        result = review_brand_candidate(
+            candidate_id,
+            request.get_json(silent=True) or {},
+            action=action,
+        )
+        result["resumed_task_ids"] = (
+            resume_brand_tasks_for_source_ids(result.get("source_ids") or [])
+            if result.get("status") == "approved"
+            else []
+        )
+        return jsonify(result), 200
     except KeyError as exc:
         return jsonify({"ok": False, "error": str(exc)}), 404
     except Exception as exc:
@@ -137,6 +191,14 @@ def standardization_brand_candidate_review(candidate_id: int, action: str):
 def standardization_formula_resolve():
     try:
         return jsonify(resolve_formula_mapping(request.get_json(silent=True) or {})), 200
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+
+
+@catfood_standardization_api.post("/formula/duplicate/resolve")
+def standardization_duplicate_formula_resolve():
+    try:
+        return jsonify(resolve_duplicate_formula_mapping(request.get_json(silent=True) or {})), 200
     except Exception as exc:
         return jsonify({"ok": False, "error": str(exc)}), 400
 

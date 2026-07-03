@@ -123,7 +123,7 @@ FAT_SOURCE_RULES = [
 
     # 藻类/植物脂肪
     {"pattern": r"海藻油", "source": "海藻油", "type": "藻类/植物脂肪"},
-    {"pattern": r"亚麻籽油", "source": "亚麻籽油", "type": "植物脂肪"},
+    {"pattern": r"亚麻籽油|亚麻籽粉|亚麻籽|亚麻仁籽", "source": "亚麻籽", "type": "植物脂肪"},
     {"pattern": r"紫苏籽油|紫苏籽", "source": "紫苏籽", "type": "植物脂肪"},
     {"pattern": r"葵花籽油|葵花油", "source": "葵花籽油", "type": "植物脂肪"},
     {"pattern": r"玉米油", "source": "玉米油", "type": "植物脂肪"},
@@ -213,7 +213,7 @@ OMEGA3_RULES = [
     {"pattern": r"白鱼", "source": "白鱼", "strength": "弱支持/模糊鱼类omega-3"},
 
     # 植物型
-    {"pattern": r"亚麻籽油", "source": "亚麻籽油", "strength": "植物型omega-3"},
+    {"pattern": r"亚麻籽油|亚麻籽粉|亚麻籽|亚麻仁籽", "source": "亚麻籽", "strength": "植物型omega-3"},
     {"pattern": r"紫苏籽|紫苏籽油", "source": "紫苏籽", "strength": "植物型omega-3"},
 ]
 

@@ -355,6 +355,8 @@ def backfill_formula(formula_id: int, *, apply: bool) -> dict[str, Any]:
     with _connect() as conn:
         with conn.cursor() as cursor:
             ensure_tables(cursor)
+            _ensure_fat_target(cursor)
+            _ensure_fiber_target(cursor)
             cursor.execute(
                 f"""
                 SELECT r.rule_id, r.match_scope, r.match_operator, r.match_value,
@@ -496,6 +498,20 @@ def backfill_formula(formula_id: int, *, apply: bool) -> dict[str, Any]:
                 "ready_for_rebuild" if allowed_count == 4
                 else "partially_ready" if allowed_count
                 else "need_review"
+            )
+            fat_features["profile_status"] = gates["fat"]["status"]
+            _upsert_fat_feature(
+                cursor,
+                formula=formula,
+                ingredient_text=main_ingredient_text,
+                features=fat_features,
+            )
+            _upsert_fiber_feature(
+                cursor,
+                formula=formula,
+                ingredient_text=main_ingredient_text,
+                feature_json=fiber_feature_json,
+                starch_ingredients=starch_ingredients,
             )
             ignored_count = len(items) - len(effective_items)
             coverage = matched / len(effective_items) if effective_items else 1.0

@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 import os
 import pandas as pd
-from sqlalchemy import Numeric, create_engine, text
+from sqlalchemy import BigInteger, Numeric, create_engine, text
 
 from brand_normalizer import build_product_key, correct_brand
 
@@ -293,8 +293,14 @@ def main():
     fat_df["product_key_join"] = normalize_product_key(fat_df["product_key"])
     fiber_df["product_key_join"] = normalize_product_key(fiber_df["product_key"])
 
-    fat_df = fat_df.drop_duplicates(subset=["product_key_join"], keep="first")
-    fiber_df = fiber_df.drop_duplicates(subset=["product_key_join"], keep="first")
+    fat_df = pd.concat([
+        fat_df[fat_df["formula_id"].notna()],
+        fat_df[fat_df["formula_id"].isna()].drop_duplicates(subset=["product_key_join"], keep="first"),
+    ], ignore_index=True)
+    fiber_df = pd.concat([
+        fiber_df[fiber_df["formula_id"].notna()],
+        fiber_df[fiber_df["formula_id"].isna()].drop_duplicates(subset=["product_key_join"], keep="first"),
+    ], ignore_index=True)
 
     wide_df = protein_df.merge(
         fat_df.drop(columns=["product_key", "product_key_join"]),
@@ -381,6 +387,7 @@ def main():
             "starch_burden_score",
         ]
     }
+    score_types.update({"source_id": BigInteger(), "formula_id": BigInteger()})
 
     write_wide_incremental(engine, wide_df, score_types)
 

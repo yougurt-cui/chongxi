@@ -1,6 +1,7 @@
 import unittest
 
 from services.catfood_standardization_service import (
+    _brand_input_candidates,
     _nutrition_completeness,
     _merge_product_candidate_lineage,
     _merge_json_lists,
@@ -14,6 +15,21 @@ from services.catfood_standardization_service import (
 
 
 class CatfoodStandardizationServiceTest(unittest.TestCase):
+    def test_page_brand_input_precedes_ocr_brand_fallback(self):
+        candidates = _brand_input_candidates(
+            {"brand_name": "肉垫"},
+            {"raw_brand_name": "rf45低敏茶花鸡", "raw_product_name": "0702182336"},
+        )
+        self.assertEqual(candidates[0], "肉垫")
+        self.assertIn("rf45低敏茶花鸡", candidates)
+
+    def test_ocr_brand_is_used_when_page_brand_is_empty(self):
+        candidates = _brand_input_candidates(
+            {"brand_name": ""},
+            {"raw_brand_name": "鲜朗", "raw_product_name": "成猫粮"},
+        )
+        self.assertEqual(candidates[0], "鲜朗")
+
     def test_nutrition_completeness_uses_core_guarantee_metrics(self):
         nutrition = {
             "protein": {"metric_name": "粗蛋白"},
@@ -31,6 +47,12 @@ class CatfoodStandardizationServiceTest(unittest.TestCase):
         right = normalize_ingredients("鲜鸡肉60%，鲜鸡胸肉20%，三文鱼5%")
         self.assertEqual(left[1], right[1])
         self.assertEqual(left[2], right[2])
+
+    def test_ingredient_ocr_ui_prefix_does_not_change_fingerprint(self):
+        ocr = normalize_ingredients("直播讲解鲜鸡肉75.5%、鲜鸭肉11%、鲜鸡肝5%")
+        formula = normalize_ingredients("鲜鸡肉75.5%、鲜鸭肉11%、鲜鸡肝5%")
+        self.assertEqual(ocr[1], formula[1])
+        self.assertEqual(ocr[2], formula[2])
 
     def test_ingredient_similarity_uses_order(self):
         exact = ingredient_similarity(["鸡肉", "鱼肉", "鸡油"], ["鸡肉", "鱼肉", "鸡油"])

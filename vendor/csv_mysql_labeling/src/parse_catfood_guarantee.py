@@ -1633,7 +1633,7 @@ def ensure_product_guarantee_tables(
     create_guarantee_sql = f"""
     CREATE TABLE IF NOT EXISTS `{guarantee_table}` (
       id BIGINT PRIMARY KEY AUTO_INCREMENT,
-      product_id BIGINT NOT NULL,
+      formula_id BIGINT UNSIGNED NULL,
       source_id BIGINT NULL,
       parsed_row_id BIGINT NULL,
       image_name VARCHAR(255) NULL,
@@ -1642,12 +1642,13 @@ def ensure_product_guarantee_tables(
       operator_symbol VARCHAR(10) NOT NULL,
       metric_value DECIMAL(18,2) NOT NULL,
       metric_unit VARCHAR(50) NOT NULL,
-      basis VARCHAR(50) NULL,
+      basis VARCHAR(50) NOT NULL DEFAULT '',
       raw_text VARCHAR(255) NULL,
       extract_batch_id VARCHAR(32) NOT NULL,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-      KEY idx_product_id (product_id),
+      UNIQUE KEY uq_source_metric (source_id, metric_name, basis, operator_symbol, metric_unit),
+      KEY idx_formula_id (formula_id),
       KEY idx_source_id (source_id),
       KEY idx_parsed_row_id (parsed_row_id),
       KEY idx_image_name (image_name),
@@ -1682,7 +1683,8 @@ def ensure_product_guarantee_tables(
         "updated_at": "ADD COLUMN updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP AFTER created_at",
     }
     guarantee_columns = {
-        "source_id": "ADD COLUMN source_id BIGINT NULL AFTER product_id",
+        "formula_id": "ADD COLUMN formula_id BIGINT UNSIGNED NULL AFTER id",
+        "source_id": "ADD COLUMN source_id BIGINT NULL AFTER formula_id",
         "parsed_row_id": "ADD COLUMN parsed_row_id BIGINT NULL AFTER source_id",
         "image_name": "ADD COLUMN image_name VARCHAR(255) NULL AFTER parsed_row_id",
         "file_sha256": "ADD COLUMN file_sha256 CHAR(64) NULL AFTER image_name",
@@ -1715,9 +1717,18 @@ def ensure_product_guarantee_tables(
             if column_name not in existing_guarantee_columns:
                 conn.execute(text(f"ALTER TABLE `{guarantee_table}` {ddl}"))
         conn.execute(text(f"ALTER TABLE `{guarantee_table}` MODIFY metric_value DECIMAL(18,2) NOT NULL"))
+        conn.execute(text(f"ALTER TABLE `{guarantee_table}` MODIFY formula_id BIGINT UNSIGNED NULL"))
         guarantee_indexes = _table_indexes(conn, guarantee_table)
-        if "idx_product_id" not in guarantee_indexes:
-            conn.execute(text(f"ALTER TABLE `{guarantee_table}` ADD KEY idx_product_id (product_id)"))
+        if "uq_formula_metric" in guarantee_indexes:
+            conn.execute(text(f"ALTER TABLE `{guarantee_table}` DROP INDEX uq_formula_metric"))
+            guarantee_indexes = _table_indexes(conn, guarantee_table)
+        if "uq_source_metric" not in guarantee_indexes:
+            conn.execute(text(
+                f"ALTER TABLE `{guarantee_table}` ADD UNIQUE KEY uq_source_metric "
+                "(source_id, metric_name, basis, operator_symbol, metric_unit)"
+            ))
+        if "idx_formula_id" not in guarantee_indexes:
+            conn.execute(text(f"ALTER TABLE `{guarantee_table}` ADD KEY idx_formula_id (formula_id)"))
         if "idx_source_id" not in guarantee_indexes:
             conn.execute(text(f"ALTER TABLE `{guarantee_table}` ADD KEY idx_source_id (source_id)"))
         if "idx_parsed_row_id" not in guarantee_indexes:
@@ -1789,6 +1800,25 @@ def _clear_guarantee_parse_failure(conn: Any, failure_table: str, source_id: int
     )
 
 
+def _resolve_formula_id(conn: Any, source_id: Any) -> Optional[int]:
+    """Resolve only through the reviewed source mapping; never by ingredients alone."""
+    if source_id is None:
+        return None
+    row = conn.execute(
+        text(
+            """
+            SELECT formula_id
+            FROM catfood_ocr_standard_mapping
+            WHERE source_id=:source_id AND formula_status='matched'
+              AND formula_id IS NOT NULL
+            LIMIT 1
+            """
+        ),
+        {"source_id": int(source_id)},
+    ).mappings().first()
+    return int(row["formula_id"]) if row and row.get("formula_id") is not None else None
+
+
 def _upsert_product_and_guarantees(
     conn: Any,
     info_table: str,
@@ -1825,21 +1855,32 @@ def _upsert_product_and_guarantees(
     delete_guarantee_sql = f"DELETE FROM `{guarantee_table}` WHERE source_id = :source_id"
     insert_guarantee_sql = f"""
     INSERT INTO `{guarantee_table}`(
-      product_id, source_id, parsed_row_id, image_name, file_sha256, metric_name,
+      formula_id, source_id, parsed_row_id, image_name, file_sha256, metric_name,
       operator_symbol, metric_value, metric_unit, basis, raw_text, extract_batch_id
     )
     VALUES(
-      :product_id, :source_id, :parsed_row_id, :image_name, :file_sha256, :metric_name,
+      :formula_id, :source_id, :parsed_row_id, :image_name, :file_sha256, :metric_name,
       :operator_symbol, :metric_value, :metric_unit, :basis, :raw_text, :extract_batch_id
     )
     """
 
     result = conn.execute(text(upsert_info_sql), {**product_info, "extract_batch_id": batch_id})
     product_id = int(result.lastrowid)
+    formula_id = product_info.get("formula_id")
+    if formula_id is None:
+        formula_id = _resolve_formula_id(conn, product_info.get("source_id"))
     conn.execute(text(delete_guarantee_sql), {"source_id": int(product_info["source_id"])})
     if not guarantee_items:
         return product_id, 0
-    payload = [{**item, "product_id": product_id, "extract_batch_id": batch_id} for item in guarantee_items]
+    payload = [
+        {
+            **item,
+            "formula_id": int(formula_id) if formula_id is not None else None,
+            "basis": item.get("basis") or "",
+            "extract_batch_id": batch_id,
+        }
+        for item in guarantee_items
+    ]
     conn.execute(text(insert_guarantee_sql), payload)
     return product_id, len(payload)
 
@@ -2040,7 +2081,8 @@ def parse_catfood_guarantee_values(
           COALESCE(p.image_name, s.image_name) AS image_name,
           COALESCE(p.file_sha256, s.file_sha256) AS file_sha256,
           p.id AS parsed_row_id,
-          p.product_name AS parsed_product_name
+          p.product_name AS parsed_product_name,
+          p.ingredient_composition AS parsed_ingredient_composition
         FROM `{source_table}` s
         LEFT JOIN `{parsed_table}` p
           ON p.source_id = s.id
@@ -2068,7 +2110,8 @@ def parse_catfood_guarantee_values(
           COALESCE(p.image_name, s.image_name) AS image_name,
           COALESCE(p.file_sha256, s.file_sha256) AS file_sha256,
           p.id AS parsed_row_id,
-          p.product_name AS parsed_product_name
+          p.product_name AS parsed_product_name,
+          p.ingredient_composition AS parsed_ingredient_composition
         FROM `{source_table}` s
         LEFT JOIN `{parsed_table}` p
           ON p.source_id = s.id
@@ -2194,6 +2237,10 @@ def parse_catfood_guarantee_values(
                 image_path=final_image_path,
             )
             with engine.begin() as conn:
+                product_info["formula_id"] = _resolve_formula_id(
+                    conn,
+                    row_data.get("source_id"),
+                )
                 _, inserted_rows = _upsert_product_and_guarantees(
                     conn=conn,
                     info_table=info_table,

@@ -16,10 +16,12 @@ from app_config import get_feature_mysql_config, get_mysql_config
 from services.catfood_standardization_service import (
     _assign_candidate_brand,
     BRAND_TABLE,
+    FORMULA_TABLE,
     PRODUCT_ALIAS_TABLE,
     PRODUCT_TABLE,
     init_standardization_db,
     normalize_name,
+    normalize_ingredients,
     resolve_standard_brand,
 )
 
@@ -440,6 +442,45 @@ def list_product_candidate_reviews(
             )
         )
         items.append(item)
+    all_source_ids = sorted({int(source_id) for item in items for source_id in item.get("source_ids", []) if str(source_id).lstrip("-").isdigit()})
+    duplicates_by_source: dict[int, list[dict[str, Any]]] = {}
+    if all_source_ids:
+        with _connect_csv() as conn:
+            with conn.cursor() as cursor:
+                placeholders = ",".join(["%s"] * len(all_source_ids))
+                cursor.execute(
+                    f"SELECT source_id,raw_ingredient_composition FROM catfood_ocr_standard_mapping WHERE source_id IN ({placeholders})",
+                    all_source_ids,
+                )
+                source_fingerprints = {}
+                for row in cursor.fetchall():
+                    _, ingredients, fingerprint = normalize_ingredients(row.get("raw_ingredient_composition"))
+                    if ingredients:
+                        source_fingerprints[int(row["source_id"])] = fingerprint
+                if source_fingerprints:
+                    fingerprints = sorted(set(source_fingerprints.values()))
+                    fp_placeholders = ",".join(["%s"] * len(fingerprints))
+                    cursor.execute(
+                        f"""SELECT f.formula_id,f.product_id,f.ingredient_fingerprint,
+                               p.standard_product_name,p.display_name,p.brand_id,b.standard_brand_name
+                            FROM `{FORMULA_TABLE}` f JOIN `{PRODUCT_TABLE}` p ON p.product_id=f.product_id
+                            JOIN `{BRAND_TABLE}` b ON b.brand_id=p.brand_id
+                            WHERE f.status='active' AND f.ingredient_fingerprint IN ({fp_placeholders})""",
+                        fingerprints,
+                    )
+                    by_fingerprint: dict[str, list[dict[str, Any]]] = {}
+                    for formula in cursor.fetchall():
+                        by_fingerprint.setdefault(str(formula["ingredient_fingerprint"]), []).append(formula)
+                    duplicates_by_source = {
+                        source_id: by_fingerprint.get(fingerprint, [])
+                        for source_id, fingerprint in source_fingerprints.items()
+                    }
+    for item in items:
+        duplicates = []
+        for source_id in item.get("source_ids", []):
+            duplicates.extend(duplicates_by_source.get(int(source_id), []))
+        item["duplicate_formula_candidates"] = list({int(row["formula_id"]): row for row in duplicates}.values())
+        item["identity_mode_suggested"] = "duplicate" if item["duplicate_formula_candidates"] else "new"
     return {
         "ok": True,
         "items": items,
@@ -531,6 +572,88 @@ def review_product_candidate(
                         brand_name = brand_row["standard_brand_name"]
                 if not brand_id:
                     raise ValueError("请选择已有标准品牌；产品审核不能创建品牌")
+                source_ids = [
+                    int(value) for value in _json_value(current.get("source_ids_json"), [])
+                    if str(value).lstrip("-").isdigit()
+                ]
+                exact_product_ids: set[int] = set()
+                for source_id in source_ids:
+                    cursor.execute("SELECT raw_ingredient_composition FROM catfood_ocr_standard_mapping WHERE source_id=%s", (source_id,))
+                    source_mapping = cursor.fetchone() or {}
+                    _, source_ingredients, source_fingerprint = normalize_ingredients(source_mapping.get("raw_ingredient_composition"))
+                    if not source_ingredients:
+                        continue
+                    cursor.execute(
+                        f"SELECT DISTINCT product_id FROM `{FORMULA_TABLE}` WHERE ingredient_fingerprint=%s AND status='active'",
+                        (source_fingerprint,),
+                    )
+                    exact_product_ids.update(int(row["product_id"]) for row in cursor.fetchall())
+                identity_mode = "duplicate" if exact_product_ids else "new"
+                requested_mode = _clean_text(payload.get("identity_mode") or identity_mode)
+                if requested_mode != identity_mode:
+                    raise ValueError(f"认证类型应由formula表判定为{identity_mode}，不能人工切换")
+                reuse_product_id = payload.get("reuse_product_id")
+                if identity_mode == "duplicate":
+                    if not reuse_product_id:
+                        raise ValueError("重复配方必须选择标准产品库中的产品")
+                    if int(reuse_product_id) not in exact_product_ids:
+                        raise ValueError("所选标准产品与当前formula指纹不一致")
+                    cursor.execute(
+                        f"SELECT * FROM `{PRODUCT_TABLE}` WHERE product_id=%s AND active=1 FOR UPDATE",
+                        (int(reuse_product_id),),
+                    )
+                    reused_product = cursor.fetchone()
+                    if not reused_product:
+                        raise ValueError("所选标准产品不存在或未启用")
+                    cursor.execute(
+                        f"""UPDATE `{PRODUCT_TABLE}` SET brand_id=%s,standard_product_name=%s,
+                            display_name=%s,display_subtitle=%s WHERE product_id=%s""",
+                        (brand_id, product_name, display_name, subtitle or None, int(reuse_product_id)),
+                    )
+                    resolutions = []
+                    for source_id in source_ids:
+                        cursor.execute("SELECT raw_ingredient_composition FROM catfood_ocr_standard_mapping WHERE source_id=%s", (source_id,))
+                        source_mapping = cursor.fetchone() or {}
+                        _, source_ingredients, source_fingerprint = normalize_ingredients(source_mapping.get("raw_ingredient_composition"))
+                        if not source_ingredients:
+                            continue
+                        cursor.execute(
+                            """SELECT formula_id FROM catfood_standard_formula
+                               WHERE product_id=%s AND ingredient_fingerprint=%s AND status='active'
+                               ORDER BY is_current DESC,formula_version DESC LIMIT 1""",
+                            (int(reuse_product_id), source_fingerprint),
+                        )
+                        formula = cursor.fetchone()
+                        if not formula:
+                            raise ValueError("所选标准产品没有与当前原料完全相同的formula")
+                        formula_id = int(formula["formula_id"])
+                        cursor.execute(
+                            """UPDATE catfood_ocr_standard_mapping SET product_id=%s,product_status='matched',
+                               product_confidence=1,formula_id=%s,formula_status='matched',formula_confidence=1,
+                               overall_status='matched',reviewer=%s,reviewed_at=NOW() WHERE source_id=%s""",
+                            (int(reuse_product_id), formula_id, _clean_text(payload.get("reviewer")) or None, source_id),
+                        )
+                        cursor.execute("UPDATE product_guarantee SET formula_id=%s WHERE source_id=%s", (formula_id, source_id))
+                        resolutions.append({"source_id": source_id, "formula_id": formula_id})
+                    cursor.execute(
+                        f"""UPDATE `{PRODUCT_CANDIDATE_TABLE}`
+                            SET review_status='approved',active=0,
+                                reject_reason=NULL,
+                                model_reason=CONCAT_WS(
+                                  '\n', NULLIF(model_reason, ''),
+                                  %s
+                                ),
+                                updated_at=NOW()
+                            WHERE product_id=%s""",
+                        (
+                            f"重复配方已复用标准产品 product_id={int(reuse_product_id)}",
+                            reviewed_product_id,
+                        ),
+                    )
+                    conn.commit()
+                    return {"ok": True, "item": current, "source_ids": source_ids,
+                            "identity_mode": "duplicate", "reuse_product_id": int(reuse_product_id),
+                            "duplicate_formula_resolutions": resolutions, "pipeline_complete": True}
                 candidate_for_assignment = dict(current)
                 candidate_for_assignment["standard_product_name"] = product_name
                 merged = _assign_candidate_brand(
@@ -678,7 +801,15 @@ def review_product_candidate(
             )
             updated = cursor.fetchone()
         conn.commit()
-    return {"ok": True, "item": updated}
+    return {
+        "ok": True,
+        "item": updated,
+        "source_ids": [
+            int(item)
+            for item in _json_value((updated or {}).get("source_ids_json"), [])
+            if item is not None
+        ],
+    }
 
 
 def _columns(cursor, table: str) -> set[str]:

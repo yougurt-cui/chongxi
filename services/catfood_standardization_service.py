@@ -53,6 +53,43 @@ def normalize_name(value: Any) -> str:
     )
 
 
+def _brand_input_candidates(payload: dict[str, Any], ocr_row: dict[str, Any]) -> list[str]:
+    """Return brand candidates with user-entered metadata before OCR fallbacks."""
+    values = (
+        payload.get("brand_name"),
+        ocr_row.get("raw_brand_name"),
+        ocr_row.get("raw_product_name"),
+    )
+    candidates: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        cleaned = _clean(value)
+        normalized = normalize_name(cleaned)
+        if cleaned and normalized and normalized not in seen:
+            candidates.append(cleaned)
+            seen.add(normalized)
+    return candidates
+
+
+def _upsert_pending_brand_candidate(cursor, raw_brand_name: str) -> None:
+    normalized = normalize_name(raw_brand_name)
+    if not normalized:
+        return
+    cursor.execute(
+        f"""
+        INSERT INTO `{BRAND_CANDIDATE_TABLE}`(
+          raw_brand_name, normalized_brand_name, occurrence_count,
+          source_product_candidate_ids_json, status
+        ) VALUES(%s, %s, 1, JSON_ARRAY(), 'pending')
+        ON DUPLICATE KEY UPDATE
+          raw_brand_name = VALUES(raw_brand_name),
+          occurrence_count = GREATEST(occurrence_count, 1),
+          updated_at = NOW()
+        """,
+        (raw_brand_name, normalized),
+    )
+
+
 def init_standardization_db() -> None:
     with _connect() as conn:
         with conn.cursor() as cursor:
@@ -394,9 +431,13 @@ def build_formula_feature_input(
                 cursor,
                 formula_id=int(formula_id),
             )
-            nutrition = _json_dict(formula.get("nutrition_json"))
-            if not nutrition and source and source.get("source_id") is not None:
-                nutrition = _load_nutrition_signature(cursor, int(source["source_id"]))
+            nutrition = (
+                _load_nutrition_signature(cursor, int(source["source_id"]))
+                if source and source.get("source_id") is not None
+                else {}
+            )
+            if not nutrition:
+                nutrition = _json_dict(formula.get("nutrition_json"))
             raw_ingredients = _clean(formula.get("raw_ingredient_example"))
             normalized = _clean(formula.get("normalized_ingredient_composition"))
             normalized_items = _json_list(formula.get("normalized_ingredients_json"))
@@ -681,6 +722,141 @@ def list_brand_candidates(*, status: str = "pending", limit: int = 200) -> dict[
     return {"ok": True, "items": items, "count": len(items), "status_counts": counts}
 
 
+def list_standard_ingredients(*, query: str = "", limit: int = 1000) -> list[dict[str, Any]]:
+    limit = max(1, min(int(limit), 2000))
+    where = "WHERE active = 1"
+    params: list[Any] = []
+    if _clean(query):
+        where += " AND standard_name LIKE %s"
+        params.append(f"%{_clean(query)}%")
+    params.append(limit)
+    with _connect() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                f"SELECT * FROM catfood_standard_ingredient {where} ORDER BY standard_name LIMIT %s",
+                params,
+            )
+            return cursor.fetchall()
+
+
+def list_ingredient_review_items(*, formula_id: int | None = None, limit: int = 200) -> dict[str, Any]:
+    where = "WHERE i.match_status = 'unmatched' AND i.review_status = 'pending'"
+    params: list[Any] = []
+    if formula_id is not None:
+        where += " AND i.formula_id = %s"
+        params.append(int(formula_id))
+    params.append(max(1, min(int(limit), 500)))
+    with _connect() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                f"""
+                SELECT i.*, c.candidate_id, c.context,
+                       c.suggested_standard_ingredient_id, c.suggested_standard_name
+                FROM catfood_formula_ingredient_item i
+                LEFT JOIN catfood_standard_ingredient_candidate c
+                  ON c.normalized_raw_name = i.raw_name AND c.status = 'pending'
+                {where}
+                ORDER BY i.formula_id DESC, i.position
+                LIMIT %s
+                """,
+                params,
+            )
+            items = cursor.fetchall()
+    return {"ok": True, "items": items, "count": len(items)}
+
+
+def resolve_ingredient_review(item_id: int, payload: dict[str, Any]) -> dict[str, Any]:
+    action = _clean(payload.get("action"))
+    if action not in {"alias", "create"}:
+        raise ValueError("action 必须是 alias 或 create")
+    with _connect() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                "SELECT * FROM catfood_formula_ingredient_item WHERE item_id=%s FOR UPDATE",
+                (int(item_id),),
+            )
+            item = cursor.fetchone()
+            if not item:
+                raise KeyError(f"原料项不存在: {item_id}")
+            if action == "alias":
+                standard_id = _clean(payload.get("standard_ingredient_id"))
+                cursor.execute(
+                    "SELECT * FROM catfood_standard_ingredient WHERE standard_ingredient_id=%s AND active=1",
+                    (standard_id,),
+                )
+                standard = cursor.fetchone()
+                if not standard:
+                    raise ValueError("请选择有效的标准原料")
+            else:
+                standard_name = _clean(payload.get("standard_name") or item["raw_name"])
+                if not standard_name:
+                    raise ValueError("标准原料名不能为空")
+                ingredient_family = _clean(payload.get("ingredient_family"))
+                source_type = _clean(payload.get("source_type"))
+                animal_source = _clean(payload.get("animal_source"))
+                nutrition_role = _clean(payload.get("primary_nutrition_role"))
+                cursor.execute(
+                    """SELECT DISTINCT ingredient_family,source_type,animal_source,primary_nutrition_role
+                       FROM catfood_standard_ingredient WHERE active=1"""
+                )
+                enum_rows = cursor.fetchall()
+                allowed_families = {row["ingredient_family"] for row in enum_rows if row["ingredient_family"]}
+                allowed_sources = {row["source_type"] for row in enum_rows if row["source_type"]}
+                allowed_animals = {row["animal_source"] for row in enum_rows if row["animal_source"]}
+                allowed_roles = {row["primary_nutrition_role"] for row in enum_rows if row["primary_nutrition_role"]}
+                if ingredient_family not in allowed_families:
+                    raise ValueError("请选择已有原料族枚举")
+                if source_type not in allowed_sources:
+                    raise ValueError("请选择已有来源类型枚举")
+                if nutrition_role not in allowed_roles:
+                    raise ValueError("请选择已有营养角色枚举")
+                if animal_source and animal_source not in allowed_animals:
+                    raise ValueError("请选择已有动物来源枚举")
+                cursor.execute("SELECT standard_ingredient_id FROM catfood_standard_ingredient WHERE standard_name=%s", (standard_name,))
+                existing = cursor.fetchone()
+                if existing:
+                    raise ValueError("标准原料已存在，请使用添加别名")
+                cursor.execute("SELECT MAX(CAST(SUBSTRING(standard_ingredient_id, 4) AS UNSIGNED)) AS max_id FROM catfood_standard_ingredient")
+                standard_id = f"STD{int(cursor.fetchone()['max_id'] or 0) + 1:05d}"
+                cursor.execute(
+                    """INSERT INTO catfood_standard_ingredient
+                       (standard_ingredient_id,standard_name,ingredient_family,source_type,animal_source,primary_nutrition_role,active)
+                       VALUES(%s,%s,%s,%s,%s,%s,1)""",
+                    (standard_id, standard_name, ingredient_family, source_type, animal_source or None, nutrition_role),
+                )
+                cursor.execute("SELECT * FROM catfood_standard_ingredient WHERE standard_ingredient_id=%s", (standard_id,))
+                standard = cursor.fetchone()
+            cursor.execute("SELECT alias_names FROM catfood_standard_ingredient_alias WHERE standard_ingredient_id=%s FOR UPDATE", (standard_id,))
+            alias_row = cursor.fetchone()
+            aliases = [x.strip() for x in re.split(r"[,，、]", (alias_row or {}).get("alias_names") or "") if x.strip()]
+            for alias in (standard["standard_name"], item["raw_name"]):
+                if alias not in aliases:
+                    aliases.append(alias)
+            cursor.execute(
+                """INSERT INTO catfood_standard_ingredient_alias(standard_ingredient_id,standard_name,alias_names)
+                   VALUES(%s,%s,%s) ON DUPLICATE KEY UPDATE standard_name=VALUES(standard_name),alias_names=VALUES(alias_names),updated_at=NOW()""",
+                (standard_id, standard["standard_name"], "、".join(aliases)),
+            )
+            cursor.execute(
+                """UPDATE catfood_standard_ingredient_candidate SET suggested_standard_ingredient_id=%s,
+                   suggested_standard_name=%s,status='approved',reviewer=%s,review_note=%s,reviewed_at=NOW()
+                   WHERE normalized_raw_name=%s AND status='pending'""",
+                (standard_id, standard["standard_name"], _clean(payload.get("reviewer")) or None,
+                 _clean(payload.get("review_note")) or None, item["raw_name"]),
+            )
+            cursor.execute(
+                """UPDATE catfood_formula_ingredient_item SET standard_ingredient_id=%s,standard_name=%s,
+                   ingredient_family=%s,source_type=%s,animal_source=%s,primary_nutrition_role=%s,
+                   match_method='manual_review',confidence=1,match_status='matched',review_status='approved',
+                   issue_severity=NULL,reviewer=%s,reviewed_at=NOW() WHERE item_id=%s""",
+                (standard_id, standard["standard_name"], standard["ingredient_family"], standard["source_type"],
+                 standard["animal_source"], standard["primary_nutrition_role"], _clean(payload.get("reviewer")) or None, int(item_id)),
+            )
+        conn.commit()
+    return {"ok": True, "item_id": int(item_id), "formula_id": int(item["formula_id"]),
+            "standard_ingredient_id": standard_id, "standard_name": standard["standard_name"]}
+
+
 def review_brand_candidate(
     candidate_id: int,
     payload: dict[str, Any],
@@ -756,6 +932,11 @@ def review_brand_candidate(
             raw_name = candidate["raw_brand_name"]
             raw_normalized = normalize_name(raw_name)
             cursor.execute(
+                f"SELECT source_id FROM `{MAPPING_TABLE}` WHERE raw_brand_name = %s",
+                (raw_name,),
+            )
+            affected_source_ids = [int(item["source_id"]) for item in cursor.fetchall()]
+            cursor.execute(
                 f"""
                 INSERT INTO `{BRAND_ALIAS_TABLE}`(
                   brand_id, alias_name, normalized_alias, source, active
@@ -823,6 +1004,7 @@ def review_brand_candidate(
         "brand_id": brand["brand_id"],
         "standard_brand_name": brand["standard_brand_name"],
         "merged_product_candidates": merged_product_candidates,
+        "source_ids": affected_source_ids,
     }
 
 
@@ -1261,17 +1443,16 @@ def standardize_brand(payload: dict[str, Any]) -> dict[str, Any]:
         parsed_row_id=_optional_int(payload.get("parsed_row_id")),
         file_sha256=_clean(payload.get("file_sha256")),
     )
-    candidates = [
-        _clean(row.get("raw_brand_name")),
-        _clean(payload.get("brand_name")),
-        _clean(row.get("raw_product_name")),
-        _clean(row.get("ocr_text"))[:800],
-    ]
+    ocr_brand_name = _clean(row.get("raw_brand_name"))
+    candidates = _brand_input_candidates(payload, row)
+    preferred_brand_name = candidates[0] if candidates else ocr_brand_name
+    mapping_row = dict(row)
+    mapping_row["raw_brand_name"] = preferred_brand_name
     exact_rows: dict[int, dict[str, Any]] = {}
     with _connect() as conn:
         with conn.cursor() as cursor:
-            _upsert_mapping_raw(cursor, row, _clean(payload.get("image_id")))
-            for candidate in candidates[:3]:
+            _upsert_mapping_raw(cursor, mapping_row, _clean(payload.get("image_id")))
+            for candidate in candidates:
                 normalized = normalize_name(candidate)
                 if not normalized:
                     continue
@@ -1302,7 +1483,9 @@ def standardize_brand(payload: dict[str, Any]) -> dict[str, Any]:
                         exact_rows[int(match["brand_id"])] = match
             status = "matched" if len(exact_rows) == 1 else "conflict" if exact_rows else "pending"
             match = next(iter(exact_rows.values())) if status == "matched" else None
-            confidence = 1.0 if match and normalize_name(row.get("raw_brand_name")) else 0.85 if match else None
+            confidence = 1.0 if match and normalize_name(preferred_brand_name) else 0.85 if match else None
+            if status != "matched" and preferred_brand_name:
+                _upsert_pending_brand_candidate(cursor, preferred_brand_name)
             cursor.execute(
                 f"""
                 UPDATE `{MAPPING_TABLE}`
@@ -1329,6 +1512,8 @@ def standardize_brand(payload: dict[str, Any]) -> dict[str, Any]:
     return {
         "ok": True,
         **row,
+        "raw_brand_name": preferred_brand_name,
+        "ocr_brand_name": ocr_brand_name,
         "brand_id": match["brand_id"] if match else None,
         "standard_brand_name": match["standard_brand_name"] if match else None,
         "brand_status": status,
@@ -1436,13 +1621,17 @@ def standardize_product(payload: dict[str, Any]) -> dict[str, Any]:
             auto_formula_matches = [
                 item for item in formula_candidates if item["auto_match"]
             ]
+            duplicate_formula_matches = [
+                item for item in formula_candidates
+                if item.get("formula_id") and item.get("fingerprint_exact")
+            ]
             auto_product_ids = {
                 int(item["product_id"]) for item in auto_formula_matches
             }
             match = None
             match_method = None
             confidence: float | None = None
-            if len(auto_product_ids) == 1:
+            if not duplicate_formula_matches and len(auto_product_ids) == 1:
                 matched_product_id = next(iter(auto_product_ids))
                 cursor.execute(
                     f"""
@@ -1479,7 +1668,7 @@ def standardize_product(payload: dict[str, Any]) -> dict[str, Any]:
                     )
 
             name_matches: list[dict[str, Any]] = []
-            if not match:
+            if not match and not duplicate_formula_matches:
                 cursor.execute(
                     f"""
                     SELECT p.*
@@ -1513,7 +1702,11 @@ def standardize_product(payload: dict[str, Any]) -> dict[str, Any]:
                     match_method = "name"
                     confidence = 1.0
 
-            if match:
+            if duplicate_formula_matches:
+                status = "conflict"
+                match = None
+                match_method = "duplicate_formula"
+            elif match:
                 status = "matched"
             elif len(auto_product_ids) > 1 or len(name_matches) > 1:
                 status = "conflict"
@@ -1576,6 +1769,8 @@ def standardize_product(payload: dict[str, Any]) -> dict[str, Any]:
         "product_match_method": match_method,
         "product_candidates": name_matches,
         "formula_product_candidates": formula_candidates,
+        "duplicate_formula_candidates": duplicate_formula_matches,
+        "reason": "发现相同配方指纹，请确认复用已有 formula" if duplicate_formula_matches else None,
         "review_candidate_id": candidate_product_id,
     }
     return result
@@ -1590,6 +1785,13 @@ INGREDIENT_SYNONYMS = {
     "鸡肉干": "鸡肉粉",
 }
 
+# OCR occasionally includes UI/promotional labels immediately before the first
+# ingredient. Keep this list deliberately narrow so real ingredient names are
+# not changed by fuzzy text cleanup.
+INGREDIENT_OCR_PREFIX_NOISE = (
+    "直播讲解",
+)
+
 
 def normalize_ingredients(value: Any) -> tuple[str, list[str], str]:
     text = _clean(value)
@@ -1600,6 +1802,10 @@ def normalize_ingredients(value: Any) -> tuple[str, list[str], str]:
         item = re.sub(r"\([^)]*\)|（[^）]*）", "", part)
         item = re.sub(r"\d+(?:\.\d+)?\s*%", "", item)
         item = _clean(item).strip(" :：")
+        for prefix in INGREDIENT_OCR_PREFIX_NOISE:
+            if item.startswith(prefix):
+                item = item[len(prefix):].lstrip(" :：")
+                break
         if not item or len(item) > 80:
             continue
         item = INGREDIENT_SYNONYMS.get(item, item)
@@ -1705,6 +1911,18 @@ def _load_nutrition_signature(cursor, source_id: int) -> dict[str, dict[str, Any
     return signature
 
 
+def _link_guarantees_to_formula(cursor, *, source_id: int, formula_id: int) -> int:
+    """Attach OCR-first guarantee rows after formula identity is confirmed."""
+    cursor.execute("SHOW TABLES LIKE 'product_guarantee'")
+    if not cursor.fetchone():
+        return 0
+    cursor.execute(
+        "UPDATE product_guarantee SET formula_id=%s WHERE source_id=%s",
+        (int(formula_id), int(source_id)),
+    )
+    return int(cursor.rowcount)
+
+
 def nutrition_similarity(
     left: dict[str, dict[str, Any]],
     right: dict[str, dict[str, Any]],
@@ -1773,15 +1991,15 @@ def _find_formula_product_matches(
         return []
     cursor.execute(
         f"""
-        SELECT f.*, p.brand_id, p.standard_product_name, p.display_name
+        SELECT f.*, p.brand_id, p.standard_product_name, p.display_name,
+               b.standard_brand_name
         FROM `{FORMULA_TABLE}` f
         JOIN `{PRODUCT_TABLE}` p ON p.product_id = f.product_id
-        WHERE p.brand_id = %s
-          AND p.active = 1
+        JOIN `{BRAND_TABLE}` b ON b.brand_id = p.brand_id
+        WHERE p.active = 1
           AND f.status = 'active'
         ORDER BY f.product_id, f.formula_version DESC
         """,
-        (brand_id,),
     )
     candidates = []
     products_with_formulas: set[int] = set()
@@ -1813,6 +2031,9 @@ def _find_formula_product_matches(
                 "formula_version": int(formula["formula_version"]),
                 "standard_product_name": formula["standard_product_name"],
                 "display_name": formula["display_name"],
+                "brand_id": int(formula["brand_id"]),
+                "standard_brand_name": formula["standard_brand_name"],
+                "cross_brand": int(formula["brand_id"]) != int(brand_id),
                 "fingerprint_exact": fingerprint_exact,
                 "ingredient_evidence": ingredient_evidence,
                 "nutrition_evidence": nutrition_evidence,
@@ -2110,6 +2331,12 @@ def standardize_formula(payload: dict[str, Any]) -> dict[str, Any]:
                     source_id,
                 ),
             )
+            if match:
+                _link_guarantees_to_formula(
+                    cursor,
+                    source_id=source_id,
+                    formula_id=int(match["formula_id"]),
+                )
         conn.commit()
     result = {
         "ok": True,
@@ -2223,6 +2450,11 @@ def resolve_formula_mapping(payload: dict[str, Any]) -> dict[str, Any]:
                     source_id,
                 ),
             )
+            _link_guarantees_to_formula(
+                cursor,
+                source_id=source_id,
+                formula_id=int(formula["formula_id"]),
+            )
         conn.commit()
     result = {
         "ok": True,
@@ -2238,6 +2470,38 @@ def resolve_formula_mapping(payload: dict[str, Any]) -> dict[str, Any]:
         apply=True,
     )
     return result
+
+
+def resolve_duplicate_formula_mapping(payload: dict[str, Any]) -> dict[str, Any]:
+    """Confirm that one OCR source reuses an existing globally identical formula."""
+    init_standardization_db()
+    source_id = _required_int(payload.get("source_id"), "source_id")
+    formula_id = _required_int(payload.get("formula_id"), "formula_id")
+    with _connect() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(f"SELECT * FROM `{MAPPING_TABLE}` WHERE source_id=%s FOR UPDATE", (source_id,))
+            mapping = cursor.fetchone()
+            if not mapping:
+                raise ValueError("标准化映射不存在")
+            _, ingredients, fingerprint = normalize_ingredients(mapping.get("raw_ingredient_composition"))
+            cursor.execute(f"SELECT * FROM `{FORMULA_TABLE}` WHERE formula_id=%s AND status='active'", (formula_id,))
+            formula = cursor.fetchone()
+            if not formula or not ingredients or formula.get("ingredient_fingerprint") != fingerprint:
+                raise ValueError("所选 formula 与当前原料指纹不一致")
+            cursor.execute(
+                f"""UPDATE `{MAPPING_TABLE}` SET formula_id=%s,formula_status='matched',
+                    formula_confidence=1,overall_status='matched',reviewer=%s,review_note=%s,
+                    reviewed_at=NOW(),match_evidence_json=JSON_SET(COALESCE(match_evidence_json,JSON_OBJECT()),
+                    '$.duplicate_formula_confirmed',true,'$.reused_formula_id',%s)
+                    WHERE source_id=%s""",
+                (formula_id, _clean(payload.get("reviewer")) or None,
+                 _clean(payload.get("review_note")) or "确认复用全局相同配方", formula_id, source_id),
+            )
+            _link_guarantees_to_formula(cursor, source_id=source_id, formula_id=formula_id)
+        conn.commit()
+    return {"ok": True, "source_id": source_id, "formula_id": formula_id,
+            "formula_status": "matched", "duplicate_formula": True,
+            "pipeline_complete": True}
 
 
 def get_standard_mapping(source_id: int) -> dict[str, Any] | None:
@@ -2283,6 +2547,30 @@ def list_standard_brands(*, query: str = "", limit: int = 300) -> list[dict[str,
                 ORDER BY standard_brand_name
                 LIMIT %s
                 """,
+                params,
+            )
+            return cursor.fetchall()
+
+
+def list_standard_products(*, brand_id: int | None = None, query: str = "", limit: int = 1000) -> list[dict[str, Any]]:
+    init_standardization_db()
+    where = ["p.active=1", "b.active=1"]
+    params: list[Any] = []
+    if brand_id is not None:
+        where.append("p.brand_id=%s")
+        params.append(int(brand_id))
+    if _clean(query):
+        where.append("(p.standard_product_name LIKE %s OR p.display_name LIKE %s)")
+        params.extend([f"%{_clean(query)}%", f"%{_clean(query)}%"])
+    params.append(max(1, min(int(limit), 2000)))
+    with _connect() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                f"""SELECT p.product_id,p.brand_id,b.standard_brand_name,
+                       p.standard_product_name,p.display_name
+                    FROM `{PRODUCT_TABLE}` p JOIN `{BRAND_TABLE}` b ON b.brand_id=p.brand_id
+                    WHERE {' AND '.join(where)}
+                    ORDER BY b.standard_brand_name,p.standard_product_name LIMIT %s""",
                 params,
             )
             return cursor.fetchall()

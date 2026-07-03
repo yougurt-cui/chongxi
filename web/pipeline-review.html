@@ -484,6 +484,7 @@
       <section class="tabs" aria-label="身份认证类型">
         <button id="brandIdentityTab" class="tab active" type="button">品牌身份</button>
         <button id="productIdentityTab" class="tab" type="button">产品身份</button>
+        <button id="ingredientIdentityTab" class="tab" type="button">原材料身份</button>
       </section>
 
       <div id="brandIdentityPanel">
@@ -590,6 +591,7 @@
                   <th>ID</th>
                   <th>图片名称</th>
                   <th>标准品牌</th>
+                  <th>认证类型</th>
                   <th>标准产品名</th>
                   <th>display_name</th>
                   <th>subtitle</th>
@@ -602,6 +604,18 @@
           </div>
           <div id="productIdentityEmpty" class="empty" style="display:none;">暂无产品候选。</div>
         </section>
+      </div>
+
+      <div id="ingredientIdentityPanel" hidden>
+        <section class="toolbar">
+          <div><div class="title">待确认原材料身份</div><div id="ingredientIdentitySummary" class="muted">等待加载...</div></div>
+          <div class="row-actions"><input id="ingredientFormulaFilter" class="cell-input" value="291" placeholder="formula_id" />
+          <button id="ingredientIdentityRefresh" class="button secondary" type="button">刷新原料候选</button></div>
+        </section>
+        <section class="card"><div class="table-wrap"><table style="min-width:1250px;"><thead><tr>
+          <th>配方</th><th>待确认原料</th><th>上下文</th><th>标准原料</th><th>原料族</th><th>来源类型</th><th>动物来源</th><th>营养角色</th><th>操作</th>
+        </tr></thead><tbody id="ingredientIdentityRows"></tbody></table></div>
+        <div id="ingredientIdentityEmpty" class="empty" style="display:none;">暂无待确认原料。</div></section>
       </div>
     </section>
 
@@ -670,6 +684,7 @@
 
     <datalist id="diseaseBrandOptions"></datalist>
     <datalist id="standardBrandOptions"></datalist>
+    <datalist id="standardIngredientOptions"></datalist>
     <datalist id="diseaseCategoryOptions"></datalist>
     <datalist id="diseaseSymptomOptions"></datalist>
 
@@ -729,12 +744,22 @@
     const identityRefreshBtn = document.getElementById("identityRefresh");
     const brandIdentityTab = document.getElementById("brandIdentityTab");
     const productIdentityTab = document.getElementById("productIdentityTab");
+    const ingredientIdentityTab = document.getElementById("ingredientIdentityTab");
     const brandIdentityPanel = document.getElementById("brandIdentityPanel");
     const brandCandidateRows = document.getElementById("brandCandidateRows");
     const brandCandidateEmpty = document.getElementById("brandCandidateEmpty");
     const brandCandidateSummary = document.getElementById("brandCandidateSummary");
     const brandCandidateRefresh = document.getElementById("brandCandidateRefresh");
     const productIdentityPanel = document.getElementById("productIdentityPanel");
+    const ingredientIdentityPanel = document.getElementById("ingredientIdentityPanel");
+    const ingredientIdentityRowsEl = document.getElementById("ingredientIdentityRows");
+    const ingredientIdentityEmptyEl = document.getElementById("ingredientIdentityEmpty");
+    const ingredientIdentitySummaryEl = document.getElementById("ingredientIdentitySummary");
+    const ingredientIdentityRefreshBtn = document.getElementById("ingredientIdentityRefresh");
+    const ingredientFormulaFilter = document.getElementById("ingredientFormulaFilter");
+    const standardIngredientOptions = document.getElementById("standardIngredientOptions");
+    let standardIngredients = [];
+    let ingredientMetaOptions = { families: [], sources: [], animals: [], roles: [] };
     const productIdentityRowsEl = document.getElementById("productIdentityRows");
     const productIdentityEmptyEl = document.getElementById("productIdentityEmpty");
     const productIdentitySummaryEl = document.getElementById("productIdentitySummary");
@@ -744,6 +769,7 @@
     const productBrandFilter = document.getElementById("productBrandFilter");
     const productApplyFilter = document.getElementById("productApplyFilter");
     const standardBrandOptions = document.getElementById("standardBrandOptions");
+    let standardProducts = [];
     const diseaseRowsEl = document.getElementById("diseaseRows");
     const diseaseEmptyEl = document.getElementById("diseaseEmpty");
     const diseaseSummaryEl = document.getElementById("diseaseSummary");
@@ -1026,7 +1052,7 @@
             }
             if (!window.confirm(`${action === "map" ? "映射" : action === "create" ? "创建" : "驳回"}品牌候选“${item.raw_brand_name}”？`)) return;
             await runAction(async () => {
-              await api(`/api/catfood/standardization/brand-candidates/${item.candidate_id}/${action}`, {
+              const result = await api(`/api/catfood/standardization/brand-candidates/${item.candidate_id}/${action}`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
@@ -1035,6 +1061,17 @@
                   reviewer: "pipeline-review-page",
                 }),
               });
+              for (const taskId of result.resumed_task_ids || []) {
+                await api("/api/orchestrator/dispatch-call-sync", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({
+                    limit: 1,
+                    task_id: taskId,
+                    node_codes: ["brand_standardize"],
+                  }),
+                });
+              }
               showToast("品牌候选已处理");
             });
           });
@@ -1069,13 +1106,21 @@
       productIdentityEmptyEl.style.display = items.length ? "none" : "block";
       items.forEach((item) => {
         const row = document.createElement("tr");
+        const suggestedMode = item.identity_mode_suggested || ((item.duplicate_formula_candidates || []).length ? "duplicate" : "new");
+        const duplicateProductIds = new Set((item.duplicate_formula_candidates || []).map((candidate) => String(candidate.product_id)));
+        const matchingProducts = suggestedMode === "duplicate" ? standardProducts.filter((product) => duplicateProductIds.has(String(product.product_id))) : [];
+        const productOptions = matchingProducts.map((product, index) =>
+          `<option value="${escapeHtml(product.product_id)}" ${index === 0 ? "selected" : ""}>${escapeHtml(product.standard_brand_name)}｜${escapeHtml(product.standard_product_name)}</option>`
+        ).join("");
         row.innerHTML = `
           <td>
             <div class="task-id">${escapeHtml(item.product_id)}</div>
           </td>
           <td class="image-name-cell">${escapeHtml((item.image_names || []).join("、") || "-")}</td>
           <td><input class="cell-input" data-field="standard_brand_name" list="standardBrandOptions" value="${escapeHtml(item.standard_brand_name || "")}" placeholder="选择标准品牌" /></td>
-          <td><input class="cell-input" data-field="standard_product_name" value="${escapeHtml(item.standard_product_name || "")}" /></td>
+          <td><span class="status ${suggestedMode === "duplicate" ? "need_review" : "success"}">${suggestedMode === "duplicate" ? "重复配方" : "新增产品"}</span><input type="hidden" data-field="identity_mode" value="${suggestedMode}" /></td>
+          <td><input class="cell-input" data-field="standard_product_name" value="${escapeHtml(item.standard_product_name || "")}" />
+              <select class="cell-input" data-field="standard_product_id" hidden><option value="">请选择标准库产品</option>${productOptions}</select></td>
           <td><input class="cell-input" data-field="display_name" value="${escapeHtml(item.display_name || "")}" placeholder="主展示名" /></td>
           <td><input class="cell-input" data-field="display_subtitle" value="${escapeHtml(item.display_subtitle || "")}" placeholder="副标题" /></td>
           <td>
@@ -1092,6 +1137,29 @@
           </td>
         `;
 
+        const modeEl = row.querySelector('[data-field="identity_mode"]');
+        const newNameEl = row.querySelector('[data-field="standard_product_name"]');
+        const standardProductEl = row.querySelector('[data-field="standard_product_id"]');
+        const brandEl = row.querySelector('[data-field="standard_brand_name"]');
+        const displayEl = row.querySelector('[data-field="display_name"]');
+        const syncIdentityMode = () => {
+          const duplicate = modeEl.value === "duplicate";
+          newNameEl.hidden = false;
+          standardProductEl.hidden = !duplicate;
+          row.dataset.identityMode = modeEl.value;
+        };
+        standardProductEl.addEventListener("change", () => {
+          const selected = standardProducts.find((product) => String(product.product_id) === standardProductEl.value);
+          if (!selected) return;
+          brandEl.value = selected.standard_brand_name || "";
+          newNameEl.value = selected.standard_product_name || "";
+          displayEl.value = selected.display_name || selected.standard_product_name || "";
+        });
+        syncIdentityMode();
+        if (suggestedMode === "duplicate" && matchingProducts.length) {
+          standardProductEl.dispatchEvent(new Event("change"));
+        }
+
         row.querySelector('[data-action="product-output"]').addEventListener("click", () => {
           outputDialogMeta.textContent = `product_id ${item.product_id}｜${item.standard_brand_name || "-"}`;
           outputJsonEl.textContent = safeJson(item);
@@ -1100,15 +1168,24 @@
 
         row.querySelector('[data-action="approve-product"]').addEventListener("click", async () => {
           const reviewContext = focusedProductReview?.productId === String(item.product_id) ? { ...focusedProductReview } : null;
+          const identityMode = modeEl.value;
+          const selectedProduct = standardProducts.find((product) => String(product.product_id) === standardProductEl.value);
+          if (identityMode === "duplicate" && !selectedProduct) {
+            showToast("重复配方必须从标准产品库选择", "error");
+            return;
+          }
           const payload = {
             standard_brand_name: row.querySelector('[data-field="standard_brand_name"]').value.trim(),
-            standard_product_name: row.querySelector('[data-field="standard_product_name"]').value.trim(),
-            display_name: row.querySelector('[data-field="display_name"]').value.trim(),
+            standard_product_name: newNameEl.value.trim(),
+            display_name: displayEl.value.trim(),
             display_subtitle: row.querySelector('[data-field="display_subtitle"]').value.trim(),
             candidate_type: item.candidate_type || "unknown",
             quality_level: row.querySelector('[data-field="quality_level"]').value,
             normalized_tags: item.normalized_tags || [],
             reviewer: "pipeline-review-page",
+            identity_mode: identityMode,
+            reuse_product_id: identityMode === "duplicate" ? selectedProduct.product_id : null,
+            sync_standard_product: identityMode === "duplicate",
           };
           if (!payload.standard_brand_name || !payload.standard_product_name || !payload.display_name) {
             showToast("标准品牌、标准产品名和 display_name 都需要填写", "error");
@@ -1116,13 +1193,31 @@
           }
           if (!window.confirm(`确认产品：${payload.standard_brand_name}｜${payload.display_name}？`)) return;
           await runAction(async () => {
-            await api(`/api/product-identity/product-reviews/${item.product_id}/approve`, {
+            const result = await api(`/api/product-identity/product-reviews/${item.product_id}/approve`, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify(payload),
             });
-            if (reviewContext) {
+            const resumedTaskIds = result.resumed_task_ids || [];
+            const completedTaskIds = result.completed_task_ids || [];
+            for (const taskId of resumedTaskIds) {
+              await api("/api/orchestrator/dispatch-call-sync", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  limit: 1,
+                  task_id: taskId,
+                  node_codes: ["product_standardize"],
+                }),
+              });
+            }
+            if (!resumedTaskIds.length && reviewContext) {
               await resumeProductStandardizeTask(reviewContext);
+            }
+            if (completedTaskIds.length) {
+              focusedProductReview = null;
+              showToast(`重复配方已复用，${completedTaskIds.length} 个任务已直接完结`);
+            } else if (resumedTaskIds.length || reviewContext) {
               focusedProductReview = null;
               productStatusFilter.value = "needs_manual_review,pending";
               showToast("产品候选已确认，编排任务已继续");
@@ -1305,6 +1400,8 @@
         if (activeTab === "identity") {
           if (activeIdentityTab === "product") {
             await loadProductIdentityItems();
+          } else if (activeIdentityTab === "ingredient") {
+            await loadIngredientIdentityItems();
           } else {
             await loadBrandCandidates();
             await loadIdentityItems();
@@ -1363,6 +1460,10 @@
       });
       if (focusedProductReview?.productId) params.set("product_id", focusedProductReview.productId);
       try {
+        if (!standardProducts.length) {
+          const products = await api("/api/catfood/standardization/products?limit=2000");
+          standardProducts = products.items || [];
+        }
         const data = await api(`/api/product-identity/product-reviews?${params.toString()}`);
         renderProductIdentityItems(data);
       } catch (error) {
@@ -1386,15 +1487,95 @@
       }
     }
 
+    async function loadStandardIngredientOptions() {
+      const data = await api("/api/catfood/standardization/ingredients?limit=2000");
+      standardIngredients = data.items || [];
+      const unique = (field) => [...new Set(standardIngredients.map((item) => item[field]).filter(Boolean))].sort();
+      ingredientMetaOptions = {
+        families: unique("ingredient_family"), sources: unique("source_type"),
+        animals: unique("animal_source"), roles: unique("primary_nutrition_role"),
+      };
+      standardIngredientOptions.innerHTML = standardIngredients.map((item) =>
+        `<option value="${escapeHtml(item.standard_name)}">${escapeHtml(item.standard_ingredient_id)}</option>`).join("");
+    }
+
+    function renderIngredientIdentityItems(items) {
+      ingredientIdentitySummaryEl.textContent = `待确认 ${items.length} 条`;
+      ingredientIdentityRowsEl.innerHTML = "";
+      ingredientIdentityEmptyEl.style.display = items.length ? "none" : "block";
+      items.forEach((item) => {
+        const row = document.createElement("tr");
+        const options = (values, placeholder) => `<option value="">${placeholder}</option>${values.map((value) => `<option value="${escapeHtml(value)}">${escapeHtml(value)}</option>`).join("")}`;
+        row.innerHTML = `<td>${escapeHtml(item.formula_id)}</td><td><strong>${escapeHtml(item.raw_name)}</strong></td>
+          <td class="payload-cell">${escapeHtml(item.context || "-")}</td>
+          <td><input class="cell-input" data-field="standard_name" list="standardIngredientOptions" value="${escapeHtml(item.suggested_standard_name || "")}" placeholder="选择已有或输入新标准名" /></td>
+          <td><select class="cell-input" data-field="ingredient_family">${options(ingredientMetaOptions.families, "选择原料族")}</select></td>
+          <td><select class="cell-input" data-field="source_type">${options(ingredientMetaOptions.sources, "选择来源类型")}</select></td>
+          <td><select class="cell-input" data-field="animal_source">${options(ingredientMetaOptions.animals, "无/选择动物来源")}</select></td>
+          <td><select class="cell-input" data-field="primary_nutrition_role">${options(ingredientMetaOptions.roles, "选择营养角色")}</select></td>
+          <td><div class="row-actions"><button class="small-button" data-action="alias" type="button">添加原料别名</button><button class="small-button secondary" data-action="create" type="button">添加标准原料</button></div></td>`;
+        const standardNameInput = row.querySelector('[data-field="standard_name"]');
+        const metadataFields = ["ingredient_family", "source_type", "animal_source", "primary_nutrition_role"];
+        const syncStandardMetadata = () => {
+          const selected = standardIngredients.find((entry) => entry.standard_name === standardNameInput.value.trim());
+          metadataFields.forEach((field) => {
+            const control = row.querySelector(`[data-field="${field}"]`);
+            control.value = selected?.[field] || "";
+            control.disabled = Boolean(selected);
+          });
+        };
+        standardNameInput.addEventListener("input", syncStandardMetadata);
+        standardNameInput.addEventListener("change", syncStandardMetadata);
+        syncStandardMetadata();
+        ["alias", "create"].forEach((action) => row.querySelector(`[data-action="${action}"]`).addEventListener("click", async () => {
+          const standardName = row.querySelector('[data-field="standard_name"]').value.trim();
+          const standard = standardIngredients.find((entry) => entry.standard_name === standardName);
+          if (!standardName || (action === "alias" && !standard)) {
+            showToast(action === "alias" ? "请选择已有标准原料" : "标准原料名不能为空", "error"); return;
+          }
+          if (!window.confirm(`${action === "alias" ? "把该名称添加为原料别名" : "创建标准原料"}：${standardName}？`)) return;
+          await runAction(async () => {
+            const result = await api(`/api/catfood/standardization/ingredient-reviews/${item.item_id}/resolve`, {
+              method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify({
+                action, standard_ingredient_id: standard?.standard_ingredient_id, standard_name: standardName,
+                ingredient_family: row.querySelector('[data-field="ingredient_family"]').value.trim(),
+                source_type: row.querySelector('[data-field="source_type"]').value,
+                animal_source: row.querySelector('[data-field="animal_source"]').value.trim(),
+                primary_nutrition_role: row.querySelector('[data-field="primary_nutrition_role"]').value.trim(), reviewer: "pipeline-review-page"
+              })
+            });
+            for (const taskId of result.resumed_task_ids || []) await api("/api/orchestrator/dispatch-call-sync", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({limit:1,task_id:taskId,node_codes:["ingredient_extract"]})});
+            showToast("原料身份已确认，Profile 正在重新生成");
+          });
+        }));
+        ingredientIdentityRowsEl.appendChild(row);
+      });
+    }
+
+    async function loadIngredientIdentityItems() {
+      ingredientIdentityRefreshBtn.disabled = true;
+      try {
+        if (!standardIngredients.length) await loadStandardIngredientOptions();
+        const formulaId = ingredientFormulaFilter.value.trim();
+        const data = await api(`/api/catfood/standardization/ingredient-reviews?limit=200${formulaId ? `&formula_id=${encodeURIComponent(formulaId)}` : ""}`);
+        renderIngredientIdentityItems(data.items || []);
+      } catch (error) { showToast(error instanceof Error ? error.message : "原料候选加载失败", "error"); }
+      finally { ingredientIdentityRefreshBtn.disabled = false; }
+    }
+
     function switchIdentityTab(tab) {
       activeIdentityTab = tab;
       brandIdentityTab.classList.toggle("active", tab === "brand");
       productIdentityTab.classList.toggle("active", tab === "product");
+      ingredientIdentityTab.classList.toggle("active", tab === "ingredient");
       brandIdentityPanel.hidden = tab !== "brand";
       productIdentityPanel.hidden = tab !== "product";
+      ingredientIdentityPanel.hidden = tab !== "ingredient";
       if (tab === "product") {
         if (!standardBrandOptions.children.length) loadStandardBrandOptions();
         loadProductIdentityItems();
+      } else if (tab === "ingredient") {
+        loadIngredientIdentityItems();
       } else if (!identityRowsEl.children.length) {
         loadBrandCandidates();
         loadIdentityItems();
@@ -1552,7 +1733,10 @@
       if (tab === "identity" && !identityRowsEl.children.length) {
         if (activeIdentityTab === "product") {
           loadProductIdentityItems();
+        } else if (activeIdentityTab === "ingredient") {
+          loadIngredientIdentityItems();
         } else {
+          loadBrandCandidates();
           loadIdentityItems();
         }
       }
@@ -1597,6 +1781,9 @@
     });
     brandIdentityTab.addEventListener("click", () => switchIdentityTab("brand"));
     productIdentityTab.addEventListener("click", () => switchIdentityTab("product"));
+    ingredientIdentityTab.addEventListener("click", () => switchIdentityTab("ingredient"));
+    ingredientIdentityRefreshBtn.addEventListener("click", loadIngredientIdentityItems);
+    ingredientFormulaFilter.addEventListener("keydown", (event) => { if (event.key === "Enter") loadIngredientIdentityItems(); });
     diseaseRefreshBtn.addEventListener("click", loadDiseaseItems);
     diseaseBulkApproveBtn.addEventListener("click", bulkApproveDisease);
     diseaseBulkRejectBtn.addEventListener("click", bulkRejectDisease);

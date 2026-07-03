@@ -221,7 +221,7 @@ class ProteinStandardizationPipelineTest(unittest.TestCase):
         self.assertEqual(target["secondary_protein_form_score"], 1.0)
         self.assertEqual(target["plant_protein_interference_norm"], "2级｜单一高浓缩型植物蛋白")
         self.assertEqual(target["plant_protein_interference_score"], 0.5)
-        self.assertEqual(target["protein_structure_score"], 0.857)
+        self.assertEqual(target["protein_structure_score"], 0.754)
         self.assertEqual(target["protein_quality_score"], 0.825)
 
     def test_item_feature_tags_include_fat_fiber_and_starch_domains(self):

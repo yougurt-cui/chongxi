@@ -60,6 +60,13 @@ INGREDIENT_STANDARDIZE_POSITIVE_FIELDS = (
 )
 
 INGREDIENT_STANDARDIZE_ZERO_ALLOWED_FIELDS = {
+    "protein_structure_score",
+    "protein_quality_score",
+    "fat_oily_score",
+    "fat_regulation_score",
+    "fat_score",
+    "omega_imbalance_score",
+    "fat_mix_complexity_score",
     "p_form_score",
     "p_bulk_score",
     "p_buffer",
@@ -67,6 +74,7 @@ INGREDIENT_STANDARDIZE_ZERO_ALLOWED_FIELDS = {
     "q_feed",
     "q_scfa",
     "q_total_score",
+    "starch_burden_score",
 }
 
 FORMULA_PROFILE_REQUIRED_FIELDS = (
@@ -93,6 +101,22 @@ NUTRITION_PATTERNS = (
     re.compile(r"粗?纤维[^0-9０-９]{0,12}[0-9０-９]+(?:[.．][0-9０-９]+)?\s*%?"),
     re.compile(r"水分[^0-9０-９]{0,12}[0-9０-９]+(?:[.．][0-9０-９]+)?\s*%?"),
 )
+
+INGREDIENT_PERCENT_PATTERN = re.compile(
+    r"[^,，、;；:\s]{1,24}\s*[0-9０-９]+(?:[.．][0-9０-９]+)?\s*%"
+)
+
+
+def _has_ingredient_list_evidence(text: str) -> bool:
+    """Return whether OCR text looks like a concrete ingredient list.
+
+    Headings such as ``配料`` are useful but are frequently cropped out.  A list
+    with several delimited items and multiple percentages is stronger evidence
+    than the heading itself.
+    """
+    items = [item.strip() for item in re.split(r"[,，、;；\n]+", text) if item.strip()]
+    percentage_items = INGREDIENT_PERCENT_PATTERN.findall(text)
+    return len(items) >= 3 and len(percentage_items) >= 2
 
 
 @dataclass(frozen=True)
@@ -350,13 +374,14 @@ def _check_ocr_formula(output: dict[str, Any]) -> CheckResult:
     if not ocr_text:
         return CheckResult(False, NODE_FAILED, "ocr_text 为空")
 
+    nutrition_values = output.get("nutrition_values") or output.get("guarantee_values")
+    has_structured_nutrition = isinstance(nutrition_values, dict) and any(_is_non_empty(value) for value in nutrition_values.values())
     keyword_hits = [keyword for keyword in OCR_KEYWORDS if keyword in ocr_text]
-    if not keyword_hits:
+    has_ingredient_list = _has_ingredient_list_evidence(ocr_text)
+    if not keyword_hits and not has_ingredient_list and not has_structured_nutrition:
         return CheckResult(False, NODE_NEED_REVIEW, "OCR 初步文本未命中配料/营养关键词")
 
     nutrition_count = _nutrition_match_count(ocr_text)
-    nutrition_values = output.get("nutrition_values") or output.get("guarantee_values")
-    has_structured_nutrition = isinstance(nutrition_values, dict) and any(_is_non_empty(value) for value in nutrition_values.values())
 
     effective_ratio = _effective_text_ratio(ocr_text)
     if effective_ratio < 0.55:
@@ -1840,12 +1865,18 @@ def apply_manual_ocr_text(task_id: str, ocr_text: str, reviewer: str | None = No
     text = str(ocr_text or "").strip()
     if not text:
         raise ValueError("OCR 文本不能为空")
-    output = {
+    task = get_task(task_id)
+    if not task:
+        raise ValueError(f"task_id 不存在: {task_id}")
+    # Manual review edits only the OCR text. Preserve structured nutrition,
+    # source identifiers and other ingestion metadata from the original result.
+    output = dict(_output_for(task, "ocr_formula"))
+    output.update({
         "ocr_text": text,
         "manual_review": True,
         "reviewer": reviewer,
         "reviewed_at": utc_now(),
-    }
+    })
     return apply_node_result(task_id, "ocr_formula", call_status="success", output=output)
 
 
@@ -1890,11 +1921,123 @@ def reset_node_for_reextract(task_id: str, node_code: str, reason: str | None = 
                 task_id,
                 reset_code,
                 NODE_READY if reset_code == node_code and ready else NODE_PENDING,
-                reason or "人工触发重新抽取",
+                (reason or "人工触发重新抽取") if reset_code == node_code else None,
             )
         _set_task_status(conn, task_id, TASK_PROCESSING, None)
         conn.commit()
     return get_task(task_id) or {"id": task_id}
+
+
+def complete_duplicate_formula_tasks(source_ids: list[int]) -> list[str]:
+    """Finish image-analysis tasks whose source was confirmed as an existing formula."""
+    normalized = sorted({int(value) for value in source_ids})
+    if not normalized:
+        return []
+    placeholders = ",".join(["%s"] * len(normalized))
+    now = utc_now()
+    with _connect() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                f"""SELECT DISTINCT task_id FROM pipeline_node_output
+                    WHERE node_code='ocr_formula' AND CAST(JSON_UNQUOTE(JSON_EXTRACT(output_json,'$.source_id')) AS UNSIGNED)
+                    IN ({placeholders})""",
+                normalized,
+            )
+            task_ids = [row["task_id"] for row in cursor.fetchall()]
+            for task_id in task_ids:
+                cursor.execute(
+                    """UPDATE pipeline_task_node SET node_status='skipped',
+                       error_message='重复配方已确认复用，后续无需重复物化',finished_at=%s,updated_at=%s
+                       WHERE task_id=%s AND node_code IN ('formula_standardize','formula_input_build',
+                       'ingredient_extract','ingredient_standardize','formula_profile')""",
+                    (now, now, task_id),
+                )
+                cursor.execute(
+                    """UPDATE pipeline_task_node SET node_status='success',error_message=NULL,
+                       finished_at=%s,updated_at=%s WHERE task_id=%s AND node_code='product_standardize'""",
+                    (now, now, task_id),
+                )
+                cursor.execute(
+                    "UPDATE pipeline_task SET task_status='success',error_message=NULL,finished_at=%s,updated_at=%s WHERE id=%s",
+                    (now, now, task_id),
+                )
+        conn.commit()
+    return task_ids
+
+
+def resume_brand_tasks_for_source_ids(source_ids: list[int]) -> list[str]:
+    """Reset brand-review nodes linked to approved OCR source records."""
+    normalized_ids = sorted({int(item) for item in source_ids if item is not None})
+    if not normalized_ids:
+        return []
+    placeholders = ", ".join(["%s"] * len(normalized_ids))
+    with _connect() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                f"""
+                SELECT DISTINCT o.task_id
+                FROM pipeline_node_output o
+                JOIN pipeline_task_node n
+                  ON n.task_id = o.task_id AND n.node_code = 'brand_standardize'
+                WHERE o.node_code = 'brand_standardize'
+                  AND n.node_status = %s
+                  AND CAST(JSON_UNQUOTE(JSON_EXTRACT(o.output_json, '$.source_id')) AS UNSIGNED)
+                      IN ({placeholders})
+                """,
+                (NODE_NEED_REVIEW, *normalized_ids),
+            )
+            task_ids = [str(row["task_id"]) for row in cursor.fetchall()]
+    for task_id in task_ids:
+        reset_node_for_reextract(task_id, "brand_standardize", "品牌人工确认后继续标准化")
+    return task_ids
+
+
+def resume_product_tasks_for_source_ids(source_ids: list[int]) -> list[str]:
+    """Reset product-review nodes linked to approved OCR source records."""
+    normalized_ids = sorted({int(item) for item in source_ids if item is not None})
+    if not normalized_ids:
+        return []
+    placeholders = ", ".join(["%s"] * len(normalized_ids))
+    with _connect() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                f"""
+                SELECT DISTINCT o.task_id
+                FROM pipeline_node_output o
+                JOIN pipeline_task_node n
+                  ON n.task_id = o.task_id AND n.node_code = 'product_standardize'
+                WHERE o.node_code = 'product_standardize'
+                  AND n.node_status = %s
+                  AND CAST(JSON_UNQUOTE(JSON_EXTRACT(o.output_json, '$.source_id')) AS UNSIGNED)
+                      IN ({placeholders})
+                """,
+                (NODE_NEED_REVIEW, *normalized_ids),
+            )
+            task_ids = [str(row["task_id"]) for row in cursor.fetchall()]
+    for task_id in task_ids:
+        reset_node_for_reextract(task_id, "product_standardize", "产品人工确认后继续标准化")
+    return task_ids
+
+
+def resume_ingredient_tasks_for_formula_ids(formula_ids: list[int]) -> list[str]:
+    normalized_ids = sorted({int(item) for item in formula_ids if item is not None})
+    if not normalized_ids:
+        return []
+    placeholders = ", ".join(["%s"] * len(normalized_ids))
+    with _connect() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                f"""SELECT DISTINCT o.task_id FROM pipeline_node_output o
+                JOIN pipeline_task_node n ON n.task_id=o.task_id AND n.node_code='ingredient_extract'
+                WHERE o.node_code IN ('formula_standardize','formula_input_build','ingredient_extract')
+                  AND n.node_status IN (%s,%s)
+                  AND CAST(JSON_UNQUOTE(JSON_EXTRACT(o.output_json,'$.formula_id')) AS UNSIGNED) IN ({placeholders})""",
+                (NODE_NEED_REVIEW, NODE_FAILED, *normalized_ids),
+            )
+            task_ids = [str(row["task_id"]) for row in cursor.fetchall()]
+    for task_id in task_ids:
+        reset_node_for_reextract(task_id, "ingredient_extract", "原料人工确认后重新生成 Profile")
+    return task_ids
 
 
 def _api_route_from_override(value: Any) -> ApiRoute | None:

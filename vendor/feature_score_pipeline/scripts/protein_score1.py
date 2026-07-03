@@ -84,13 +84,14 @@ SCORED_OUTPUT_COLUMNS = [
 
 # 2.1 肉源复杂度分
 # 越高表示肉源越复杂、结构越重
+MEAT_SOURCE_COMPLEXITY_LEVELS = {
+    "单一肉源": 1, "单一来源": 1, "同类双源": 2,
+    "同类多源": 3, "跨类双源": 4, "跨类多源": 5,
+}
+MEAT_SOURCE_COMPLEXITY_LEVEL_SCORES = {1: 1.0, 2: 2.0, 3: 3.0, 4: 4.0, 5: 5.0}
 MEAT_SOURCE_COMPLEXITY_MAP = {
-    "单一肉源": 1.0,
-    "单一来源": 1.0,
-    "同类双源": 2.0,
-    "同类多源": 3.0,
-    "跨类双源": 4.0,
-    "跨类多源": 5.0,
+    label: MEAT_SOURCE_COMPLEXITY_LEVEL_SCORES[level]
+    for label, level in MEAT_SOURCE_COMPLEXITY_LEVELS.items()
 }
 
 COMPLEXITY_LEVEL_SCORE_MAP = {
@@ -103,33 +104,38 @@ COMPLEXITY_LEVEL_SCORE_MAP = {
 
 # 2.2 主要蛋白形式分
 # 越高表示形式越偏“重结构”
+MAIN_PROTEIN_FORM_LEVELS = {
+    "水解蛋白为主": 1, "鲜肉为主": 2, "鲜肉/冻肉为主": 3,
+    "冻肉为主": 4, "肉粉为主": 5,
+}
+MAIN_PROTEIN_FORM_LEVEL_SCORES = {1: 0.5, 2: 1.0, 3: 1.25, 4: 1.5, 5: 2.0}
 MAIN_PROTEIN_FORM_MAP = {
-    "鲜肉为主": 1.0,
-    "冻肉为主": 1.5,
-    "鲜肉/冻肉为主": 1.25,
-    "肉粉为主": 2.0,
-    # 水解蛋白不在这里作为负担加分
-    "水解蛋白为主": 0.5,
+    label: MAIN_PROTEIN_FORM_LEVEL_SCORES[level]
+    for label, level in MAIN_PROTEIN_FORM_LEVELS.items()
 }
 
 # 2.3 次要蛋白形式分
 # 水解蛋白不再抬高总分，保持低值
+SECONDARY_PROTEIN_FORM_LEVELS = {
+    "无": 1, "水解蛋白": 1, "鲜肉": 2, "冻肉": 2,
+    "鲜肉/冻肉": 2, "肉粉": 3,
+}
+SECONDARY_PROTEIN_FORM_LEVEL_SCORES = {1: 0.0, 2: 0.5, 3: 1.0}
 SECONDARY_PROTEIN_FORM_MAP = {
-    "无": 0.0,
-    "鲜肉": 0.5,
-    "冻肉": 0.5,
-    "鲜肉/冻肉": 0.5,
-    "肉粉": 1.0,
-    "水解蛋白": 0.0,
+    label: SECONDARY_PROTEIN_FORM_LEVEL_SCORES[level]
+    for label, level in SECONDARY_PROTEIN_FORM_LEVELS.items()
 }
 
 # 2.4 植物蛋白干扰分
+PLANT_PROTEIN_INTERFERENCE_LEVELS = {
+    "无植物蛋白": 1, "1级｜单一温和型植物蛋白": 2,
+    "2级｜单一高浓缩型植物蛋白": 3, "3级｜多源植物蛋白补强型": 4,
+    "4级｜豆类主导混合型植物蛋白": 5,
+}
+PLANT_PROTEIN_INTERFERENCE_LEVEL_SCORES = {1: 0.0, 2: 0.25, 3: 0.5, 4: 0.75, 5: 1.0}
 PLANT_PROTEIN_INTERFERENCE_MAP = {
-    "无植物蛋白": 0.0,
-    "1级｜单一温和型植物蛋白": 0.25,
-    "2级｜单一高浓缩型植物蛋白": 0.5,
-    "3级｜多源植物蛋白补强型": 0.75,
-    "4级｜豆类主导混合型植物蛋白": 1.0,
+    label: PLANT_PROTEIN_INTERFERENCE_LEVEL_SCORES[level]
+    for label, level in PLANT_PROTEIN_INTERFERENCE_LEVELS.items()
 }
 
 CONCENTRATED_PLANT_PROTEIN_TERMS = [
@@ -145,10 +151,11 @@ CONCENTRATED_PLANT_PROTEIN_TERMS = [
 
 # 2.5 水解蛋白缓释分（减分项）
 # 越高表示越温和，对“配方负载分”有下拉作用
+HYDROLYZED_PROTEIN_RELIEF_LEVELS = {"无": 1, "次要出现": 2, "主要出现": 3}
+HYDROLYZED_PROTEIN_RELIEF_LEVEL_SCORES = {1: 0.0, 2: 0.5, 3: 1.0}
 HYDROLYZED_PROTEIN_RELIEF_MAP = {
-    "无": 0.0,
-    "次要出现": 0.5,
-    "主要出现": 1.0,
+    label: HYDROLYZED_PROTEIN_RELIEF_LEVEL_SCORES[level]
+    for label, level in HYDROLYZED_PROTEIN_RELIEF_LEVELS.items()
 }
 
 PROTEIN_QUALITY_WEIGHTS = {
@@ -163,6 +170,19 @@ PROTEIN_PRESSURE_WEIGHTS = {
     component: 1.0 / len(PROTEIN_STRUCTURE_COMPONENT_SCORE_COLS)
     for component in PROTEIN_STRUCTURE_COMPONENT_SCORE_COLS
 }
+
+# Fixed domains make single-formula incremental scoring comparable with batch runs.
+# Values outside a domain are clipped instead of changing every other product's score.
+PROTEIN_COMPONENT_RANGES = {
+    "meat_source_complexity_score": (0.0, 5.0),
+    "main_protein_form_score": (0.0, 2.0),
+    "secondary_protein_form_score": (0.0, 1.0),
+    "form_mix_complexity_score": (0.0, 3.0),
+    "hydrolyzed_protein_load_score": (0.0, 1.0),
+    "plant_protein_interference_score": (0.0, 1.0),
+    "protein_content_score": (0.0, 1.0),
+}
+CRUDE_PROTEIN_RANGE = (20.0, 60.0)
 
 DEFAULT_LABEL_SCORE_MAPS = {
     "meat_source_complexity": MEAT_SOURCE_COMPLEXITY_MAP,
@@ -449,29 +469,19 @@ def parse_number(value):
     return np.nan
 
 
-def min_max_scale(series):
+def fixed_range_scale(series, lower, upper):
     """
-    蛋白含量分标准化到 0~1
+    Normalize against a stable business domain, independent of batch contents.
     """
     s = series.apply(parse_number)
-    min_val = s.min()
-    max_val = s.max()
-
-    if pd.isna(min_val) or pd.isna(max_val) or max_val == min_val:
-        return pd.Series([0.0] * len(series), index=series.index)
-
-    return (s - min_val) / (max_val - min_val)
+    width = float(upper) - float(lower)
+    if width <= 0:
+        raise ValueError("固定评分区间上限必须大于下限")
+    return ((s.fillna(lower) - float(lower)) / width).clip(0.0, 1.0)
 
 
-def normalize_score_series(series):
-    s = pd.to_numeric(series, errors="coerce").fillna(0.0)
-    min_val = s.min()
-    max_val = s.max()
-
-    if pd.isna(min_val) or pd.isna(max_val) or max_val == min_val:
-        return pd.Series([0.0] * len(series), index=series.index)
-
-    return (s - min_val) / (max_val - min_val)
+def normalize_score_series(series, lower=0.0, upper=1.0):
+    return fixed_range_scale(series, lower, upper)
 
 
 def clamp01(value):
@@ -632,6 +642,20 @@ def load_score_config(engine):
     label_maps = {key: dict(value) for key, value in DEFAULT_LABEL_SCORE_MAPS.items()}
     for row in label_rows.to_dict("records"):
         label_maps.setdefault(row["dimension_code"], {})[row["value_name"]] = float(row["score_value"])
+
+    # Generic editable configuration takes precedence over legacy protein tables.
+    enum_sql = """
+        SELECT dimension_code, enum_value, score_value
+        FROM {db}.catfood_score_enum_config
+        WHERE active=1 AND config_version='v1'
+          AND domain_code='protein' AND score_value IS NOT NULL
+    """.format(db=config_db)
+    try:
+        enum_rows = pd.read_sql(text(enum_sql), engine, params=params)
+        for row in enum_rows.to_dict("records"):
+            label_maps.setdefault(row["dimension_code"], {})[row["enum_value"]] = float(row["score_value"])
+    except Exception as exc:
+        print("通用枚举评分配置读取失败，沿用蛋白默认配置：{}".format(exc))
 
     weight_records = weight_rows.to_dict("records")
     weights = {
@@ -937,7 +961,23 @@ def add_score_columns(
         "plant_protein_interference_norm"
     ].apply(lambda x: map_score(x, label_score_maps["plant_protein_interference"], default=np.nan))
 
-    scored_df["protein_content_score"] = min_max_scale(scored_df[crude_col])
+    scored_df["protein_content_score"] = fixed_range_scale(
+        scored_df[crude_col], *CRUDE_PROTEIN_RANGE
+    )
+
+    # Ingredient-derived components use the same database-configured position
+    # weights as fat, fiber, carbohydrate, prebiotic and probiotic ingredients.
+    position_columns = {
+        "meat_source_complexity_score": "protein_position_weight",
+        "main_protein_form_score": "main_protein_position_weight",
+        "secondary_protein_form_score": "secondary_protein_position_weight",
+        "form_mix_complexity_score": "protein_position_weight",
+        "plant_protein_interference_score": "plant_protein_position_weight",
+    }
+    for score_column, weight_column in position_columns.items():
+        if weight_column in scored_df.columns:
+            weights = pd.to_numeric(scored_df[weight_column], errors="coerce").fillna(0.5)
+            scored_df[score_column] = scored_df[score_column] * weights
 
     score_cols = [
         "meat_source_complexity_score",
@@ -954,12 +994,13 @@ def add_score_columns(
 
     # 水解蛋白原本是减分项；转成同向的“负载分”后再与其他分子等权平均。
     scored_df["hydrolyzed_protein_load_score"] = (
-        scored_df["hydrolyzed_protein_relief_score"].max()
-        - scored_df["hydrolyzed_protein_relief_score"]
-    )
+        1.0 - scored_df["hydrolyzed_protein_relief_score"]
+    ).clip(0.0, 1.0)
 
     for col in PROTEIN_STRUCTURE_COMPONENT_SCORE_COLS:
-        scored_df[col + "_normalized"] = normalize_score_series(scored_df[col])
+        scored_df[col + "_normalized"] = normalize_score_series(
+            scored_df[col], *PROTEIN_COMPONENT_RANGES[col]
+        )
 
     # =========================
     # 4. 蛋白结构强度分 / 配方负载分
@@ -972,7 +1013,7 @@ def add_score_columns(
     )
 
     scored_df["protein_structure_score_method"] = (
-        "component_minmax_normalized_equal_weight"
+        "component_fixed_range_normalized_weighted"
     )
 
     scored_df["protein_structure_scored_at"] = pd.Timestamp.now()

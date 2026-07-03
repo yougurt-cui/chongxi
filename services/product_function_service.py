@@ -8,6 +8,7 @@ from decimal import Decimal
 from typing import Any
 
 from adapters.product_function_adapter import fetch_product_function_source
+from score_policy import ELEVATED_MIN, HIGH_MIN, LOW_MAX, SUPPORT_MIN
 
 
 RISK_SCORE_MAP = {
@@ -196,18 +197,18 @@ def build_evidence(row: dict[str, Any], tag: str, score: float) -> list[str]:
     if tag == "肠胃友好":
         if soft_stool_risk in ["低", "中低"]:
             evidence.append(f"软便风险为{soft_stool_risk}")
-        if fiber_buffer >= 60:
+        if fiber_buffer >= SUPPORT_MIN:
             evidence.append("纤维缓冲较好")
-        if microbiome_support >= 60:
+        if microbiome_support >= SUPPORT_MIN:
             evidence.append("菌群支持较好")
-        if protein_pressure <= 45:
+        if protein_pressure <= LOW_MAX:
             evidence.append("蛋白消化压力不高")
-        if carb_burden <= 45:
+        if carb_burden <= LOW_MAX:
             evidence.append("碳水负担不高")
     elif tag == "黑下巴友好":
         if black_chin_risk in ["低", "中低"]:
             evidence.append(f"黑下巴风险为{black_chin_risk}")
-        if fat_burden <= 45:
+        if fat_burden <= LOW_MAX:
             evidence.append("脂肪负担不高")
         if skin_protection >= 50:
             evidence.append("皮肤保护支持尚可")
@@ -216,25 +217,25 @@ def build_evidence(row: dict[str, Any], tag: str, score: float) -> list[str]:
     elif tag == "增肌长肉":
         if protein_quality >= 70:
             evidence.append("蛋白质量较高")
-        if protein_pressure <= 45:
+        if protein_pressure <= LOW_MAX:
             evidence.append("蛋白压力较低")
         if carb_burden <= 50:
             evidence.append("碳水负担不高")
         if 35 <= fat_burden <= 65:
             evidence.append("脂肪/能量支持处于可接受区间")
     elif tag == "控重管理":
-        if fat_burden <= 45:
+        if fat_burden <= LOW_MAX:
             evidence.append("脂肪负担较低")
-        if carb_burden <= 45:
+        if carb_burden <= LOW_MAX:
             evidence.append("碳水负担较低")
-        if fiber_buffer >= 60:
+        if fiber_buffer >= SUPPORT_MIN:
             evidence.append("纤维缓冲较好")
         if protein_quality >= 65:
             evidence.append("蛋白质量有一定支持")
     elif tag == "皮肤毛发":
-        if skin_protection >= 60:
+        if skin_protection >= SUPPORT_MIN:
             evidence.append("皮肤保护支持较好")
-        if omega3_support >= 60:
+        if omega3_support >= SUPPORT_MIN:
             evidence.append("Omega-3 支持较好")
         if protein_quality >= 65:
             evidence.append("蛋白质量有一定支持")
@@ -264,27 +265,27 @@ def build_warning_tags(row: dict[str, Any]) -> list[dict[str, Any]]:
             "evidence": [f"软便风险为{soft_stool_risk}"],
         })
 
-    if black_chin_risk in ["中高", "高"] or fat_burden >= 65:
+    if black_chin_risk in ["中高", "高"] or fat_burden >= ELEVATED_MIN:
         evidence = []
         if black_chin_risk in ["中高", "高"]:
             evidence.append(f"黑下巴风险为{black_chin_risk}")
-        if fat_burden >= 65:
+        if fat_burden >= ELEVATED_MIN:
             evidence.append("脂肪负担偏高")
         warnings.append({
             "tag": "黑下巴猫慎选",
-            "level": "strong" if black_chin_risk == "高" or fat_burden >= 75 else "medium",
+            "level": "strong" if black_chin_risk == "高" or fat_burden >= HIGH_MIN else "medium",
             "evidence": evidence,
         })
 
-    if fat_burden >= 70 or carb_burden >= 70:
+    if fat_burden >= ELEVATED_MIN or carb_burden >= ELEVATED_MIN:
         evidence = []
-        if fat_burden >= 70:
+        if fat_burden >= ELEVATED_MIN:
             evidence.append("脂肪负担偏高")
-        if carb_burden >= 70:
+        if carb_burden >= ELEVATED_MIN:
             evidence.append("碳水负担偏高")
         warnings.append({"tag": "肥胖猫慎选", "level": "medium", "evidence": evidence})
 
-    if protein_pressure >= 65:
+    if protein_pressure >= ELEVATED_MIN:
         warnings.append({"tag": "消化压力偏高", "level": "medium", "evidence": ["蛋白压力偏高"]})
 
     if fiber_buffer < 25 and soft_stool_risk in ["中", "中高", "高"]:
@@ -311,10 +312,10 @@ def apply_conflict_rules(row: dict[str, Any], function_tags: list[dict[str, Any]
             continue
         if tag == "黑下巴友好" and black_chin_risk in ["中高", "高"]:
             continue
-        if tag == "增肌长肉" and protein_pressure >= 70:
+        if tag == "增肌长肉" and protein_pressure >= ELEVATED_MIN:
             item["tag"] = "高蛋白观察型"
             item["evidence"].append("蛋白压力偏高，不建议直接标为增肌友好")
-        if tag == "控重管理" and fat_burden >= 65:
+        if tag == "控重管理" and fat_burden >= ELEVATED_MIN:
             continue
         if tag == "皮肤毛发" and black_chin_risk == "高":
             item["tag"] = "皮肤毛发观察型"
