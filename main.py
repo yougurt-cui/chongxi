@@ -31,6 +31,7 @@ try:
     from .api.product_identity_api import product_identity_api
     from .api.process_signal_api import process_signal_api
     from .api.taobao_sku_api import taobao_sku_api
+    from .api.miniprogram_api import miniprogram_api
 except ImportError:
     from api.consumer_api import consumer_api
     from api.catfood_standardization_api import catfood_standardization_api
@@ -42,6 +43,7 @@ except ImportError:
     from api.product_identity_api import product_identity_api
     from api.process_signal_api import process_signal_api
     from api.taobao_sku_api import taobao_sku_api
+    from api.miniprogram_api import miniprogram_api
 
 from services import cat_food_task_service as task_store
 
@@ -56,6 +58,8 @@ except ImportError:
 WEB_DIR = Path(__file__).resolve().parent / "web"
 DIST_DIR = BASE_DIR / "dist"
 CONSUMER_APPS_DIR = BASE_DIR / "consumer_apps"
+B2B_PLATFORM_DIR = BASE_DIR.parent / "protein_feature_platform_template"
+B2B_PIPELINE_PATH = B2B_PLATFORM_DIR / "feature_score_pipeline_project" / "pipeline.py"
 CATFOOD_BRAND_MASTER_PATH = BASE_DIR / "vendor" / "csv_mysql_labeling" / "config" / "catfood_brand_master.yaml"
 _consumer_app_processes: list[subprocess.Popen] = []
 _cat_food_task_executor = ThreadPoolExecutor(max_workers=2)
@@ -197,10 +201,45 @@ def _start_streamlit_app(script_name: str, port: int, base_url_path: str) -> Non
     _consumer_app_processes.append(process)
 
 
+def _start_b2b_order_analysis_app() -> None:
+    if _port_is_open(8503):
+        return
+    if not B2B_PIPELINE_PATH.exists():
+        return
+
+    from app_config import get_feature_mysql_config
+
+    db_config = get_feature_mysql_config()
+    env = os.environ.copy()
+    env.setdefault("MYSQL_HOST", str(db_config.get("host", "127.0.0.1")))
+    env.setdefault("MYSQL_PORT", str(db_config.get("port", "3306")))
+    env.setdefault("MYSQL_USER", str(db_config.get("user", "root")))
+    env.setdefault("MYSQL_PASSWORD", str(db_config.get("password", "")))
+    env.setdefault("MYSQL_DATABASE", str(db_config.get("database", "protein_feature_platform")))
+    env.setdefault("MYSQL_CHARSET", str(db_config.get("charset", "utf8mb4")))
+
+    cmd = [
+        sys.executable,
+        str(B2B_PIPELINE_PATH),
+        "b2b-order-analysis",
+        "--port",
+        "8503",
+    ]
+    process = subprocess.Popen(
+        cmd,
+        cwd=str(B2B_PLATFORM_DIR),
+        env=env,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.STDOUT,
+    )
+    _consumer_app_processes.append(process)
+
+
 def _start_consumer_apps() -> None:
     if os.getenv("CHONGXI_START_CONSUMER_APPS", "1").strip().lower() in {"0", "false", "no"}:
         return
     _start_streamlit_app("product_recommendation_engine.py", 8501, "consumer/recommendation-engine")
+    _start_b2b_order_analysis_app()
 
 
 def _stop_consumer_apps() -> None:
@@ -1719,6 +1758,7 @@ def create_app() -> Flask:
     flask_app.register_blueprint(product_identity_api)
     flask_app.register_blueprint(process_signal_api)
     flask_app.register_blueprint(taobao_sku_api)
+    flask_app.register_blueprint(miniprogram_api)
 
     @flask_app.get("/health")
     def health() -> tuple[dict, int]:
@@ -2135,6 +2175,8 @@ def create_app() -> Flask:
         if (DIST_DIR / "index.html").exists():
             return send_from_directory(DIST_DIR, "index.html")
         return send_from_directory(WEB_DIR, "index.html")
+
+    _start_consumer_apps()
 
     return flask_app
 

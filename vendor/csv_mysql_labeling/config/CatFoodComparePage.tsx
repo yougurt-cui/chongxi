@@ -331,14 +331,14 @@ function PackageImage({ product, large = false }: { product: Product; large?: bo
 }
 
 function HeaderNav() {
-  const navItems = ["宠物墙", "换粮建议", "宠物医院", "宠物交配"];
+  const navItems = ["宠物瞬间", "宠物助手", "宠物周边", "我的宠物"];
   return (
     <header className="fixed inset-x-0 top-0 z-50 h-[72px] border-b border-[#D9E0EE] bg-white shadow-[0_3px_14px_rgba(30,41,59,0.06)]">
       <div className="grid h-full grid-cols-[280px_minmax(0,1fr)_180px] items-center px-10 2xl:grid-cols-[280px_minmax(0,1fr)_200px]">
         <div className="text-[32px] font-extrabold leading-none text-[#3F35FF]">宠析</div>
         <nav className="flex h-full justify-center gap-16 text-[16px] font-semibold text-[#172033]">
           {navItems.map((item) => {
-            const active = item === "换粮建议";
+            const active = item === "宠物助手";
             return (
             <a key={item} href="#" className={`relative flex h-full items-center ${active ? "text-[#3F35FF]" : ""}`}>
               {item}

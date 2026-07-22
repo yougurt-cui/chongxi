@@ -87,7 +87,4 @@ curl -fsS --retry 5 --retry-delay 1 --max-time 8 "http://127.0.0.1:$APP_PORT/api
   | .venv/bin/python -c 'import json,sys; data=json.load(sys.stdin); print("brand_count", len(data.get("brands", [])))'
 curl -fsS --retry 5 --retry-delay 1 --max-time 8 "http://127.0.0.1:$APP_PORT/api/catfood/standardization/brands?limit=500" \
   | .venv/bin/python -c 'import json,sys; data=json.load(sys.stdin); assert data.get("ok") is True; print("standard_brand_count", len(data.get("items", [])))'
-curl -fsS --retry 5 --retry-delay 1 --max-time 120 \
-  -X POST "http://127.0.0.1:$APP_PORT/api/catfood/standardization/formula-links/backfill" \
-  | .venv/bin/python -c 'import json,sys; data=json.load(sys.stdin); assert data.get("ok") is True; print("formula_input_count", data.get("formula_inputs", {}).get("count"), "formula_link_updates", sum(data.get("table_updates", {}).values()))'
 REMOTE_SCRIPT

@@ -22,7 +22,6 @@ from services.catfood_standardization_service import (
     standardize_formula,
     standardize_product,
 )
-from services.formula_feature_link_service import backfill_formula_ids
 from services.formula_incremental_service import (
     build_formula_profile,
     materialize_formula_risks,
@@ -251,13 +250,5 @@ def standardization_formula_risk_materialize():
     try:
         payload = request.get_json(silent=True) or {}
         return jsonify(materialize_formula_risks(formula_id=int(payload["formula_id"]), batch_id=payload.get("batch_id"))), 200
-    except Exception as exc:
-        return jsonify({"ok": False, "error": str(exc)}), 400
-
-
-@catfood_standardization_api.post("/formula-links/backfill")
-def standardization_formula_links_backfill():
-    try:
-        return jsonify(backfill_formula_ids()), 200
     except Exception as exc:
         return jsonify({"ok": False, "error": str(exc)}), 400

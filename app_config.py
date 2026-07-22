@@ -92,3 +92,21 @@ def get_cat_food_upload_root(default: Path | str) -> Path:
         or default
     )
     return Path(str(value)).expanduser()
+
+
+def get_wechat_miniprogram_config(payload: Dict[str, Any] | None = None) -> Dict[str, str]:
+    payload = dict(payload or {})
+    return {
+        "appid": str(
+            payload.get("appid")
+            or os.getenv("WECHAT_MINIPROGRAM_APPID")
+            or os.getenv("WX_MINIPROGRAM_APPID")
+            or "wxec9a56b911900aa0"
+        ).strip(),
+        "appsecret": str(
+            payload.get("appsecret")
+            or os.getenv("WECHAT_MINIPROGRAM_APP_SECRET")
+            or os.getenv("WX_MINIPROGRAM_APP_SECRET")
+            or ""
+        ).strip(),
+    }

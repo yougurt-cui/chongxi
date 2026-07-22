@@ -57,6 +57,33 @@ Open `http://127.0.0.1:8000/` to use the workbench. The cat food comparison page
 
 ## Main APIs
 
+WeChat mini-program food-change intent recognition (Qwen), product-catalog matching, and audit storage:
+
+```http
+POST /api/miniprogram/food-change/intent
+Content-Type: application/json
+
+{
+  "user_id": "openid-or-business-user-id",
+  "session_id": "conversation-id",
+  "message": "我家三岁英短最近软便，正在吃皇家肠胃舒适，想换粮",
+  "cat_status": {"weight_kg": 4.8, "neutered": true}
+}
+```
+
+The first request creates `miniprogram_food_change_intent` in the configured application MySQL database.
+Set `DASHSCOPE_API_KEY` (or `QWEN_API_KEY`) before calling the endpoint. Products are matched against
+`catfood_product_catalog` in the configured feature database.
+
+Mini-program product editing and ingredient lookup:
+
+```http
+GET  /api/miniprogram/products?brand=皇家&limit=50
+POST /api/miniprogram/products/ingredients
+
+{"catalog_key":"score:404"}
+```
+
 Collect Douyin/Xiaohongshu comments and archive source files:
 
 ```http
