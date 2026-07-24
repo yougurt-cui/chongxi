@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from flask import Blueprint, jsonify, request, send_file
+import urllib.request
+
+from flask import Blueprint, Response, jsonify, request, send_file
 
 from services.miniprogram_auth_service import wechat_login
 from services.miniprogram_cat_profile_service import (
@@ -266,6 +268,14 @@ def upload_moment_image_endpoint():
 def get_moment_image_endpoint(file_id: str):
     try:
         image = get_moment_image(file_id)
+        if image.get("redirect_url"):
+            with urllib.request.urlopen(image["redirect_url"], timeout=15) as response:
+                image_bytes = response.read()
+            return Response(
+                image_bytes,
+                mimetype=image["content_type"] or "application/octet-stream",
+                headers={"Cache-Control": "public, max-age=3600"},
+            )
         return send_file(image["storage_path"], mimetype=image["content_type"], max_age=86400)
     except LookupError as exc:
         return jsonify({"ok": False, "error": str(exc)}), 404

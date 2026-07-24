@@ -8,3 +8,4 @@ opencc-python-reimplemented
 pandas
 rich
 tenacity
+oss2

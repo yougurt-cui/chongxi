@@ -254,6 +254,16 @@
       line-height: 1.55;
       white-space: pre-wrap;
     }
+    .stats-table {
+      min-width: 0;
+      table-layout: fixed;
+    }
+    .stats-table th:nth-child(1) { width: 72px; }
+    .stats-table th:nth-child(3) { width: 120px; }
+    .stats-table td:nth-child(2) {
+      overflow-wrap: anywhere;
+      word-break: break-word;
+    }
     dialog {
       width: min(760px, calc(100% - 32px));
       border: 0;
@@ -628,6 +638,7 @@
         <div class="row-actions">
           <button id="diseaseBulkApprove" class="button" type="button">批量确认</button>
           <button id="diseaseBulkReject" class="button danger" type="button">批量驳回</button>
+          <button id="diseaseBrandStats" class="button secondary" type="button">品牌统计</button>
           <button id="diseaseRefresh" class="button secondary" type="button">刷新病症候选</button>
         </div>
       </section>
@@ -717,6 +728,31 @@
         <pre id="outputJson"></pre>
       </form>
     </dialog>
+
+    <dialog id="diseaseBrandStatsDialog">
+      <form method="dialog" class="modal">
+        <div class="modal-head">
+          <div>
+            <div class="title">待确认病症数据品牌统计</div>
+            <div id="diseaseBrandStatsMeta" class="muted" style="margin-top:6px;">正在加载...</div>
+          </div>
+          <button class="small-button secondary" value="cancel" type="submit">关闭</button>
+        </div>
+        <div class="table-wrap">
+          <table class="stats-table">
+            <thead>
+              <tr>
+                <th>排名</th>
+                <th>品牌</th>
+                <th>条数</th>
+              </tr>
+            </thead>
+            <tbody id="diseaseBrandStatsRows"></tbody>
+          </table>
+        </div>
+        <div id="diseaseBrandStatsEmpty" class="empty" style="display:none;">暂无统计数据。</div>
+      </form>
+    </dialog>
   </main>
 
   <script>
@@ -776,6 +812,7 @@
     const diseaseRefreshBtn = document.getElementById("diseaseRefresh");
     const diseaseBulkApproveBtn = document.getElementById("diseaseBulkApprove");
     const diseaseBulkRejectBtn = document.getElementById("diseaseBulkReject");
+    const diseaseBrandStatsBtn = document.getElementById("diseaseBrandStats");
     const diseaseSelectAll = document.getElementById("diseaseSelectAll");
     const diseaseBrandFilter = document.getElementById("diseaseBrandFilter");
     const diseaseSymptomFilter = document.getElementById("diseaseSymptomFilter");
@@ -786,6 +823,10 @@
     const diseasePrevPage = document.getElementById("diseasePrevPage");
     const diseaseNextPage = document.getElementById("diseaseNextPage");
     const diseasePageInfo = document.getElementById("diseasePageInfo");
+    const diseaseBrandStatsDialog = document.getElementById("diseaseBrandStatsDialog");
+    const diseaseBrandStatsMeta = document.getElementById("diseaseBrandStatsMeta");
+    const diseaseBrandStatsRows = document.getElementById("diseaseBrandStatsRows");
+    const diseaseBrandStatsEmpty = document.getElementById("diseaseBrandStatsEmpty");
     let activeOcrItem = null;
     let activeTab = "node";
     let activeIdentityTab = "brand";
@@ -1633,6 +1674,37 @@
       }
     }
 
+    async function loadDiseaseBrandStats() {
+      diseaseBrandStatsBtn.disabled = true;
+      diseaseBrandStatsRows.innerHTML = "";
+      diseaseBrandStatsEmpty.style.display = "none";
+      diseaseBrandStatsMeta.textContent = "正在加载...";
+      diseaseBrandStatsDialog.showModal();
+      const params = diseaseQueryParams();
+      params.delete("limit");
+      params.delete("offset");
+      params.set("limit", "1000");
+      try {
+        const data = await api(`/api/consumer/disease/reviews/brand-stats?${params.toString()}`);
+        const items = data.items || [];
+        diseaseBrandStatsMeta.textContent = `待确认 ${data.total || 0} 条｜品牌 ${items.length} 个｜按条数从大到小排序`;
+        diseaseBrandStatsRows.innerHTML = items.map((item, index) => `
+          <tr>
+            <td>${index + 1}</td>
+            <td>${escapeHtml(item.brand_name || "其他")}</td>
+            <td><strong>${escapeHtml(item.count || 0)}</strong></td>
+          </tr>
+        `).join("");
+        diseaseBrandStatsEmpty.style.display = items.length ? "none" : "block";
+      } catch (error) {
+        diseaseBrandStatsMeta.textContent = "加载失败";
+        diseaseBrandStatsEmpty.style.display = "block";
+        diseaseBrandStatsEmpty.textContent = error instanceof Error ? error.message : "品牌统计加载失败";
+      } finally {
+        diseaseBrandStatsBtn.disabled = false;
+      }
+    }
+
     async function loadDiseaseOptions() {
       try {
         const data = await api("/api/consumer/disease/reviews/options");
@@ -1787,6 +1859,7 @@
     diseaseRefreshBtn.addEventListener("click", loadDiseaseItems);
     diseaseBulkApproveBtn.addEventListener("click", bulkApproveDisease);
     diseaseBulkRejectBtn.addEventListener("click", bulkRejectDisease);
+    diseaseBrandStatsBtn.addEventListener("click", loadDiseaseBrandStats);
     diseaseSelectAll.addEventListener("change", () => {
       diseaseRowsEl.querySelectorAll('[data-field="selected"]').forEach((checkbox) => {
         checkbox.checked = diseaseSelectAll.checked;

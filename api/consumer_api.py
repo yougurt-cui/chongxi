@@ -348,6 +348,79 @@ def _serialize_disease_candidate(
     return item
 
 
+def _apply_disease_review_filters(
+    *,
+    filters: list[str],
+    params: dict,
+    status: str,
+    brand: str,
+    symptom: str,
+    min_confidence,
+    max_confidence,
+    brand_lookup: dict[str, str],
+) -> None:
+    if status != "ALL":
+        filters.append("review_status = :status")
+        params["status"] = status
+    if symptom:
+        filters.append("(symptom_category LIKE :symptom OR symptom_name LIKE :symptom)")
+        params["symptom"] = f"%{symptom}%"
+    if min_confidence not in (None, ""):
+        filters.append("confidence >= :min_confidence")
+        params["min_confidence"] = float(min_confidence)
+    if max_confidence not in (None, ""):
+        filters.append("confidence <= :max_confidence")
+        params["max_confidence"] = float(max_confidence)
+    if not brand:
+        return
+
+    if brand == "其他":
+        filters.append(
+            """
+            (
+              standard_brand_name IS NULL
+              OR TRIM(standard_brand_name) = ''
+              OR normalized_brand_name IS NULL
+              OR TRIM(normalized_brand_name) = ''
+            )
+            """
+        )
+        return
+
+    standard_brand = _match_standard_brand_name(brand, brand_lookup) or canonicalize_brand(brand)
+    brand_key = _normalized_brand_filter_value(standard_brand)
+    if brand_key:
+        filters.append(
+            """
+            (
+              normalized_brand_name = :brand_key
+              OR normalized_brand_name LIKE :brand_key_prefix
+              OR normalized_brand_name LIKE :brand_key_suffix
+              OR normalized_brand_name LIKE :brand_key_contains
+            )
+            """
+        )
+        params.update(
+            {
+                "brand_key": brand_key,
+                "brand_key_prefix": f"{brand_key},%",
+                "brand_key_suffix": f"%,{brand_key}",
+                "brand_key_contains": f"%,{brand_key},%",
+            }
+        )
+    else:
+        filters.append(
+            """
+            (
+              standard_brand_name IS NULL
+              OR TRIM(standard_brand_name) = ''
+              OR normalized_brand_name IS NULL
+              OR TRIM(normalized_brand_name) = ''
+            )
+            """
+        )
+
+
 def _ensure_disease_clues_table(engine) -> None:
     with engine.begin() as conn:
         conn.execute(
@@ -805,63 +878,16 @@ def consumer_disease_reviews():
         with source_engine.connect() as conn:
             brand_lookup = _load_standard_brand_lookup(conn)
         _backfill_disease_candidate_brands(source_engine, brand_lookup=brand_lookup)
-        if status != "ALL":
-            filters.append("review_status = :status")
-            params["status"] = status
-        if symptom:
-            filters.append("(symptom_category LIKE :symptom OR symptom_name LIKE :symptom)")
-            params["symptom"] = f"%{symptom}%"
-        if min_confidence not in (None, ""):
-            filters.append("confidence >= :min_confidence")
-            params["min_confidence"] = float(min_confidence)
-        if max_confidence not in (None, ""):
-            filters.append("confidence <= :max_confidence")
-            params["max_confidence"] = float(max_confidence)
-        if brand:
-            if brand == "其他":
-                filters.append(
-                    """
-                    (
-                      standard_brand_name IS NULL
-                      OR TRIM(standard_brand_name) = ''
-                      OR normalized_brand_name IS NULL
-                      OR TRIM(normalized_brand_name) = ''
-                    )
-                    """
-                )
-            else:
-                standard_brand = _match_standard_brand_name(brand, brand_lookup) or canonicalize_brand(brand)
-                brand_key = _normalized_brand_filter_value(standard_brand)
-                if brand_key:
-                    filters.append(
-                        """
-                        (
-                          normalized_brand_name = :brand_key
-                          OR normalized_brand_name LIKE :brand_key_prefix
-                          OR normalized_brand_name LIKE :brand_key_suffix
-                          OR normalized_brand_name LIKE :brand_key_contains
-                        )
-                        """
-                    )
-                    params.update(
-                        {
-                            "brand_key": brand_key,
-                            "brand_key_prefix": f"{brand_key},%",
-                            "brand_key_suffix": f"%,{brand_key}",
-                            "brand_key_contains": f"%,{brand_key},%",
-                        }
-                    )
-                else:
-                    filters.append(
-                        """
-                        (
-                          standard_brand_name IS NULL
-                          OR TRIM(standard_brand_name) = ''
-                          OR normalized_brand_name IS NULL
-                          OR TRIM(normalized_brand_name) = ''
-                        )
-                        """
-                    )
+        _apply_disease_review_filters(
+            filters=filters,
+            params=params,
+            status=status,
+            brand=brand,
+            symptom=symptom,
+            min_confidence=min_confidence,
+            max_confidence=max_confidence,
+            brand_lookup=brand_lookup,
+        )
         where_sql = f"WHERE {' AND '.join(filters)}" if filters else ""
         with source_engine.connect() as conn:
             total = conn.execute(
@@ -941,6 +967,81 @@ def consumer_disease_reviews():
     finally:
         source_engine.dispose()
         target_engine.dispose()
+
+
+@consumer_api.get("/disease/reviews/brand-stats")
+def consumer_disease_review_brand_stats():
+    status = (request.args.get("status") or "PENDING").strip().upper()
+    if status not in {"PENDING", "APPROVED", "REJECTED", "ALL"}:
+        return jsonify({"ok": False, "error": "unsupported status"}), 400
+    brand = _clean_field(request.args.get("brand"))
+    symptom = _clean_field(request.args.get("symptom"))
+    min_confidence = request.args.get("min_confidence")
+    max_confidence = request.args.get("max_confidence")
+    limit = _clamp_int(request.args.get("limit"), 500, 1, 2000)
+    source_engine = _get_csv_engine()
+    try:
+        _ensure_disease_review_source_table(source_engine)
+        filters = []
+        params = {"limit": limit}
+        with source_engine.connect() as conn:
+            brand_lookup = _load_standard_brand_lookup(conn)
+        _backfill_disease_candidate_brands(source_engine, brand_lookup=brand_lookup)
+        _apply_disease_review_filters(
+            filters=filters,
+            params=params,
+            status=status,
+            brand=brand,
+            symptom=symptom,
+            min_confidence=min_confidence,
+            max_confidence=max_confidence,
+            brand_lookup=brand_lookup,
+        )
+        where_sql = f"WHERE {' AND '.join(filters)}" if filters else ""
+        with source_engine.connect() as conn:
+            rows = conn.execute(
+                text(
+                    f"""
+                    SELECT
+                      COALESCE(NULLIF(TRIM(standard_brand_name), ''), '其他') AS brand_name,
+                      COUNT(*) AS cnt
+                    FROM `{DISEASE_REVIEW_SOURCE_TABLE}`
+                    {where_sql}
+                    GROUP BY COALESCE(NULLIF(TRIM(standard_brand_name), ''), '其他')
+                    ORDER BY cnt DESC, COALESCE(NULLIF(TRIM(standard_brand_name), ''), '其他') ASC
+                    LIMIT :limit
+                    """
+                ),
+                params,
+            ).mappings().fetchall()
+            total = conn.execute(
+                text(
+                    f"""
+                    SELECT COUNT(*)
+                    FROM `{DISEASE_REVIEW_SOURCE_TABLE}`
+                    {where_sql}
+                    """
+                ),
+                params,
+            ).scalar()
+        return jsonify(
+            {
+                "ok": True,
+                "items": [
+                    {
+                        "brand_name": str(row["brand_name"] or "其他"),
+                        "count": int(row["cnt"] or 0),
+                    }
+                    for row in rows
+                ],
+                "total": int(total or 0),
+                "status": status,
+            }
+        )
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    finally:
+        source_engine.dispose()
 
 
 @consumer_api.get("/disease/reviews/options")

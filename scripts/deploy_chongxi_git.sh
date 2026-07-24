@@ -72,6 +72,11 @@ done
 sleep 3
 mkdir -p var
 : > var/flask.log
+if [ -f .env ]; then
+  set -a
+  . ./.env
+  set +a
+fi
 nohup .venv/bin/python -m flask --app main run --host 0.0.0.0 --port "$APP_PORT" > var/flask.log 2>&1 < /dev/null &
 
 for _ in $(seq 1 20); do
