@@ -60,6 +60,36 @@ class MiniProgramContentReviewServiceTest(unittest.TestCase):
         self.assertEqual(calls[1][1]["media_type"], 2)
         self.assertEqual(calls[1][1]["media_url"], "https://chongxi.cloud/api/miniprogram/moment-images/f1")
 
+    def test_callback_payload_parses_json_result(self):
+        payload = service._parse_callback_payload(
+            b'{"trace_id":"trace-1","result":{"suggest":"risky","label":200}}',
+            "application/json",
+        )
+        result = service._callback_result(payload)
+
+        self.assertEqual(result["trace_id"], "trace-1")
+        self.assertEqual(result["suggest"], "risky")
+        self.assertEqual(result["label"], "200")
+
+    def test_callback_payload_parses_xml_result(self):
+        payload = service._parse_callback_payload(
+            """
+            <xml>
+              <trace_id>trace-2</trace_id>
+              <result>
+                <suggest>pass</suggest>
+                <label>100</label>
+              </result>
+            </xml>
+            """,
+            "text/xml",
+        )
+        result = service._callback_result(payload)
+
+        self.assertEqual(result["trace_id"], "trace-2")
+        self.assertEqual(result["suggest"], "pass")
+        self.assertEqual(result["label"], "100")
+
 
 if __name__ == "__main__":
     unittest.main()

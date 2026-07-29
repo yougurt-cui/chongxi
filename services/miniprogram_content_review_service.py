@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import json
 import os
+import uuid
 import time
 import urllib.parse
 import urllib.request
+import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from typing import Any
 
@@ -24,6 +26,7 @@ from services.miniprogram_moment_service import (
 MAX_LIST_LIMIT = 200
 CONTENT_TYPES = {"all", "post", "comment"}
 CONTENT_ACTIONS = {"check", "hide", "delete"}
+SAFETY_TABLE_NAME = "miniprogram_content_safety_check"
 _ACCESS_TOKEN_CACHE: dict[str, Any] = {"token": "", "expires_at": 0.0}
 DEFAULT_PUBLIC_BASE_URL = "https://chongxi.cloud"
 
@@ -58,6 +61,10 @@ def _json_loads(raw: Any, default: Any) -> Any:
         return json.loads(str(raw))
     except json.JSONDecodeError:
         return default
+
+
+def _json_dumps(value: Any) -> str:
+    return json.dumps(value, ensure_ascii=False, default=str)
 
 
 def _public_base_url() -> str:
@@ -109,7 +116,109 @@ def _wechat_access_token() -> str:
     return token
 
 
-def check_text_with_wechat(*, content: Any, openid: Any, scene: Any = 2) -> dict[str, Any]:
+def init_content_safety_tables() -> None:
+    init_miniprogram_auth_tables()
+    init_miniprogram_moment_tables()
+    with _connect_app() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                f"""
+                CREATE TABLE IF NOT EXISTS {SAFETY_TABLE_NAME} (
+                    id CHAR(32) NOT NULL,
+                    content_type VARCHAR(16) NOT NULL,
+                    content_id VARCHAR(64) NOT NULL,
+                    parent_content_id VARCHAR(64) NULL,
+                    user_id VARCHAR(128) NULL,
+                    openid VARCHAR(128) NULL,
+                    check_type VARCHAR(16) NOT NULL,
+                    provider VARCHAR(32) NOT NULL DEFAULT 'wechat',
+                    trace_id VARCHAR(128) NULL,
+                    media_url VARCHAR(2048) NULL,
+                    suggest VARCHAR(32) NULL,
+                    label VARCHAR(64) NULL,
+                    status VARCHAR(32) NOT NULL,
+                    raw_response_json LONGTEXT NULL,
+                    callback_json LONGTEXT NULL,
+                    created_at DATETIME NOT NULL,
+                    updated_at DATETIME NOT NULL,
+                    PRIMARY KEY (id),
+                    KEY idx_mini_safety_content (content_type, content_id, created_at),
+                    KEY idx_mini_safety_trace (trace_id),
+                    KEY idx_mini_safety_status (status, updated_at)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+                """
+            )
+        conn.commit()
+
+
+def _status_from_suggest(suggest: Any, *, async_pending: bool = False) -> str:
+    if async_pending:
+        return "async_pending"
+    value = _clean(suggest, 32) or "pass"
+    if value == "pass":
+        return "pass"
+    if value == "review":
+        return "review"
+    return "risky"
+
+
+def _record_safety_check(
+    *,
+    content_type: str,
+    content_id: Any,
+    check_type: str,
+    user_id: Any = "",
+    openid: Any = "",
+    parent_content_id: Any = "",
+    trace_id: Any = "",
+    media_url: Any = "",
+    suggest: Any = "",
+    label: Any = "",
+    status: Any = "",
+    raw_response: Any = None,
+) -> None:
+    init_content_safety_tables()
+    now = _now()
+    with _connect_app() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                f"""
+                INSERT INTO {SAFETY_TABLE_NAME} (
+                    id,content_type,content_id,parent_content_id,user_id,openid,check_type,provider,trace_id,
+                    media_url,suggest,label,status,raw_response_json,created_at,updated_at
+                ) VALUES (%s,%s,%s,%s,%s,%s,%s,'wechat',%s,%s,%s,%s,%s,%s,%s,%s)
+                """,
+                (
+                    uuid.uuid4().hex,
+                    _clean(content_type, 16),
+                    _clean(content_id, 64),
+                    _clean(parent_content_id, 64) or None,
+                    _clean(user_id, 128) or None,
+                    _clean(openid, 128) or None,
+                    _clean(check_type, 16),
+                    _clean(trace_id, 128) or None,
+                    _clean(media_url, 2048) or None,
+                    _clean(suggest, 32) or None,
+                    _clean(label, 64) or None,
+                    _clean(status, 32) or "unknown",
+                    _json_dumps(raw_response or {}),
+                    now,
+                    now,
+                ),
+            )
+        conn.commit()
+
+
+def check_text_with_wechat(
+    *,
+    content: Any,
+    openid: Any,
+    scene: Any = 2,
+    content_type: str = "text",
+    content_id: Any = "",
+    user_id: Any = "",
+    parent_content_id: Any = "",
+) -> dict[str, Any]:
     text = _clean(content, 2500)
     cleaned_openid = _clean(openid, 128)
     if not text:
@@ -135,7 +244,7 @@ def check_text_with_wechat(*, content: Any, openid: Any, scene: Any = 2) -> dict
     result = data.get("result") or {}
     suggest = result.get("suggest") or ("risky" if errcode == 87014 else "")
     label = result.get("label") or ""
-    return {
+    safety_result = {
         "ok": True,
         "passed": suggest in {"", "pass"},
         "suggest": suggest or "pass",
@@ -143,9 +252,33 @@ def check_text_with_wechat(*, content: Any, openid: Any, scene: Any = 2) -> dict
         "trace_id": data.get("trace_id") or "",
         "raw": data,
     }
+    if content_id:
+        _record_safety_check(
+            content_type=content_type,
+            content_id=content_id,
+            parent_content_id=parent_content_id,
+            user_id=user_id,
+            openid=cleaned_openid,
+            check_type="text",
+            trace_id=safety_result["trace_id"],
+            suggest=safety_result["suggest"],
+            label=label,
+            status=_status_from_suggest(safety_result["suggest"]),
+            raw_response=data,
+        )
+    return safety_result
 
 
-def submit_image_with_wechat(*, media_url: Any, openid: Any, scene: Any = 2) -> dict[str, Any]:
+def submit_image_with_wechat(
+    *,
+    media_url: Any,
+    openid: Any,
+    scene: Any = 2,
+    content_type: str = "post",
+    content_id: Any = "",
+    user_id: Any = "",
+    parent_content_id: Any = "",
+) -> dict[str, Any]:
     absolute_url = _absolute_media_url(media_url)
     cleaned_openid = _clean(openid, 128)
     if not absolute_url:
@@ -171,7 +304,7 @@ def submit_image_with_wechat(*, media_url: Any, openid: Any, scene: Any = 2) -> 
     errcode = int(data.get("errcode") or 0)
     if errcode != 0:
         raise ValueError(f"微信图片安全接口失败：{data.get('errmsg') or errcode}")
-    return {
+    safety_result = {
         "ok": True,
         "passed": None,
         "suggest": "async_pending",
@@ -180,6 +313,21 @@ def submit_image_with_wechat(*, media_url: Any, openid: Any, scene: Any = 2) -> 
         "media_url": absolute_url,
         "raw": data,
     }
+    if content_id:
+        _record_safety_check(
+            content_type=content_type,
+            content_id=content_id,
+            parent_content_id=parent_content_id,
+            user_id=user_id,
+            openid=cleaned_openid,
+            check_type="image",
+            trace_id=safety_result["trace_id"],
+            media_url=absolute_url,
+            suggest=safety_result["suggest"],
+            status="async_pending",
+            raw_response=data,
+        )
+    return safety_result
 
 
 def get_user_openid(user_id: Any) -> str:
@@ -211,19 +359,40 @@ def _image_urls(images: Any) -> list[str]:
     return urls
 
 
-def check_moment_payload_with_wechat(data: dict[str, Any], *, openid: Any = "", scene: Any = 2) -> dict[str, Any]:
-    cleaned_openid = _clean(openid, 128) or get_user_openid((data or {}).get("user_id"))
+def check_moment_payload_with_wechat(
+    data: dict[str, Any],
+    *,
+    openid: Any = "",
+    scene: Any = 2,
+    content_id: Any = "",
+) -> dict[str, Any]:
+    user_id = (data or {}).get("user_id")
+    cleaned_openid = _clean(openid, 128) or get_user_openid(user_id)
     text_content = "\n".join([
         part for part in [
             _clean((data or {}).get("title")),
             _clean((data or {}).get("content")),
         ] if part
     ])
-    text_result = check_text_with_wechat(content=text_content, openid=cleaned_openid, scene=scene)
+    text_result = check_text_with_wechat(
+        content=text_content,
+        openid=cleaned_openid,
+        scene=scene,
+        content_type="post",
+        content_id=content_id,
+        user_id=user_id,
+    )
     if not text_result["passed"]:
         raise ValueError("内容包含微信安全接口判定的风险文本，请修改后再发布")
     image_results = [
-        submit_image_with_wechat(media_url=url, openid=cleaned_openid, scene=scene)
+        submit_image_with_wechat(
+            media_url=url,
+            openid=cleaned_openid,
+            scene=scene,
+            content_type="post",
+            content_id=content_id,
+            user_id=user_id,
+        )
         for url in _image_urls((data or {}).get("images"))
     ]
     return {
@@ -234,9 +403,25 @@ def check_moment_payload_with_wechat(data: dict[str, Any], *, openid: Any = "", 
     }
 
 
-def check_comment_payload_with_wechat(data: dict[str, Any], *, openid: Any = "", scene: Any = 2) -> dict[str, Any]:
-    cleaned_openid = _clean(openid, 128) or get_user_openid((data or {}).get("user_id"))
-    text_result = check_text_with_wechat(content=(data or {}).get("content"), openid=cleaned_openid, scene=scene)
+def check_comment_payload_with_wechat(
+    data: dict[str, Any],
+    *,
+    openid: Any = "",
+    scene: Any = 2,
+    content_id: Any = "",
+    parent_content_id: Any = "",
+) -> dict[str, Any]:
+    user_id = (data or {}).get("user_id")
+    cleaned_openid = _clean(openid, 128) or get_user_openid(user_id)
+    text_result = check_text_with_wechat(
+        content=(data or {}).get("content"),
+        openid=cleaned_openid,
+        scene=scene,
+        content_type="comment",
+        content_id=content_id,
+        user_id=user_id,
+        parent_content_id=parent_content_id,
+    )
     if not text_result["passed"]:
         raise ValueError("评论包含微信安全接口判定的风险文本，请修改后再发布")
     return {"ok": True, "text": text_result, "images": [], "image_count": 0}
@@ -279,6 +464,58 @@ def _serialize_comment(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _serialize_safety(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": row.get("id"),
+        "content_type": row.get("content_type") or "",
+        "content_id": row.get("content_id") or "",
+        "parent_content_id": row.get("parent_content_id") or "",
+        "check_type": row.get("check_type") or "",
+        "trace_id": row.get("trace_id") or "",
+        "media_url": row.get("media_url") or "",
+        "suggest": row.get("suggest") or "",
+        "label": row.get("label") or "",
+        "status": row.get("status") or "",
+        "raw_response": _json_loads(row.get("raw_response_json"), {}),
+        "callback": _json_loads(row.get("callback_json"), {}),
+        "created_at": str(row.get("created_at") or ""),
+        "updated_at": str(row.get("updated_at") or ""),
+    }
+
+
+def _attach_latest_safety(items: list[dict[str, Any]]) -> None:
+    if not items:
+        return
+    init_content_safety_tables()
+    keys = [(item["type"], item["id"]) for item in items if item.get("type") and item.get("id")]
+    if not keys:
+        return
+    filters = " OR ".join(["(content_type=%s AND content_id=%s)" for _ in keys])
+    params: list[Any] = []
+    for content_type, content_id in keys:
+        params.extend([content_type, content_id])
+    with _connect_app(autocommit=True) as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                f"""
+                SELECT *
+                FROM {SAFETY_TABLE_NAME}
+                WHERE {filters}
+                ORDER BY updated_at DESC
+                """,
+                params,
+            )
+            rows = list(cursor.fetchall() or [])
+    by_key: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for row in rows:
+        key = (_clean(row.get("content_type"), 16), _clean(row.get("content_id"), 64))
+        by_key.setdefault(key, []).append(_serialize_safety(row))
+    for item in items:
+        checks = by_key.get((item["type"], item["id"]), [])
+        item["safety_checks"] = checks[:10]
+        item["latest_safety"] = checks[0] if checks else {}
+
+
 def list_content_reviews(*, content_type: Any = "all", status: Any = "active", limit: Any = 50) -> dict[str, Any]:
     cleaned_type = _clean(content_type, 16) or "all"
     if cleaned_type not in CONTENT_TYPES:
@@ -319,7 +556,9 @@ def list_content_reviews(*, content_type: Any = "all", status: Any = "active", l
                 )
                 items.extend(_serialize_comment(row) for row in list(cursor.fetchall() or []))
     items.sort(key=lambda item: item.get("updated_at") or "", reverse=True)
-    return {"ok": True, "count": len(items[:cleaned_limit]), "items": items[:cleaned_limit]}
+    items = items[:cleaned_limit]
+    _attach_latest_safety(items)
+    return {"ok": True, "count": len(items), "items": items}
 
 
 def _load_content(cursor, content_type: str, content_id: str) -> dict[str, Any]:
@@ -395,3 +634,123 @@ def review_content(content_type: Any, content_id: Any, payload: dict[str, Any]) 
         conn.commit()
 
     return {"ok": True, "item": updated, "safety": safety_result}
+
+
+def _xml_element_to_dict(element: ET.Element) -> Any:
+    children = list(element)
+    if not children:
+        return element.text or ""
+    grouped: dict[str, Any] = {}
+    for child in children:
+        value = _xml_element_to_dict(child)
+        if child.tag in grouped:
+            if not isinstance(grouped[child.tag], list):
+                grouped[child.tag] = [grouped[child.tag]]
+            grouped[child.tag].append(value)
+        else:
+            grouped[child.tag] = value
+    return grouped
+
+
+def _parse_callback_payload(raw_body: bytes | str, content_type: str = "") -> dict[str, Any]:
+    if isinstance(raw_body, bytes):
+        text = raw_body.decode("utf-8", errors="replace")
+    else:
+        text = str(raw_body or "")
+    text = text.strip()
+    if not text:
+        return {}
+    if "json" in content_type.lower() or text.startswith("{"):
+        return json.loads(text)
+    root = ET.fromstring(text)
+    parsed = _xml_element_to_dict(root)
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _first_dict(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, list):
+        for item in value:
+            if isinstance(item, dict):
+                return item
+    return {}
+
+
+def _callback_result(payload: dict[str, Any]) -> dict[str, str]:
+    result = _first_dict(payload.get("result") or payload.get("Result"))
+    detail = _first_dict(payload.get("detail") or payload.get("Detail"))
+    suggest = _clean(
+        result.get("suggest") or result.get("Suggest") or detail.get("suggest") or detail.get("Suggest") or payload.get("suggest"),
+        32,
+    )
+    label = _clean(
+        result.get("label") or result.get("Label") or detail.get("label") or detail.get("Label") or payload.get("label"),
+        64,
+    )
+    return {
+        "trace_id": _clean(payload.get("trace_id") or payload.get("TraceId") or payload.get("traceId"), 128),
+        "suggest": suggest or "pass",
+        "label": label,
+    }
+
+
+def handle_wechat_safety_callback(raw_body: bytes | str, content_type: str = "") -> dict[str, Any]:
+    payload = _parse_callback_payload(raw_body, content_type)
+    result = _callback_result(payload)
+    trace_id = result["trace_id"]
+    if not trace_id:
+        raise ValueError("微信安全回调缺少 trace_id")
+
+    status = _status_from_suggest(result["suggest"])
+    now = _now()
+    init_content_safety_tables()
+    updated_rows: list[dict[str, Any]] = []
+    with _connect_app() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                f"""
+                UPDATE {SAFETY_TABLE_NAME}
+                SET suggest=%s,label=%s,status=%s,callback_json=%s,updated_at=%s
+                WHERE trace_id=%s
+                """,
+                (result["suggest"], result["label"] or None, status, _json_dumps(payload), now, trace_id),
+            )
+            if cursor.rowcount == 0:
+                cursor.execute(
+                    f"""
+                    INSERT INTO {SAFETY_TABLE_NAME} (
+                        id,content_type,content_id,check_type,provider,trace_id,suggest,label,status,
+                        callback_json,created_at,updated_at
+                    ) VALUES (%s,'unknown',%s,'image','wechat',%s,%s,%s,%s,%s,%s,%s)
+                    """,
+                    (
+                        uuid.uuid4().hex,
+                        trace_id,
+                        trace_id,
+                        result["suggest"],
+                        result["label"] or None,
+                        status,
+                        _json_dumps(payload),
+                        now,
+                        now,
+                    ),
+                )
+            cursor.execute(f"SELECT * FROM {SAFETY_TABLE_NAME} WHERE trace_id=%s", (trace_id,))
+            updated_rows = list(cursor.fetchall() or [])
+            if status == "risky":
+                for row in updated_rows:
+                    if row.get("content_type") == "post" and row.get("content_id"):
+                        cursor.execute(
+                            f"UPDATE {MOMENT_TABLE_NAME} SET status='hidden', updated_at=%s WHERE id=%s AND status='active'",
+                            (now, row["content_id"]),
+                        )
+        conn.commit()
+    return {
+        "ok": True,
+        "trace_id": trace_id,
+        "suggest": result["suggest"],
+        "label": result["label"],
+        "status": status,
+        "updated_count": len(updated_rows),
+    }

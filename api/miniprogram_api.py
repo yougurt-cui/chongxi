@@ -35,6 +35,7 @@ from services.miniprogram_moment_image_service import (
     get_moment_image,
     upload_moment_image,
 )
+from services.miniprogram_content_review_service import handle_wechat_safety_callback
 from services.miniprogram_moment_report_service import (
     create_moment_report,
     list_moment_reports,
@@ -106,6 +107,22 @@ def _require_admin_token() -> None:
         raise PermissionError("MINIPROGRAM_ADMIN_TOKEN 未配置")
     if supplied != expected:
         raise PermissionError("管理员权限不足")
+
+
+@miniprogram_api.get("/wechat-safety-callback")
+def wechat_safety_callback_verify():
+    return request.args.get("echostr") or "ok", 200
+
+
+@miniprogram_api.post("/wechat-safety-callback")
+def wechat_safety_callback_endpoint():
+    try:
+        result = handle_wechat_safety_callback(request.get_data() or b"", request.content_type or "")
+        return jsonify(result), 200
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
 
 
 @miniprogram_api.post("/auth/wechat-login")

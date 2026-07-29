@@ -1604,6 +1604,17 @@
       return `微信安全接口建议 ${safety.suggest || "-"}｜标签 ${safety.label || "-"}｜trace_id ${safety.trace_id || "-"}`;
     }
 
+    function safetySummary(safety) {
+      if (!safety || !safety.status) return "未检测";
+      const labels = {
+        pass: "通过",
+        review: "疑似",
+        risky: "风险",
+        async_pending: "图片待回调",
+      };
+      return `${labels[safety.status] || safety.status}｜${safety.check_type || "-"}${safety.trace_id ? `｜${safety.trace_id}` : ""}`;
+    }
+
     function renderContentReviewItems(items) {
       contentReviewSummaryEl.textContent = `${items.length} 条内容`;
       contentReviewRowsEl.innerHTML = "";
@@ -1623,6 +1634,7 @@
             <div style="font-weight:800;color:#102236;">${escapeHtml(item.title || item.post_id || "-")}</div>
             <div style="margin-top:6px;">${escapeHtml(compactText(item.content, 240))}</div>
             ${item.image_count ? `<div class="muted" style="margin-top:6px;">图片 ${escapeHtml(item.image_count)} 张</div>` : ""}
+            <div class="muted" style="margin-top:6px;">检测：${escapeHtml(safetySummary(item.latest_safety))}</div>
           </td>
           <td><span class="status-badge">${escapeHtml(moderationStatusLabel(item.status))}</span></td>
           <td class="muted">${escapeHtml(item.updated_at || item.created_at || "-")}</td>

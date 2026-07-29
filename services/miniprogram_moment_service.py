@@ -434,11 +434,11 @@ def _ensure_cat_profile_for_moment(cursor, data: dict[str, Any], now: str) -> di
 
 def create_moment(payload: dict[str, Any]) -> dict[str, Any]:
     data = _normalize_payload(payload)
+    post_id = uuid.uuid4().hex
     from services.miniprogram_content_review_service import check_moment_payload_with_wechat
 
-    safety_result = check_moment_payload_with_wechat(data)
+    safety_result = check_moment_payload_with_wechat(data, content_id=post_id)
     init_miniprogram_moment_tables()
-    post_id = uuid.uuid4().hex
     now = _now()
     with _connect_app() as conn:
         with conn.cursor() as cursor:
@@ -620,14 +620,18 @@ def create_moment_comment(post_id: Any, payload: dict[str, Any]) -> dict[str, An
     content = _clean(payload.get("content") or payload.get("text") or payload.get("message"), MAX_COMMENT_LENGTH)
     if not content:
         raise ValueError("content 不能为空")
+    comment_id = uuid.uuid4().hex
     safety_payload = {"user_id": cleaned_user_id, "content": content}
     from services.miniprogram_content_review_service import check_comment_payload_with_wechat
 
-    safety_result = check_comment_payload_with_wechat(safety_payload)
+    safety_result = check_comment_payload_with_wechat(
+        safety_payload,
+        content_id=comment_id,
+        parent_content_id=cleaned_post_id,
+    )
     anonymous = 1 if str(payload.get("anonymous") or "").lower() in {"1", "true", "yes"} else 0
     author_name = _clean(payload.get("author_name"), 64)
     author_avatar = _clean(payload.get("author_avatar"), 1024)
-    comment_id = uuid.uuid4().hex
     now = _now()
     init_miniprogram_moment_tables()
     with _connect_app() as conn:
