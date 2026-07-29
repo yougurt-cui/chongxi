@@ -47,6 +47,7 @@ git pull --ff-only origin "$REMOTE_BRANCH"
   services/cat_food_task_service.py \
   services/cat_food_product_catalog_service.py \
   services/miniprogram_content_review_service.py \
+  services/miniprogram_moment_service.py \
   services/miniprogram_moment_report_service.py \
   services/product_function_service.py \
   services/product_identity_service.py \

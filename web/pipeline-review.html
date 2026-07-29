@@ -1594,6 +1594,12 @@
 
     function safetyText(safety) {
       if (!safety) return "微信安全接口未返回结果";
+      if (safety.text || safety.images) {
+        const text = safety.text?.passed ? "文本通过" : `文本${safety.text?.suggest || "未知"}`;
+        const imageCount = (safety.images || []).length;
+        const traces = (safety.images || []).map((item) => item.trace_id).filter(Boolean);
+        return `${text}｜图片已提交异步审核 ${imageCount} 张${traces.length ? `｜trace_id ${traces.join("、")}` : ""}`;
+      }
       if (safety.passed) return `微信安全接口通过｜trace_id ${safety.trace_id || "-"}`;
       return `微信安全接口建议 ${safety.suggest || "-"}｜标签 ${safety.label || "-"}｜trace_id ${safety.trace_id || "-"}`;
     }
@@ -1643,7 +1649,7 @@
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ action: "check", scene: 2 }),
             });
-            showToast(safetyText(result.safety), result.safety?.passed ? "ok" : "error");
+            showToast(safetyText(result.safety), result.safety?.text?.passed || result.safety?.passed ? "ok" : "error");
           });
         });
 

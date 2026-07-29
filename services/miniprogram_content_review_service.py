@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 import urllib.parse
 import urllib.request
@@ -24,6 +25,7 @@ MAX_LIST_LIMIT = 200
 CONTENT_TYPES = {"all", "post", "comment"}
 CONTENT_ACTIONS = {"check", "hide", "delete"}
 _ACCESS_TOKEN_CACHE: dict[str, Any] = {"token": "", "expires_at": 0.0}
+DEFAULT_PUBLIC_BASE_URL = "https://chongxi.cloud"
 
 
 def _now() -> str:
@@ -56,6 +58,26 @@ def _json_loads(raw: Any, default: Any) -> Any:
         return json.loads(str(raw))
     except json.JSONDecodeError:
         return default
+
+
+def _public_base_url() -> str:
+    return (
+        os.getenv("MINIPROGRAM_PUBLIC_BASE_URL")
+        or os.getenv("APP_PUBLIC_BASE_URL")
+        or os.getenv("PUBLIC_BASE_URL")
+        or DEFAULT_PUBLIC_BASE_URL
+    ).strip().rstrip("/")
+
+
+def _absolute_media_url(url: Any) -> str:
+    value = _clean(url, 2048)
+    if not value:
+        return ""
+    if value.startswith("http://") or value.startswith("https://"):
+        return value
+    if value.startswith("/"):
+        return f"{_public_base_url()}{value}"
+    return value
 
 
 def _wechat_access_token() -> str:
@@ -123,6 +145,103 @@ def check_text_with_wechat(*, content: Any, openid: Any, scene: Any = 2) -> dict
     }
 
 
+def submit_image_with_wechat(*, media_url: Any, openid: Any, scene: Any = 2) -> dict[str, Any]:
+    absolute_url = _absolute_media_url(media_url)
+    cleaned_openid = _clean(openid, 128)
+    if not absolute_url:
+        raise ValueError("图片 URL 不能为空")
+    if not absolute_url.startswith(("http://", "https://")):
+        raise ValueError("图片安全审核需要公网可访问的 HTTP(S) URL")
+    if not cleaned_openid:
+        raise ValueError("内容作者缺少微信 openid，无法调用微信图片安全接口")
+
+    token = _wechat_access_token()
+    url = f"https://api.weixin.qq.com/wxa/media_check_async?access_token={urllib.parse.quote(token)}"
+    body = json.dumps({
+        "media_url": absolute_url,
+        "media_type": 2,
+        "version": 2,
+        "scene": int(scene or 2),
+        "openid": cleaned_openid,
+    }, ensure_ascii=False).encode("utf-8")
+    request = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json"}, method="POST")
+    with urllib.request.urlopen(request, timeout=10) as response:
+        data = json.loads(response.read().decode("utf-8"))
+
+    errcode = int(data.get("errcode") or 0)
+    if errcode != 0:
+        raise ValueError(f"微信图片安全接口失败：{data.get('errmsg') or errcode}")
+    return {
+        "ok": True,
+        "passed": None,
+        "suggest": "async_pending",
+        "label": "",
+        "trace_id": data.get("trace_id") or "",
+        "media_url": absolute_url,
+        "raw": data,
+    }
+
+
+def get_user_openid(user_id: Any) -> str:
+    cleaned_user_id = _clean(user_id, 128)
+    if not cleaned_user_id:
+        return ""
+    init_miniprogram_auth_tables()
+    with _connect_app(autocommit=True) as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(f"SELECT openid FROM {USER_TABLE} WHERE id=%s AND status='active' LIMIT 1", (cleaned_user_id,))
+            row = cursor.fetchone() or {}
+    return _clean(row.get("openid"), 128)
+
+
+def _image_urls(images: Any) -> list[str]:
+    if not isinstance(images, list):
+        return []
+    urls: list[str] = []
+    for item in images:
+        if isinstance(item, str):
+            url = item
+        elif isinstance(item, dict):
+            url = item.get("url") or item.get("src") or item.get("path")
+        else:
+            url = ""
+        absolute_url = _absolute_media_url(url)
+        if absolute_url:
+            urls.append(absolute_url)
+    return urls
+
+
+def check_moment_payload_with_wechat(data: dict[str, Any], *, openid: Any = "", scene: Any = 2) -> dict[str, Any]:
+    cleaned_openid = _clean(openid, 128) or get_user_openid((data or {}).get("user_id"))
+    text_content = "\n".join([
+        part for part in [
+            _clean((data or {}).get("title")),
+            _clean((data or {}).get("content")),
+        ] if part
+    ])
+    text_result = check_text_with_wechat(content=text_content, openid=cleaned_openid, scene=scene)
+    if not text_result["passed"]:
+        raise ValueError("内容包含微信安全接口判定的风险文本，请修改后再发布")
+    image_results = [
+        submit_image_with_wechat(media_url=url, openid=cleaned_openid, scene=scene)
+        for url in _image_urls((data or {}).get("images"))
+    ]
+    return {
+        "ok": True,
+        "text": text_result,
+        "images": image_results,
+        "image_count": len(image_results),
+    }
+
+
+def check_comment_payload_with_wechat(data: dict[str, Any], *, openid: Any = "", scene: Any = 2) -> dict[str, Any]:
+    cleaned_openid = _clean(openid, 128) or get_user_openid((data or {}).get("user_id"))
+    text_result = check_text_with_wechat(content=(data or {}).get("content"), openid=cleaned_openid, scene=scene)
+    if not text_result["passed"]:
+        raise ValueError("评论包含微信安全接口判定的风险文本，请修改后再发布")
+    return {"ok": True, "text": text_result, "images": [], "image_count": 0}
+
+
 def _serialize_post(row: dict[str, Any]) -> dict[str, Any]:
     images = _json_loads(row.get("images_json"), [])
     content = "\n".join([part for part in [_clean(row.get("title")), _clean(row.get("content"))] if part])
@@ -135,6 +254,7 @@ def _serialize_post(row: dict[str, Any]) -> dict[str, Any]:
         "openid": row.get("openid") or "",
         "title": row.get("title") or "",
         "content": content,
+        "images": images if isinstance(images, list) else [],
         "image_count": len(images) if isinstance(images, list) else 0,
         "status": row.get("status") or "",
         "created_at": str(row.get("created_at") or ""),
@@ -256,11 +376,10 @@ def review_content(content_type: Any, content_id: Any, payload: dict[str, Any]) 
             item = _load_content(cursor, cleaned_type, cleaned_id)
             safety_result = None
             if action == "check":
-                safety_result = check_text_with_wechat(
-                    content=item["content"],
-                    openid=item["openid"],
-                    scene=(payload or {}).get("scene") or 2,
-                )
+                if cleaned_type == "post":
+                    safety_result = check_moment_payload_with_wechat(item, openid=item["openid"], scene=(payload or {}).get("scene") or 2)
+                else:
+                    safety_result = check_comment_payload_with_wechat(item, openid=item["openid"], scene=(payload or {}).get("scene") or 2)
             elif cleaned_type == "post":
                 next_status = "hidden" if action == "hide" else "deleted"
                 cursor.execute(
