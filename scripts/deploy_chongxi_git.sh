@@ -33,6 +33,8 @@ git pull --ff-only origin "$REMOTE_BRANCH"
   app_config.py \
   api/catfood_standardization_api.py \
   api/consumer_api.py \
+  api/miniprogram_api.py \
+  api/pipeline_api.py \
   api/product_identity_api.py \
   api/product_catalog_api.py \
   api/product_function_api.py \
@@ -44,6 +46,8 @@ git pull --ff-only origin "$REMOTE_BRANCH"
   services/orchestrator_service.py \
   services/cat_food_task_service.py \
   services/cat_food_product_catalog_service.py \
+  services/miniprogram_content_review_service.py \
+  services/miniprogram_moment_report_service.py \
   services/product_function_service.py \
   services/product_identity_service.py \
   services/taobao_sku_import_service.py \

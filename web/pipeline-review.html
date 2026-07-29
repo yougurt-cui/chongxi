@@ -374,6 +374,30 @@
       padding: 0 7px;
       font-size: 11px;
     }
+    .moderation-table {
+      min-width: 1180px;
+      table-layout: fixed;
+    }
+    .moderation-table th:nth-child(1) { width: 82px; }
+    .moderation-table th:nth-child(2) { width: 150px; }
+    .moderation-table th:nth-child(3) { width: 430px; }
+    .moderation-table th:nth-child(4) { width: 120px; }
+    .moderation-table th:nth-child(5) { width: 170px; }
+    .moderation-table th:nth-child(6) { width: 230px; }
+    .moderation-table .payload-cell {
+      max-width: none;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+    }
+    .moderation-table .row-actions {
+      min-width: 0;
+      gap: 6px;
+    }
+    .moderation-table .small-button {
+      min-height: 30px;
+      padding: 0 8px;
+      font-size: 11px;
+    }
     .section[hidden] { display: none; }
     textarea { min-height: 172px; resize: vertical; line-height: 1.55; }
     .actions {
@@ -455,6 +479,8 @@
       <button id="nodeTab" class="tab active" type="button" data-tab="node">node节点调度</button>
       <button id="identityTab" class="tab" type="button" data-tab="identity">brand身份认证</button>
       <button id="diseaseTab" class="tab" type="button" data-tab="disease">病症数据确认</button>
+      <button id="contentReviewTab" class="tab" type="button" data-tab="content">内容审核</button>
+      <button id="reportReviewTab" class="tab" type="button" data-tab="report">举报审核</button>
     </section>
 
     <div id="toast" class="toast"></div>
@@ -693,6 +719,106 @@
       </section>
     </section>
 
+    <section id="contentReviewSection" class="section" hidden>
+      <section class="toolbar">
+        <div>
+          <div class="title">小程序内容审核</div>
+          <div id="contentReviewSummary" class="muted">等待加载...</div>
+        </div>
+        <button id="contentReviewRefresh" class="button secondary" type="button">刷新内容</button>
+      </section>
+
+      <section class="filters" aria-label="内容审核筛选">
+        <label>
+          <span class="field-label">内容类型</span>
+          <select id="contentReviewTypeFilter">
+            <option value="all">全部</option>
+            <option value="post">瞬间</option>
+            <option value="comment">评论</option>
+          </select>
+        </label>
+        <label>
+          <span class="field-label">状态</span>
+          <select id="contentReviewStatusFilter">
+            <option value="active">展示中</option>
+            <option value="hidden">已隐藏</option>
+            <option value="deleted">已删除</option>
+          </select>
+        </label>
+        <div class="row-actions">
+          <button id="contentReviewApplyFilter" class="button" type="button">筛选</button>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="table-wrap">
+          <table class="moderation-table">
+            <thead>
+              <tr>
+                <th>类型</th>
+                <th>作者</th>
+                <th>内容</th>
+                <th>状态</th>
+                <th>更新时间</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody id="contentReviewRows"></tbody>
+          </table>
+        </div>
+        <div id="contentReviewEmpty" class="empty" style="display:none;">暂无可审核内容。</div>
+      </section>
+    </section>
+
+    <section id="reportReviewSection" class="section" hidden>
+      <section class="toolbar">
+        <div>
+          <div class="title">小程序举报审核</div>
+          <div id="reportReviewSummary" class="muted">等待加载...</div>
+        </div>
+        <button id="reportReviewRefresh" class="button secondary" type="button">刷新举报</button>
+      </section>
+
+      <section class="filters" aria-label="举报审核筛选">
+        <label>
+          <span class="field-label">审核状态</span>
+          <select id="reportReviewStatusFilter">
+            <option value="pending">待处理</option>
+            <option value="processing">处理中</option>
+            <option value="resolved">已处理</option>
+            <option value="rejected">已驳回</option>
+            <option value="">全部</option>
+          </select>
+        </label>
+        <label>
+          <span class="field-label">帖子 ID</span>
+          <input id="reportReviewPostFilter" placeholder="可选" />
+        </label>
+        <div class="row-actions">
+          <button id="reportReviewApplyFilter" class="button" type="button">筛选</button>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="table-wrap">
+          <table class="moderation-table">
+            <thead>
+              <tr>
+                <th>举报</th>
+                <th>帖子</th>
+                <th>原因与快照</th>
+                <th>状态</th>
+                <th>更新时间</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody id="reportReviewRows"></tbody>
+          </table>
+        </div>
+        <div id="reportReviewEmpty" class="empty" style="display:none;">暂无举报记录。</div>
+      </section>
+    </section>
+
     <datalist id="diseaseBrandOptions"></datalist>
     <datalist id="standardBrandOptions"></datalist>
     <datalist id="standardIngredientOptions"></datalist>
@@ -771,9 +897,13 @@
     const nodeTab = document.getElementById("nodeTab");
     const identityTab = document.getElementById("identityTab");
     const diseaseTab = document.getElementById("diseaseTab");
+    const contentReviewTab = document.getElementById("contentReviewTab");
+    const reportReviewTab = document.getElementById("reportReviewTab");
     const nodeSection = document.getElementById("nodeSection");
     const identitySection = document.getElementById("identitySection");
     const diseaseSection = document.getElementById("diseaseSection");
+    const contentReviewSection = document.getElementById("contentReviewSection");
+    const reportReviewSection = document.getElementById("reportReviewSection");
     const identityRowsEl = document.getElementById("identityRows");
     const identityEmptyEl = document.getElementById("identityEmpty");
     const identitySummaryEl = document.getElementById("identitySummary");
@@ -827,6 +957,20 @@
     const diseaseBrandStatsMeta = document.getElementById("diseaseBrandStatsMeta");
     const diseaseBrandStatsRows = document.getElementById("diseaseBrandStatsRows");
     const diseaseBrandStatsEmpty = document.getElementById("diseaseBrandStatsEmpty");
+    const contentReviewRowsEl = document.getElementById("contentReviewRows");
+    const contentReviewEmptyEl = document.getElementById("contentReviewEmpty");
+    const contentReviewSummaryEl = document.getElementById("contentReviewSummary");
+    const contentReviewRefreshBtn = document.getElementById("contentReviewRefresh");
+    const contentReviewTypeFilter = document.getElementById("contentReviewTypeFilter");
+    const contentReviewStatusFilter = document.getElementById("contentReviewStatusFilter");
+    const contentReviewApplyFilter = document.getElementById("contentReviewApplyFilter");
+    const reportReviewRowsEl = document.getElementById("reportReviewRows");
+    const reportReviewEmptyEl = document.getElementById("reportReviewEmpty");
+    const reportReviewSummaryEl = document.getElementById("reportReviewSummary");
+    const reportReviewRefreshBtn = document.getElementById("reportReviewRefresh");
+    const reportReviewStatusFilter = document.getElementById("reportReviewStatusFilter");
+    const reportReviewPostFilter = document.getElementById("reportReviewPostFilter");
+    const reportReviewApplyFilter = document.getElementById("reportReviewApplyFilter");
     let activeOcrItem = null;
     let activeTab = "node";
     let activeIdentityTab = "brand";
@@ -1435,6 +1579,173 @@
       diseaseSelectAll.checked = false;
     }
 
+    function moderationStatusLabel(status) {
+      const labels = {
+        active: "展示中",
+        hidden: "已隐藏",
+        deleted: "已删除",
+        pending: "待处理",
+        processing: "处理中",
+        resolved: "已处理",
+        rejected: "已驳回",
+      };
+      return labels[status] || status || "-";
+    }
+
+    function safetyText(safety) {
+      if (!safety) return "微信安全接口未返回结果";
+      if (safety.passed) return `微信安全接口通过｜trace_id ${safety.trace_id || "-"}`;
+      return `微信安全接口建议 ${safety.suggest || "-"}｜标签 ${safety.label || "-"}｜trace_id ${safety.trace_id || "-"}`;
+    }
+
+    function renderContentReviewItems(items) {
+      contentReviewSummaryEl.textContent = `${items.length} 条内容`;
+      contentReviewRowsEl.innerHTML = "";
+      contentReviewEmptyEl.style.display = items.length ? "none" : "block";
+      items.forEach((item) => {
+        const row = document.createElement("tr");
+        row.innerHTML = `
+          <td>
+            <span class="chip">${escapeHtml(item.type_label || item.type)}</span>
+            <div class="task-id" style="margin-top:6px;">${escapeHtml(item.id)}</div>
+          </td>
+          <td>
+            <div class="task-id">${escapeHtml(item.user_id || "-")}</div>
+            <div class="muted" style="margin-top:6px;">openid：${escapeHtml(item.openid || "缺失")}</div>
+          </td>
+          <td class="payload-cell">
+            <div style="font-weight:800;color:#102236;">${escapeHtml(item.title || item.post_id || "-")}</div>
+            <div style="margin-top:6px;">${escapeHtml(compactText(item.content, 240))}</div>
+            ${item.image_count ? `<div class="muted" style="margin-top:6px;">图片 ${escapeHtml(item.image_count)} 张</div>` : ""}
+          </td>
+          <td><span class="status-badge">${escapeHtml(moderationStatusLabel(item.status))}</span></td>
+          <td class="muted">${escapeHtml(item.updated_at || item.created_at || "-")}</td>
+          <td>
+            <div class="row-actions">
+              <button class="small-button" data-action="check-content" type="button">微信检测</button>
+              ${item.type === "post" ? '<button class="small-button secondary" data-action="hide-content" type="button">隐藏</button>' : ""}
+              <button class="small-button danger" data-action="delete-content" type="button">删除</button>
+              <button class="small-button secondary" data-action="content-output" type="button">详情</button>
+            </div>
+          </td>
+        `;
+
+        row.querySelector('[data-action="content-output"]').addEventListener("click", () => {
+          outputDialogMeta.textContent = `${item.type_label || item.type}｜${item.id}`;
+          outputJsonEl.textContent = safeJson(item);
+          outputDialog.showModal();
+        });
+
+        row.querySelector('[data-action="check-content"]').addEventListener("click", async () => {
+          await runAction(async () => {
+            const result = await api(`/api/pipeline/miniprogram-content/${item.type}/${item.id}/review`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ action: "check", scene: 2 }),
+            });
+            showToast(safetyText(result.safety), result.safety?.passed ? "ok" : "error");
+          });
+        });
+
+        const hideButton = row.querySelector('[data-action="hide-content"]');
+        if (hideButton) {
+          hideButton.addEventListener("click", async () => {
+            if (!window.confirm("确认隐藏这条瞬间？")) return;
+            await runAction(async () => {
+              await api(`/api/pipeline/miniprogram-content/${item.type}/${item.id}/review`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ action: "hide" }),
+              });
+              showToast("内容已隐藏");
+            });
+          });
+        }
+
+        row.querySelector('[data-action="delete-content"]').addEventListener("click", async () => {
+          if (!window.confirm(`确认删除这条${item.type === "post" ? "瞬间" : "评论"}？`)) return;
+          await runAction(async () => {
+            await api(`/api/pipeline/miniprogram-content/${item.type}/${item.id}/review`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ action: "delete" }),
+            });
+            showToast("内容已删除");
+          });
+        });
+
+        contentReviewRowsEl.appendChild(row);
+      });
+    }
+
+    function renderReportReviewItems(items) {
+      reportReviewSummaryEl.textContent = `${items.length} 条举报`;
+      reportReviewRowsEl.innerHTML = "";
+      reportReviewEmptyEl.style.display = items.length ? "none" : "block";
+      items.forEach((item) => {
+        const row = document.createElement("tr");
+        row.innerHTML = `
+          <td>
+            <div class="task-id">${escapeHtml(item.id)}</div>
+            <div class="muted" style="margin-top:6px;">举报人：${escapeHtml(item.reporter_user_id || "-")}</div>
+            <div class="muted" style="margin-top:6px;">被举报：${escapeHtml(item.reported_user_id || "-")}</div>
+          </td>
+          <td>
+            <div class="task-id">${escapeHtml(item.post_id || "-")}</div>
+            <div style="margin-top:6px;font-weight:800;color:#102236;">${escapeHtml(item.post_title || "-")}</div>
+          </td>
+          <td class="payload-cell">
+            <div><strong>${escapeHtml(item.reason_text || item.reason_code || "-")}</strong></div>
+            <div style="margin-top:6px;">${escapeHtml(compactText(item.detail || item.post_content_preview, 220))}</div>
+            ${item.review_note ? `<div class="muted" style="margin-top:6px;">审核备注：${escapeHtml(item.review_note)}</div>` : ""}
+          </td>
+          <td><span class="status-badge">${escapeHtml(moderationStatusLabel(item.status))}</span></td>
+          <td class="muted">${escapeHtml(item.updated_at || item.created_at || "-")}</td>
+          <td>
+            <div class="row-actions">
+              <button class="small-button secondary" data-action="report-processing" type="button">处理中</button>
+              <button class="small-button" data-action="report-resolve" type="button">处理完成</button>
+              <button class="small-button danger" data-action="report-hide" type="button">隐藏帖子</button>
+              <button class="small-button secondary" data-action="report-reject" type="button">驳回</button>
+              <button class="small-button secondary" data-action="report-output" type="button">详情</button>
+            </div>
+          </td>
+        `;
+
+        row.querySelector('[data-action="report-output"]').addEventListener("click", () => {
+          outputDialogMeta.textContent = `举报 ${item.id}`;
+          outputJsonEl.textContent = safeJson(item);
+          outputDialog.showModal();
+        });
+
+        const reviewReport = async (action, confirmText, reviewNote) => {
+          if (!window.confirm(confirmText)) return;
+          await runAction(async () => {
+            await api(`/api/pipeline/miniprogram-reports/${item.id}/review`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                action,
+                operator_id: "pipeline-review-page",
+                review_note: reviewNote,
+              }),
+            });
+            showToast("举报已处理");
+          });
+        };
+        row.querySelector('[data-action="report-processing"]').addEventListener("click", () =>
+          reviewReport("processing", "确认标记为处理中？", "生产线举报审核标记处理中"));
+        row.querySelector('[data-action="report-resolve"]').addEventListener("click", () =>
+          reviewReport("resolve", "确认标记为处理完成？", "生产线举报审核确认已处理"));
+        row.querySelector('[data-action="report-hide"]').addEventListener("click", () =>
+          reviewReport("hide_post", "确认隐藏被举报帖子并完成处理？", "生产线举报审核确认违规，已隐藏帖子"));
+        row.querySelector('[data-action="report-reject"]').addEventListener("click", () =>
+          reviewReport("reject", "确认驳回这条举报？", "生产线举报审核驳回"));
+
+        reportReviewRowsEl.appendChild(row);
+      });
+    }
+
     async function runAction(fn) {
       try {
         await fn();
@@ -1449,11 +1760,57 @@
           }
         } else if (activeTab === "disease") {
           await loadDiseaseItems();
+        } else if (activeTab === "content") {
+          await loadContentReviewItems();
+        } else if (activeTab === "report") {
+          await loadReportReviewItems();
         } else {
           await loadItems();
         }
       } catch (error) {
         showToast(error instanceof Error ? error.message : "操作失败", "error");
+      }
+    }
+
+    async function loadContentReviewItems() {
+      contentReviewRefreshBtn.disabled = true;
+      contentReviewSummaryEl.textContent = "正在加载...";
+      const params = new URLSearchParams({
+        type: contentReviewTypeFilter.value,
+        status: contentReviewStatusFilter.value,
+        limit: "100",
+      });
+      try {
+        const data = await api(`/api/pipeline/miniprogram-content?${params.toString()}`);
+        renderContentReviewItems(data.items || []);
+      } catch (error) {
+        contentReviewSummaryEl.textContent = "加载失败";
+        contentReviewRowsEl.innerHTML = "";
+        contentReviewEmptyEl.style.display = "block";
+        contentReviewEmptyEl.textContent = error instanceof Error ? error.message : "加载失败";
+      } finally {
+        contentReviewRefreshBtn.disabled = false;
+      }
+    }
+
+    async function loadReportReviewItems() {
+      reportReviewRefreshBtn.disabled = true;
+      reportReviewSummaryEl.textContent = "正在加载...";
+      const params = new URLSearchParams({
+        status: reportReviewStatusFilter.value,
+        post_id: reportReviewPostFilter.value.trim(),
+        limit: "100",
+      });
+      try {
+        const data = await api(`/api/pipeline/miniprogram-reports?${params.toString()}`);
+        renderReportReviewItems(data.items || []);
+      } catch (error) {
+        reportReviewSummaryEl.textContent = "加载失败";
+        reportReviewRowsEl.innerHTML = "";
+        reportReviewEmptyEl.style.display = "block";
+        reportReviewEmptyEl.textContent = error instanceof Error ? error.message : "加载失败";
+      } finally {
+        reportReviewRefreshBtn.disabled = false;
       }
     }
 
@@ -1799,9 +2156,13 @@
       nodeTab.classList.toggle("active", tab === "node");
       identityTab.classList.toggle("active", tab === "identity");
       diseaseTab.classList.toggle("active", tab === "disease");
+      contentReviewTab.classList.toggle("active", tab === "content");
+      reportReviewTab.classList.toggle("active", tab === "report");
       nodeSection.hidden = tab !== "node";
       identitySection.hidden = tab !== "identity";
       diseaseSection.hidden = tab !== "disease";
+      contentReviewSection.hidden = tab !== "content";
+      reportReviewSection.hidden = tab !== "report";
       if (tab === "identity" && !identityRowsEl.children.length) {
         if (activeIdentityTab === "product") {
           loadProductIdentityItems();
@@ -1815,6 +2176,12 @@
       if (tab === "disease" && !diseaseRowsEl.children.length) {
         loadDiseaseOptions();
         loadDiseaseItems();
+      }
+      if (tab === "content" && !contentReviewRowsEl.children.length) {
+        loadContentReviewItems();
+      }
+      if (tab === "report" && !reportReviewRowsEl.children.length) {
+        loadReportReviewItems();
       }
       if (tab === "node" && !rowsEl.children.length) {
         loadItems();
@@ -1892,9 +2259,21 @@
         loadDiseaseItems();
       }
     });
+    contentReviewRefreshBtn.addEventListener("click", loadContentReviewItems);
+    contentReviewApplyFilter.addEventListener("click", loadContentReviewItems);
+    contentReviewTypeFilter.addEventListener("change", loadContentReviewItems);
+    contentReviewStatusFilter.addEventListener("change", loadContentReviewItems);
+    reportReviewRefreshBtn.addEventListener("click", loadReportReviewItems);
+    reportReviewApplyFilter.addEventListener("click", loadReportReviewItems);
+    reportReviewStatusFilter.addEventListener("change", loadReportReviewItems);
+    reportReviewPostFilter.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") loadReportReviewItems();
+    });
     nodeTab.addEventListener("click", () => switchTab("node"));
     identityTab.addEventListener("click", () => switchTab("identity"));
     diseaseTab.addEventListener("click", () => switchTab("disease"));
+    contentReviewTab.addEventListener("click", () => switchTab("content"));
+    reportReviewTab.addEventListener("click", () => switchTab("report"));
     loadItems();
   </script>
 </body>
