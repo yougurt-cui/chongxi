@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 import urllib.request
 
@@ -109,16 +110,46 @@ def _require_admin_token() -> None:
         raise PermissionError("管理员权限不足")
 
 
+def _wechat_callback_token() -> str:
+    return (
+        os.getenv("WECHAT_MINIPROGRAM_CALLBACK_TOKEN")
+        or os.getenv("MINIPROGRAM_WECHAT_CALLBACK_TOKEN")
+        or os.getenv("WECHAT_CALLBACK_TOKEN")
+        or ""
+    ).strip()
+
+
+def _verify_wechat_callback_signature() -> None:
+    token = _wechat_callback_token()
+    if not token:
+        raise PermissionError("WECHAT_MINIPROGRAM_CALLBACK_TOKEN 未配置")
+    signature = (request.args.get("signature") or "").strip()
+    timestamp = (request.args.get("timestamp") or "").strip()
+    nonce = (request.args.get("nonce") or "").strip()
+    if not signature or not timestamp or not nonce:
+        raise PermissionError("微信回调签名参数缺失")
+    expected = hashlib.sha1("".join(sorted([token, timestamp, nonce])).encode("utf-8")).hexdigest()
+    if signature != expected:
+        raise PermissionError("微信回调签名校验失败")
+
+
 @miniprogram_api.get("/wechat-safety-callback")
 def wechat_safety_callback_verify():
-    return request.args.get("echostr") or "ok", 200
+    try:
+        _verify_wechat_callback_signature()
+        return request.args.get("echostr") or "ok", 200
+    except PermissionError as exc:
+        return str(exc), 403
 
 
 @miniprogram_api.post("/wechat-safety-callback")
 def wechat_safety_callback_endpoint():
     try:
+        _verify_wechat_callback_signature()
         result = handle_wechat_safety_callback(request.get_data() or b"", request.content_type or "")
         return jsonify(result), 200
+    except PermissionError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 403
     except ValueError as exc:
         return jsonify({"ok": False, "error": str(exc)}), 400
     except Exception as exc:
