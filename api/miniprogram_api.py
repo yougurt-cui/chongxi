@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import os
 import urllib.request
 
 from flask import Blueprint, Response, jsonify, request, send_file
 
-from services.miniprogram_auth_service import wechat_login
+from services.miniprogram_auth_service import get_user_by_token, require_user_by_token, wechat_login
 from services.miniprogram_cat_profile_service import (
     create_cat_profile,
     delete_cat_profile,
@@ -34,6 +35,12 @@ from services.miniprogram_moment_image_service import (
     get_moment_image,
     upload_moment_image,
 )
+from services.miniprogram_moment_report_service import (
+    create_moment_report,
+    list_moment_reports,
+    list_report_reasons,
+    review_moment_report,
+)
 
 
 miniprogram_api = Blueprint("miniprogram_api", __name__, url_prefix="/api/miniprogram")
@@ -46,7 +53,25 @@ def _json_payload() -> dict:
     return payload
 
 
-def _user_id_from_request(payload: dict | None = None) -> str:
+def _bearer_token_from_request() -> str:
+    authorization = request.headers.get("Authorization") or ""
+    scheme, _, token = authorization.partition(" ")
+    if scheme.lower() != "bearer" or not token.strip():
+        return ""
+    return token.strip()
+
+
+def _current_user_id(*, required: bool = False) -> str:
+    token = _bearer_token_from_request()
+    if token:
+        user = require_user_by_token(token) if required else get_user_by_token(token)
+        return (user or {}).get("id") or ""
+    if required:
+        raise PermissionError("请先登录")
+    return ""
+
+
+def _legacy_user_id_from_request(payload: dict | None = None) -> str:
     payload = payload or {}
     return (
         payload.get("user_id")
@@ -54,6 +79,33 @@ def _user_id_from_request(payload: dict | None = None) -> str:
         or request.headers.get("X-User-Id")
         or ""
     )
+
+
+def _user_id_from_request(
+    payload: dict | None = None,
+    *,
+    required: bool = False,
+    allow_legacy_user_id: bool = False,
+) -> str:
+    user_id = _current_user_id(required=required)
+    if user_id:
+        return user_id
+    if allow_legacy_user_id:
+        return _legacy_user_id_from_request(payload)
+    return ""
+
+
+def _auth_error_response(exc: Exception):
+    return jsonify({"ok": False, "error": str(exc)}), 401
+
+
+def _require_admin_token() -> None:
+    expected = (os.getenv("MINIPROGRAM_ADMIN_TOKEN") or "").strip()
+    supplied = (request.headers.get("X-Admin-Token") or "").strip()
+    if not expected:
+        raise PermissionError("MINIPROGRAM_ADMIN_TOKEN 未配置")
+    if supplied != expected:
+        raise PermissionError("管理员权限不足")
 
 
 @miniprogram_api.post("/auth/wechat-login")
@@ -69,7 +121,11 @@ def wechat_login_endpoint():
 @miniprogram_api.post("/cat-profiles")
 def create_cat_profile_endpoint():
     try:
-        return jsonify(create_cat_profile(_json_payload())), 201
+        payload = _json_payload()
+        payload["user_id"] = _user_id_from_request(payload, required=True)
+        return jsonify(create_cat_profile(payload)), 201
+    except PermissionError as exc:
+        return _auth_error_response(exc)
     except ValueError as exc:
         return jsonify({"ok": False, "error": str(exc)}), 400
     except Exception as exc:
@@ -80,9 +136,11 @@ def create_cat_profile_endpoint():
 def list_cat_profiles_endpoint():
     try:
         return jsonify(list_cat_profiles(
-            _user_id_from_request(),
+            _user_id_from_request(required=True),
             limit=request.args.get("limit") or 50,
         )), 200
+    except PermissionError as exc:
+        return _auth_error_response(exc)
     except ValueError as exc:
         return jsonify({"ok": False, "error": str(exc)}), 400
     except Exception as exc:
@@ -92,7 +150,9 @@ def list_cat_profiles_endpoint():
 @miniprogram_api.get("/cat-profiles/<profile_id>")
 def get_cat_profile_endpoint(profile_id: str):
     try:
-        return jsonify({"ok": True, "item": get_cat_profile(_user_id_from_request(), profile_id)}), 200
+        return jsonify({"ok": True, "item": get_cat_profile(_user_id_from_request(required=True), profile_id)}), 200
+    except PermissionError as exc:
+        return _auth_error_response(exc)
     except LookupError as exc:
         return jsonify({"ok": False, "error": str(exc)}), 404
     except ValueError as exc:
@@ -106,7 +166,9 @@ def get_cat_profile_endpoint(profile_id: str):
 def update_cat_profile_endpoint(profile_id: str):
     try:
         payload = _json_payload()
-        return jsonify(update_cat_profile(_user_id_from_request(payload), profile_id, payload)), 200
+        return jsonify(update_cat_profile(_user_id_from_request(payload, required=True), profile_id, payload)), 200
+    except PermissionError as exc:
+        return _auth_error_response(exc)
     except LookupError as exc:
         return jsonify({"ok": False, "error": str(exc)}), 404
     except ValueError as exc:
@@ -119,7 +181,9 @@ def update_cat_profile_endpoint(profile_id: str):
 def delete_cat_profile_endpoint(profile_id: str):
     try:
         payload = request.get_json(silent=True) or {}
-        return jsonify(delete_cat_profile(_user_id_from_request(payload), profile_id)), 200
+        return jsonify(delete_cat_profile(_user_id_from_request(payload, required=True), profile_id)), 200
+    except PermissionError as exc:
+        return _auth_error_response(exc)
     except LookupError as exc:
         return jsonify({"ok": False, "error": str(exc)}), 404
     except ValueError as exc:
@@ -136,7 +200,11 @@ def list_moment_categories_endpoint():
 @miniprogram_api.post("/moments")
 def create_moment_endpoint():
     try:
-        return jsonify(create_moment(_json_payload())), 201
+        payload = _json_payload()
+        payload["user_id"] = _user_id_from_request(payload, required=True)
+        return jsonify(create_moment(payload)), 201
+    except PermissionError as exc:
+        return _auth_error_response(exc)
     except LookupError as exc:
         return jsonify({"ok": False, "error": str(exc)}), 404
     except ValueError as exc:
@@ -173,10 +241,67 @@ def get_moment_endpoint(post_id: str):
         return jsonify({"ok": False, "error": str(exc)}), 500
 
 
+@miniprogram_api.get("/moment-report-reasons")
+def list_moment_report_reasons_endpoint():
+    return jsonify(list_report_reasons()), 200
+
+
+@miniprogram_api.post("/moments/<post_id>/reports")
+def create_moment_report_endpoint(post_id: str):
+    try:
+        payload = _json_payload()
+        payload["reporter_user_id"] = _user_id_from_request(payload, required=True)
+        return jsonify(create_moment_report(post_id, payload)), 201
+    except PermissionError as exc:
+        return _auth_error_response(exc)
+    except LookupError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 404
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@miniprogram_api.get("/admin/moment-reports")
+def list_moment_reports_endpoint():
+    try:
+        _require_admin_token()
+        return jsonify(list_moment_reports(
+            status=request.args.get("status") or "",
+            post_id=request.args.get("post_id") or "",
+            limit=request.args.get("limit") or 50,
+        )), 200
+    except PermissionError as exc:
+        return _auth_error_response(exc)
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@miniprogram_api.patch("/admin/moment-reports/<report_id>")
+def review_moment_report_endpoint(report_id: str):
+    try:
+        _require_admin_token()
+        return jsonify(review_moment_report(report_id, _json_payload())), 200
+    except PermissionError as exc:
+        return _auth_error_response(exc)
+    except LookupError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 404
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
 @miniprogram_api.post("/moments/<post_id>/like")
 def like_moment_endpoint(post_id: str):
     try:
-        return jsonify(set_moment_like(post_id, _json_payload(), liked=True)), 200
+        payload = _json_payload()
+        payload["user_id"] = _user_id_from_request(payload, required=True)
+        return jsonify(set_moment_like(post_id, payload, liked=True)), 200
+    except PermissionError as exc:
+        return _auth_error_response(exc)
     except LookupError as exc:
         return jsonify({"ok": False, "error": str(exc)}), 404
     except ValueError as exc:
@@ -189,7 +314,10 @@ def like_moment_endpoint(post_id: str):
 def unlike_moment_endpoint(post_id: str):
     try:
         payload = request.get_json(silent=True) or {}
+        payload["user_id"] = _user_id_from_request(payload, required=True)
         return jsonify(set_moment_like(post_id, payload, liked=False)), 200
+    except PermissionError as exc:
+        return _auth_error_response(exc)
     except LookupError as exc:
         return jsonify({"ok": False, "error": str(exc)}), 404
     except ValueError as exc:
@@ -217,7 +345,11 @@ def list_moment_comments_endpoint(post_id: str):
 @miniprogram_api.post("/moments/<post_id>/comments")
 def create_moment_comment_endpoint(post_id: str):
     try:
-        return jsonify(create_moment_comment(post_id, _json_payload())), 201
+        payload = _json_payload()
+        payload["user_id"] = _user_id_from_request(payload, required=True)
+        return jsonify(create_moment_comment(post_id, payload)), 201
+    except PermissionError as exc:
+        return _auth_error_response(exc)
     except LookupError as exc:
         return jsonify({"ok": False, "error": str(exc)}), 404
     except ValueError as exc:
@@ -230,7 +362,9 @@ def create_moment_comment_endpoint(post_id: str):
 def delete_moment_comment_endpoint(comment_id: str):
     try:
         payload = request.get_json(silent=True) or {}
-        return jsonify(delete_moment_comment(_user_id_from_request(payload), comment_id)), 200
+        return jsonify(delete_moment_comment(_user_id_from_request(payload, required=True), comment_id)), 200
+    except PermissionError as exc:
+        return _auth_error_response(exc)
     except LookupError as exc:
         return jsonify({"ok": False, "error": str(exc)}), 404
     except ValueError as exc:
@@ -243,7 +377,9 @@ def delete_moment_comment_endpoint(comment_id: str):
 def delete_moment_endpoint(post_id: str):
     try:
         payload = request.get_json(silent=True) or {}
-        return jsonify(delete_moment(_user_id_from_request(payload), post_id)), 200
+        return jsonify(delete_moment(_user_id_from_request(payload, required=True), post_id)), 200
+    except PermissionError as exc:
+        return _auth_error_response(exc)
     except LookupError as exc:
         return jsonify({"ok": False, "error": str(exc)}), 404
     except ValueError as exc:
@@ -256,8 +392,10 @@ def delete_moment_endpoint(post_id: str):
 def upload_moment_image_endpoint():
     try:
         image_file = request.files.get("image") or request.files.get("file")
-        user_id = request.form.get("user_id") or request.headers.get("X-User-Id") or ""
+        user_id = _user_id_from_request(required=True)
         return jsonify(upload_moment_image(image_file, user_id=user_id)), 201
+    except PermissionError as exc:
+        return _auth_error_response(exc)
     except ValueError as exc:
         return jsonify({"ok": False, "error": str(exc)}), 400
     except Exception as exc:
@@ -289,6 +427,9 @@ def get_moment_image_endpoint(file_id: str):
 def food_change_intent():
     try:
         payload = _json_payload()
+        user_id = _user_id_from_request(payload)
+        if user_id:
+            payload["user_id"] = user_id
         return jsonify(analyze_and_store(payload)), 200
     except ValueError as exc:
         return jsonify({"ok": False, "error": str(exc)}), 400

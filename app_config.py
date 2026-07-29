@@ -8,6 +8,27 @@ from typing import Any, Dict
 from vendor.csv_mysql_labeling.src.settings import load_settings
 
 
+BASE_DIR = Path(__file__).resolve().parent
+
+
+def _load_local_env() -> None:
+    env_path = BASE_DIR / ".env"
+    if not env_path.exists():
+        return
+    for raw_line in env_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        name, value = line.split("=", 1)
+        name = name.strip()
+        value = value.strip().strip('"').strip("'")
+        if name and name not in os.environ:
+            os.environ[name] = value
+
+
+_load_local_env()
+
+
 def _env_first(name: str, value: Any) -> Any:
     env_value = os.getenv(name)
     return env_value if env_value not in (None, "") else value

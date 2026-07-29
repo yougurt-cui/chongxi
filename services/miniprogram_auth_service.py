@@ -42,6 +42,10 @@ def _token_hash(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
+def _clean_token(value: Any) -> str:
+    return _clean(value, 256)
+
+
 def init_miniprogram_auth_tables() -> None:
     with _connect_app() as conn:
         with conn.cursor() as cursor:
@@ -106,24 +110,32 @@ def _wechat_code2session(code: str) -> dict[str, Any]:
     return data
 
 
-def _upsert_user(cursor, openid: str, unionid: str = "") -> dict[str, Any]:
+def _upsert_user(cursor, openid: str, unionid: str = "", *, nickname: str = "", avatar_url: str = "") -> dict[str, Any]:
     now = _now()
     cursor.execute(f"SELECT * FROM {USER_TABLE} WHERE openid=%s LIMIT 1", (openid,))
     user = cursor.fetchone()
     if user:
         cursor.execute(
-            f"UPDATE {USER_TABLE} SET unionid=COALESCE(NULLIF(%s, ''), unionid), last_login_at=%s, updated_at=%s WHERE id=%s",
-            (unionid, now, now, user["id"]),
+            f"""
+            UPDATE {USER_TABLE}
+            SET unionid=COALESCE(NULLIF(%s, ''), unionid),
+                nickname=COALESCE(NULLIF(%s, ''), nickname),
+                avatar_url=COALESCE(NULLIF(%s, ''), avatar_url),
+                last_login_at=%s,
+                updated_at=%s
+            WHERE id=%s
+            """,
+            (unionid, nickname, avatar_url, now, now, user["id"]),
         )
         cursor.execute(f"SELECT * FROM {USER_TABLE} WHERE id=%s LIMIT 1", (user["id"],))
         return cursor.fetchone()
     user_id = secrets.token_hex(16)
     cursor.execute(
         f"""
-        INSERT INTO {USER_TABLE} (id,openid,unionid,status,created_at,updated_at,last_login_at)
-        VALUES (%s,%s,%s,'active',%s,%s,%s)
+        INSERT INTO {USER_TABLE} (id,openid,unionid,nickname,avatar_url,status,created_at,updated_at,last_login_at)
+        VALUES (%s,%s,%s,%s,%s,'active',%s,%s,%s)
         """,
-        (user_id, openid, unionid or None, now, now, now),
+        (user_id, openid, unionid or None, nickname or None, avatar_url or None, now, now, now),
     )
     cursor.execute(f"SELECT * FROM {USER_TABLE} WHERE id=%s LIMIT 1", (user_id,))
     return cursor.fetchone()
@@ -158,11 +170,19 @@ def wechat_login(payload: dict[str, Any]) -> dict[str, Any]:
     code = _clean((payload or {}).get("code"), 128)
     if not code:
         raise ValueError("code 不能为空")
+    nickname = _clean((payload or {}).get("nickName") or (payload or {}).get("nickname") or (payload or {}).get("name"), 128)
+    avatar_url = _clean((payload or {}).get("avatarUrl") or (payload or {}).get("avatar_url"), 1024)
     session = _wechat_code2session(code)
     init_miniprogram_auth_tables()
     with _connect_app() as conn:
         with conn.cursor() as cursor:
-            user = _upsert_user(cursor, _clean(session.get("openid"), 128), _clean(session.get("unionid"), 128))
+            user = _upsert_user(
+                cursor,
+                _clean(session.get("openid"), 128),
+                _clean(session.get("unionid"), 128),
+                nickname=nickname,
+                avatar_url=avatar_url,
+            )
             token = _create_session(cursor, user["id"])
         conn.commit()
     return {
@@ -171,3 +191,40 @@ def wechat_login(payload: dict[str, Any]) -> dict[str, Any]:
         "user": _serialize_user(user),
         "expires_in": TOKEN_TTL_DAYS * 24 * 60 * 60,
     }
+
+
+def get_user_by_token(token: str) -> dict[str, Any] | None:
+    cleaned_token = _clean_token(token)
+    if not cleaned_token:
+        return None
+    init_miniprogram_auth_tables()
+    with _connect_app(autocommit=True) as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                f"""
+                SELECT u.*
+                FROM {SESSION_TABLE} s
+                JOIN {USER_TABLE} u ON u.id=s.user_id
+                WHERE s.token_hash=%s
+                  AND s.status='active'
+                  AND s.expires_at > UTC_TIMESTAMP()
+                  AND u.status='active'
+                LIMIT 1
+                """,
+                (_token_hash(cleaned_token),),
+            )
+            user = cursor.fetchone()
+            if not user:
+                return None
+            cursor.execute(
+                f"UPDATE {SESSION_TABLE} SET updated_at=UTC_TIMESTAMP() WHERE token_hash=%s",
+                (_token_hash(cleaned_token),),
+            )
+            return user
+
+
+def require_user_by_token(token: str) -> dict[str, Any]:
+    user = get_user_by_token(token)
+    if not user:
+        raise PermissionError("登录已失效，请重新登录")
+    return user
