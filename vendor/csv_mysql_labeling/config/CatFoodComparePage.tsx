@@ -347,12 +347,7 @@ function HeaderNav() {
             );
           })}
         </nav>
-        <div className="flex justify-end">
-          <button type="button" className="flex items-center gap-2 text-[14px] font-medium text-[#172033]">
-            <span className="flex h-8 w-8 items-center justify-center rounded-full border border-[#CBD5E1] bg-[#F3F5FF] text-[#94A3B8]">●</span>
-            login in
-          </button>
-        </div>
+        <div aria-hidden="true" />
       </div>
     </header>
   );
@@ -1547,7 +1542,6 @@ function ChangeFoodAdvicePanel({ advice }: { advice: ChangeFoodAdvice }) {
 }
 
 function CatFoodComparePage() {
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [productOptions, setProductOptions] = useState<ProductOption[]>([]);
   const [productsLoading, setProductsLoading] = useState(true);
   const [productsError, setProductsError] = useState("");
@@ -1776,8 +1770,7 @@ function CatFoodComparePage() {
     <div className="min-h-screen overflow-x-hidden bg-[#F8FAFF]">
       <HeaderNav />
       <div className="pt-[72px]">
-        <PetSidebar collapsed={sidebarCollapsed} onToggle={() => setSidebarCollapsed((value) => !value)} />
-        <main className={`min-w-0 px-8 py-6 transition-[margin] duration-300 max-[1599px]:px-6 ${sidebarCollapsed ? "ml-[72px]" : "ml-[280px] max-[1599px]:ml-[260px] max-[1365px]:ml-[240px]"}`}>
+        <main className="min-w-0 px-8 py-6 max-[1599px]:px-6">
           <div className="mx-auto max-w-[1500px] space-y-4">
             <SearchFilterBar
               brandQuery={brandQuery}
