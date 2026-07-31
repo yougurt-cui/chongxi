@@ -22,6 +22,7 @@ if str(BASE_DIR) not in sys.path:
 
 try:
     from .api.consumer_api import consumer_api
+    from .api.business_api import business_api
     from .api.catfood_standardization_api import catfood_standardization_api
     from .api.exception_api import exception_api
     from .api.orchestrator_api import orchestrator_api
@@ -34,6 +35,7 @@ try:
     from .api.miniprogram_api import miniprogram_api
 except ImportError:
     from api.consumer_api import consumer_api
+    from api.business_api import business_api
     from api.catfood_standardization_api import catfood_standardization_api
     from api.exception_api import exception_api
     from api.orchestrator_api import orchestrator_api
@@ -1749,6 +1751,7 @@ def _build_recommendation_response(payload: dict[str, Any]) -> dict[str, Any]:
 def create_app() -> Flask:
     flask_app = Flask(__name__)
     flask_app.register_blueprint(consumer_api)
+    flask_app.register_blueprint(business_api)
     flask_app.register_blueprint(catfood_standardization_api)
     flask_app.register_blueprint(exception_api)
     flask_app.register_blueprint(orchestrator_api)
@@ -1805,6 +1808,10 @@ def create_app() -> Flask:
     @flask_app.get("/formula-clue-analysis.html")
     def formula_clue_analysis_html():
         return send_from_directory(WEB_DIR, "formula-clue-analysis.html")
+
+    @flask_app.get("/business/workbench.html")
+    def business_workbench_html():
+        return send_from_directory(WEB_DIR, "business-workbench.html")
 
     @flask_app.get("/api/cat-food-compare/products")
     def cat_food_compare_products():

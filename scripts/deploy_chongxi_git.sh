@@ -31,6 +31,7 @@ git pull --ff-only origin "$REMOTE_BRANCH"
 .venv/bin/python -m py_compile \
   main.py \
   app_config.py \
+  api/business_api.py \
   api/catfood_standardization_api.py \
   api/consumer_api.py \
   api/miniprogram_api.py \
@@ -40,6 +41,7 @@ git pull --ff-only origin "$REMOTE_BRANCH"
   api/product_function_api.py \
   api/taobao_sku_api.py \
   services/catfood_standardization_service.py \
+  services/business_analysis_service.py \
   services/formula_feature_link_service.py \
   services/formula_incremental_service.py \
   services/consumer_analysis_service.py \
@@ -93,6 +95,7 @@ done
 
 ss -ltnp | grep -E ":($APP_PORT|8501|8502)" || true
 curl -fsS -I --max-time 5 "http://127.0.0.1:$APP_PORT/cat-food-compare.html" | head -n 5
+curl -fsS -I --max-time 5 "http://127.0.0.1:$APP_PORT/business/workbench.html" | head -n 5
 curl -fsS --retry 5 --retry-delay 1 --max-time 8 "http://127.0.0.1:$APP_PORT/api/cat-food-compare/brands" \
   | .venv/bin/python -c 'import json,sys; data=json.load(sys.stdin); print("brand_count", len(data.get("brands", [])))'
 curl -fsS --retry 5 --retry-delay 1 --max-time 8 "http://127.0.0.1:$APP_PORT/api/catfood/standardization/brands?limit=500" \
