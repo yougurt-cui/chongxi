@@ -214,6 +214,7 @@ def _start_b2b_order_analysis_app() -> None:
     from app_config import get_feature_mysql_config
 
     db_config = get_feature_mysql_config()
+    _ensure_b2b_order_analysis_compat_views(db_config)
     env = os.environ.copy()
     env.setdefault("MYSQL_HOST", str(db_config.get("host", "127.0.0.1")))
     env.setdefault("MYSQL_PORT", str(db_config.get("port", "3306")))
@@ -250,6 +251,114 @@ def _start_b2b_order_analysis_app() -> None:
         stderr=subprocess.STDOUT,
     )
     _consumer_app_processes.append(process)
+
+
+def _ensure_b2b_order_analysis_compat_views(db_config: dict[str, Any]) -> None:
+    """Expose current score tables through the legacy B2B app table names."""
+    import pymysql
+
+    database = str(db_config.get("database") or "protein_feature_platform")
+
+    def table_exists(cursor, table_name: str) -> bool:
+        cursor.execute(
+            """
+            SELECT COUNT(*) AS n
+            FROM information_schema.tables
+            WHERE table_schema = %s AND table_name = %s
+            """,
+            (database, table_name),
+        )
+        row = cursor.fetchone() or {}
+        return int(row.get("n") or 0) > 0
+
+    with pymysql.connect(**db_config, cursorclass=pymysql.cursors.DictCursor, autocommit=True) as conn:
+        with conn.cursor() as cursor:
+            if not table_exists(cursor, "sku_b2b_tag_result"):
+                cursor.execute(
+                    """
+                    CREATE VIEW sku_b2b_tag_result AS
+                    SELECT
+                        sku_id,
+                        MIN(id) AS source_id,
+                        MAX(brand_name) AS brand,
+                        MAX(sku_name) AS product_name,
+                        1.0 AS confidence_score,
+                        '[]' AS factory_business_tags,
+                        '[]' AS process_structure_tags,
+                        '[]' AS process_attention_tags,
+                        '[]' AS quality_validation_tags
+                    FROM sku_feature_input
+                    WHERE sku_id IS NOT NULL AND LENGTH(sku_id) > 0
+                    GROUP BY sku_id
+                    """
+                )
+
+            if not table_exists(cursor, "catfood_sku_label_wide"):
+                cursor.execute(
+                    """
+                    CREATE VIEW catfood_sku_label_wide AS
+                    SELECT
+                        w.source_id,
+                        w.product_key,
+                        w.brand,
+                        w.product_name,
+                        NULL AS importer,
+                        NULL AS ingredient_composition,
+                        NULL AS guarantee_crude_protein_value,
+                        NULL AS crude_protein_pct,
+                        NULL AS agg_crude_protein_value,
+                        NULL AS guarantee_crude_fat_value,
+                        NULL AS guarantee_crude_fiber_value,
+                        NULL AS guarantee_moisture_value,
+                        NULL AS guarantee_crude_ash_value,
+                        w.starch_burden_score AS carb_score,
+                        bc.fat_detail_tags,
+                        bc.reason_tags AS risk_types,
+                        bc.main_reason_tags,
+                        bc.support_reason_tags,
+                        w.fat_reason_tags,
+                        bc.all_reason_tags,
+                        bc.current_pool_risk_level AS black_chin_risk_level,
+                        ss.current_pool_risk_level AS soft_stool_risk_level
+                    FROM catfood_protein_fat_fiber_score_wide w
+                    LEFT JOIN (
+                        SELECT sku_id,
+                               MAX(fat_detail_tags) AS fat_detail_tags,
+                               MAX(reason_tags) AS reason_tags,
+                               MAX(main_reason_tags) AS main_reason_tags,
+                               MAX(support_reason_tags) AS support_reason_tags,
+                               MAX(all_reason_tags) AS all_reason_tags,
+                               MAX(current_pool_risk_level) AS current_pool_risk_level
+                        FROM sku_risk_score_result
+                        WHERE score_model_version LIKE 'BLACK_CHIN%'
+                        GROUP BY sku_id
+                    ) bc ON bc.sku_id = w.product_key
+                    LEFT JOIN (
+                        SELECT sku_id,
+                               MAX(current_pool_risk_level) AS current_pool_risk_level
+                        FROM sku_risk_score_result
+                        WHERE score_model_version LIKE 'SOFT_STOOL%'
+                        GROUP BY sku_id
+                    ) ss ON ss.sku_id = w.product_key
+                    """
+                )
+
+            if not table_exists(cursor, "sku_process_feature_profile"):
+                cursor.execute(
+                    """
+                    CREATE VIEW sku_process_feature_profile AS
+                    SELECT
+                        sku_id,
+                        '[]' AS main_process_tags,
+                        '' AS process_structure_summary,
+                        '[]' AS candidate_process_watch_tags,
+                        '[]' AS candidate_quality_result_tags,
+                        '[]' AS candidate_feedback_risk_tags,
+                        '[]' AS main_process_modules,
+                        '[]' AS process_tag_details
+                    FROM sku_b2b_tag_result
+                    """
+                )
 
 
 def _start_consumer_apps() -> None:
