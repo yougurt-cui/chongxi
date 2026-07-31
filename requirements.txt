@@ -6,6 +6,8 @@ numpy
 openai
 opencc-python-reimplemented
 pandas
+plotly
 rich
+streamlit
 tenacity
 oss2

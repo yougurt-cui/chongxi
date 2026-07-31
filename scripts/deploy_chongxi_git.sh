@@ -54,6 +54,11 @@ git pull --ff-only origin "$REMOTE_BRANCH"
   services/product_function_service.py \
   services/product_identity_service.py \
   services/taobao_sku_import_service.py \
+  consumer_apps/b2b_order_analysis.py \
+  consumer_apps/b2b_order_analysis_app.py \
+  consumer_apps/sku_function_structure.py \
+  consumer_apps/sku_similarity_1.py \
+  consumer_apps/summary.py \
   vendor/feature_score_pipeline/black_risk_done.py \
   vendor/feature_score_pipeline/soft_risk_done.py \
   vendor/feature_score_pipeline/scripts/build_catfood_score_wide_table.py \
@@ -69,7 +74,7 @@ git pull --ff-only origin "$REMOTE_BRANCH"
   vendor/csv_mysql_labeling/src/extract_catfood_brand_relations.py \
   vendor/feature_score_pipeline/scripts/brand_normalizer.py
 
-for port in "$APP_PORT" 8502; do
+for port in "$APP_PORT" 8502 8503; do
   pid=$(ss -ltnp | sed -n "s/.*:$port.*pid=\([0-9][0-9]*\).*/\1/p" | head -n 1 || true)
   if [ -n "$pid" ]; then
     kill "$pid" || true
@@ -93,9 +98,17 @@ for _ in $(seq 1 20); do
   sleep 1
 done
 
-ss -ltnp | grep -E ":($APP_PORT|8501|8502)" || true
+for _ in $(seq 1 30); do
+  if curl -fsS -I --max-time 3 "http://127.0.0.1:8503/business/order-analysis/" >/dev/null; then
+    break
+  fi
+  sleep 1
+done
+
+ss -ltnp | grep -E ":($APP_PORT|8501|8502|8503)" || true
 curl -fsS -I --max-time 5 "http://127.0.0.1:$APP_PORT/cat-food-compare.html" | head -n 5
 curl -fsS -I --max-time 5 "http://127.0.0.1:$APP_PORT/business/workbench.html" | head -n 5
+curl -fsS -I --max-time 5 "http://127.0.0.1:8503/business/order-analysis/" | head -n 5
 curl -fsS --retry 5 --retry-delay 1 --max-time 8 "http://127.0.0.1:$APP_PORT/api/cat-food-compare/brands" \
   | .venv/bin/python -c 'import json,sys; data=json.load(sys.stdin); print("brand_count", len(data.get("brands", [])))'
 curl -fsS --retry 5 --retry-delay 1 --max-time 8 "http://127.0.0.1:$APP_PORT/api/catfood/standardization/brands?limit=500" \

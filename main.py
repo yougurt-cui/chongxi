@@ -206,7 +206,9 @@ def _start_streamlit_app(script_name: str, port: int, base_url_path: str) -> Non
 def _start_b2b_order_analysis_app() -> None:
     if _port_is_open(8503):
         return
-    if not B2B_PIPELINE_PATH.exists():
+
+    script_path = CONSUMER_APPS_DIR / "b2b_order_analysis_app.py"
+    if not script_path.exists():
         return
 
     from app_config import get_feature_mysql_config
@@ -219,17 +221,30 @@ def _start_b2b_order_analysis_app() -> None:
     env.setdefault("MYSQL_PASSWORD", str(db_config.get("password", "")))
     env.setdefault("MYSQL_DATABASE", str(db_config.get("database", "protein_feature_platform")))
     env.setdefault("MYSQL_CHARSET", str(db_config.get("charset", "utf8mb4")))
+    env.setdefault("DB_HOST", str(db_config.get("host", "127.0.0.1")))
+    env.setdefault("DB_PORT", str(db_config.get("port", "3306")))
+    env.setdefault("DB_USER", str(db_config.get("user", "root")))
+    env.setdefault("DB_PASSWORD", str(db_config.get("password", "")))
+    env.setdefault("DB_NAME", str(db_config.get("database", "protein_feature_platform")))
 
     cmd = [
         sys.executable,
-        str(B2B_PIPELINE_PATH),
-        "b2b-order-analysis",
-        "--port",
+        "-m",
+        "streamlit",
+        "run",
+        str(script_path),
+        "--server.address",
+        "0.0.0.0",
+        "--server.port",
         "8503",
+        "--server.headless",
+        "true",
+        "--server.baseUrlPath",
+        "business/order-analysis",
     ]
     process = subprocess.Popen(
         cmd,
-        cwd=str(B2B_PLATFORM_DIR),
+        cwd=str(BASE_DIR),
         env=env,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.STDOUT,
@@ -1811,7 +1826,8 @@ def create_app() -> Flask:
 
     @flask_app.get("/business/workbench.html")
     def business_workbench_html():
-        return send_from_directory(WEB_DIR, "business-workbench.html")
+        host = request.host.split(":", 1)[0]
+        return redirect(f"http://{host}:8503/business/order-analysis/", code=302)
 
     @flask_app.get("/api/cat-food-compare/products")
     def cat_food_compare_products():
