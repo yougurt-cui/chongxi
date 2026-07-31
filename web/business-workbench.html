@@ -474,7 +474,10 @@
     });
 
     Promise.all([loadSummary(), loadProducts()]).catch((error) => showError(error.message));
-    const streamlitUrl = `${window.location.protocol}//${window.location.hostname}:8503/business/order-analysis/`;
+    const localHostnames = new Set(["127.0.0.1", "localhost", "0.0.0.0"]);
+    const streamlitUrl = localHostnames.has(window.location.hostname)
+      ? `${window.location.protocol}//${window.location.hostname}:8503/business/order-analysis/`
+      : `${window.location.protocol}//${window.location.hostname}/business/order-analysis/`;
     nodes.streamlitLink = document.getElementById("streamlitLink");
     nodes.streamlitLink.href = streamlitUrl;
     window.setTimeout(() => {

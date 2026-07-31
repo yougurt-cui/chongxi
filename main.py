@@ -1827,7 +1827,9 @@ def create_app() -> Flask:
     @flask_app.get("/business/workbench.html")
     def business_workbench_html():
         host = request.host.split(":", 1)[0]
-        return redirect(f"http://{host}:8503/business/order-analysis/", code=302)
+        if host in {"127.0.0.1", "localhost", "0.0.0.0"}:
+            return redirect(f"http://{host}:8503/business/order-analysis/", code=302)
+        return redirect(f"http://{host}/business/order-analysis/", code=302)
 
     @flask_app.get("/api/cat-food-compare/products")
     def cat_food_compare_products():
