@@ -398,6 +398,95 @@
       padding: 0 8px;
       font-size: 11px;
     }
+    /* ── Idea management ── */
+    .idea-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+      gap: 16px;
+      padding: 16px;
+    }
+    .idea-card {
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      overflow: hidden;
+      box-shadow: var(--shadow);
+      display: flex;
+      flex-direction: column;
+    }
+    .idea-card-cover {
+      width: 100%;
+      height: 160px;
+      object-fit: cover;
+      background: var(--panel-soft);
+      display: block;
+    }
+    .idea-card-cover-placeholder {
+      width: 100%;
+      height: 160px;
+      background: var(--panel-soft);
+      display: grid;
+      place-items: center;
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .idea-card-body {
+      padding: 14px;
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .idea-card-title {
+      font-size: 15px;
+      font-weight: 800;
+      color: #102236;
+      line-height: 1.4;
+    }
+    .idea-card-meta {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .idea-status {
+      display: inline-flex;
+      align-items: center;
+      min-height: 24px;
+      padding: 0 8px;
+      border-radius: 8px;
+      font-size: 11px;
+      font-weight: 800;
+    }
+    .idea-status.published { background: #dcfce7; color: #166534; }
+    .idea-status.draft { background: #fef3c7; color: #92400e; }
+    .idea-card-stats {
+      font-size: 13px;
+      color: var(--muted);
+    }
+    .idea-card-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-top: auto;
+      padding-top: 8px;
+    }
+    .idea-form-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+    }
+    .idea-form-grid .full-width { grid-column: 1 / -1; }
+    .idea-form-grid label { display: flex; flex-direction: column; gap: 4px; }
+    .idea-cover-preview {
+      width: 100%;
+      max-height: 180px;
+      object-fit: cover;
+      border-radius: 8px;
+      border: 1px solid var(--line);
+      margin-top: 6px;
+    }
+
     .section[hidden] { display: none; }
     textarea { min-height: 172px; resize: vertical; line-height: 1.55; }
     .actions {
@@ -481,6 +570,7 @@
       <button id="diseaseTab" class="tab" type="button" data-tab="disease">病症数据确认</button>
       <button id="contentReviewTab" class="tab" type="button" data-tab="content">内容审核</button>
       <button id="reportReviewTab" class="tab" type="button" data-tab="report">举报审核</button>
+      <button id="ideaTab" class="tab" type="button" data-tab="idea">创意管理</button>
     </section>
 
     <div id="toast" class="toast"></div>
@@ -819,6 +909,88 @@
       </section>
     </section>
 
+    <!-- ═══════════ Idea management ═══════════ -->
+    <section id="ideaSection" class="section" hidden>
+      <section class="toolbar">
+        <div>
+          <div class="title">创意众筹管理</div>
+          <div id="ideaSummary" class="muted">等待加载...</div>
+        </div>
+        <div style="display:flex;gap:8px;">
+          <button id="ideaRefresh" class="button secondary" type="button">刷新列表</button>
+          <button id="ideaCreate" class="button" type="button">+ 新增创意</button>
+        </div>
+      </section>
+
+      <section class="filters" aria-label="创意管理筛选" style="grid-template-columns: repeat(3, minmax(120px, 1fr));">
+        <label>
+          <span class="field-label">状态</span>
+          <select id="ideaStatusFilter">
+            <option value="">全部</option>
+            <option value="published">已上线</option>
+            <option value="draft">草稿</option>
+          </select>
+        </label>
+        <label>
+          <span class="field-label">类型</span>
+          <select id="ideaCategoryFilter">
+            <option value="">全部</option>
+          </select>
+        </label>
+        <div class="row-actions">
+          <button id="ideaApplyFilter" class="button" type="button">筛选</button>
+        </div>
+      </section>
+
+      <div id="ideaCardContainer" class="idea-grid"></div>
+      <div id="ideaEmpty" class="empty" style="display:none;">暂无创意内容，点击"新增创意"开始吧。</div>
+    </section>
+
+    <!-- Idea edit / create dialog -->
+    <dialog id="ideaDialog">
+      <form method="dialog" class="modal">
+        <div class="modal-head">
+          <div>
+            <div class="title" id="ideaDialogTitle">新增创意</div>
+            <div id="ideaDialogMeta" class="muted" style="margin-top:6px;"></div>
+          </div>
+          <button class="small-button secondary" value="cancel" type="submit">关闭</button>
+        </div>
+        <div class="idea-form-grid">
+          <label class="full-width">
+            <span class="field-label">创意名称 *</span>
+            <input id="ideaFormTitle" placeholder="输入创意名称" maxlength="100" />
+          </label>
+          <label class="full-width">
+            <span class="field-label">创意描述</span>
+            <textarea id="ideaFormDesc" placeholder="可选，描述这个创意的想法" style="min-height:80px;"></textarea>
+          </label>
+          <label>
+            <span class="field-label">类型</span>
+            <select id="ideaFormCategory"></select>
+          </label>
+          <label>
+            <span class="field-label">目标支持人数</span>
+            <input id="ideaFormTarget" type="number" min="1" value="100" />
+          </label>
+          <label>
+            <span class="field-label">排序权重（越大越靠前）</span>
+            <input id="ideaFormSort" type="number" value="0" />
+          </label>
+          <label>
+            <span class="field-label">封面图片</span>
+            <input id="ideaFormCoverFile" type="file" accept="image/jpeg,image/png,image/webp" />
+            <img id="ideaCoverPreview" class="idea-cover-preview" style="display:none;" />
+          </label>
+        </div>
+        <input id="ideaFormId" type="hidden" />
+        <div class="modal-actions">
+          <button class="button secondary" value="cancel" type="submit">取消</button>
+          <button id="ideaFormSubmit" class="button" value="default" type="button">保存</button>
+        </div>
+      </form>
+    </dialog>
+
     <datalist id="diseaseBrandOptions"></datalist>
     <datalist id="standardBrandOptions"></datalist>
     <datalist id="standardIngredientOptions"></datalist>
@@ -971,6 +1143,29 @@
     const reportReviewStatusFilter = document.getElementById("reportReviewStatusFilter");
     const reportReviewPostFilter = document.getElementById("reportReviewPostFilter");
     const reportReviewApplyFilter = document.getElementById("reportReviewApplyFilter");
+    const ideaTab = document.getElementById("ideaTab");
+    const ideaSection = document.getElementById("ideaSection");
+    const ideaSummaryEl = document.getElementById("ideaSummary");
+    const ideaRefreshBtn = document.getElementById("ideaRefresh");
+    const ideaCreateBtn = document.getElementById("ideaCreate");
+    const ideaStatusFilter = document.getElementById("ideaStatusFilter");
+    const ideaCategoryFilter = document.getElementById("ideaCategoryFilter");
+    const ideaApplyFilter = document.getElementById("ideaApplyFilter");
+    const ideaCardContainer = document.getElementById("ideaCardContainer");
+    const ideaEmptyEl = document.getElementById("ideaEmpty");
+    const ideaDialog = document.getElementById("ideaDialog");
+    const ideaDialogTitle = document.getElementById("ideaDialogTitle");
+    const ideaDialogMeta = document.getElementById("ideaDialogMeta");
+    const ideaFormTitle = document.getElementById("ideaFormTitle");
+    const ideaFormDesc = document.getElementById("ideaFormDesc");
+    const ideaFormCategory = document.getElementById("ideaFormCategory");
+    const ideaFormTarget = document.getElementById("ideaFormTarget");
+    const ideaFormSort = document.getElementById("ideaFormSort");
+    const ideaFormCoverFile = document.getElementById("ideaFormCoverFile");
+    const ideaCoverPreview = document.getElementById("ideaCoverPreview");
+    const ideaFormId = document.getElementById("ideaFormId");
+    const ideaFormSubmitBtn = document.getElementById("ideaFormSubmit");
+    let ideaCategories = [];
     let activeOcrItem = null;
     let activeTab = "node";
     let activeIdentityTab = "brand";
@@ -1782,6 +1977,8 @@
           await loadContentReviewItems();
         } else if (activeTab === "report") {
           await loadReportReviewItems();
+        } else if (activeTab === "idea") {
+          await loadIdeas();
         } else {
           await loadItems();
         }
@@ -2169,6 +2366,233 @@
       }
     }
 
+    // ── Idea management functions ──────────────────────────────
+
+    async function loadIdeaCategories() {
+      if (ideaCategories.length) return;
+      try {
+        const data = await api("/api/pipeline/idea-categories");
+        ideaCategories = data.items || [];
+        // Populate filter dropdown
+        ideaCategoryFilter.innerHTML = '<option value="">全部</option>';
+        ideaCategories.forEach((c) => {
+          const opt = document.createElement("option");
+          opt.value = c.code;
+          opt.textContent = c.name;
+          ideaCategoryFilter.appendChild(opt);
+        });
+        // Populate form dropdown
+        ideaFormCategory.innerHTML = '<option value="">选择类型</option>';
+        ideaCategories.forEach((c) => {
+          const opt = document.createElement("option");
+          opt.value = c.code;
+          opt.textContent = c.name;
+          opt.dataset.color = c.color;
+          ideaFormCategory.appendChild(opt);
+        });
+      } catch (error) {
+        console.error("加载创意类型失败", error);
+      }
+    }
+
+    async function loadIdeas() {
+      ideaRefreshBtn.disabled = true;
+      ideaSummaryEl.textContent = "正在加载...";
+      ideaEmptyEl.style.display = "none";
+      const params = new URLSearchParams();
+      const status = ideaStatusFilter.value;
+      if (status) params.set("status", status);
+      try {
+        const data = await api(`/api/pipeline/ideas?${params.toString()}`);
+        const items = data.items || [];
+        renderIdeaCards(items);
+      } catch (error) {
+        ideaSummaryEl.textContent = "加载失败";
+        ideaCardContainer.innerHTML = "";
+        ideaEmptyEl.style.display = "block";
+        ideaEmptyEl.textContent = error instanceof Error ? error.message : "加载失败";
+      } finally {
+        ideaRefreshBtn.disabled = false;
+      }
+    }
+
+    function renderIdeaCards(items) {
+      const categoryFilter = ideaCategoryFilter.value;
+      const filtered = categoryFilter
+        ? items.filter((i) => i.category === categoryFilter)
+        : items;
+      ideaSummaryEl.textContent = `共 ${filtered.length} 条创意（总计 ${items.length} 条）`;
+      ideaCardContainer.innerHTML = "";
+      if (!filtered.length) {
+        ideaEmptyEl.style.display = "block";
+        ideaEmptyEl.textContent = '暂无创意内容，点击「新增创意」开始吧。';
+        return;
+      }
+      ideaEmptyEl.style.display = "none";
+      filtered.forEach((item) => {
+        const card = document.createElement("div");
+        card.className = "idea-card";
+        const statusLabel = item.status === "published" ? "已上线" : "草稿";
+        const progress = item.progress || 0;
+        card.innerHTML = `
+          ${item.cover_url
+            ? `<img class="idea-card-cover" src="${escapeHtml(item.cover_url)}" alt="封面" />`
+            : `<div class="idea-card-cover-placeholder">暂无封面</div>`}
+          <div class="idea-card-body">
+            <div class="idea-card-title">${escapeHtml(item.title)}</div>
+            <div class="idea-card-meta">
+              <span class="chip" style="background:${escapeHtml(item.category_color || '#eee')};color:#fff;border:0;">${escapeHtml(item.category_name || item.category)}</span>
+              <span class="idea-status ${item.status}">${statusLabel}</span>
+            </div>
+            <div class="idea-card-stats">
+              支持 ${item.current_support_count} / ${item.target_support_count}（${progress}%）&nbsp;·&nbsp;排序 ${item.sort_order}
+            </div>
+            <div class="idea-card-actions">
+              <button class="small-button secondary" data-action="edit-idea" data-id="${item.id}">编辑</button>
+              <button class="small-button secondary" data-action="upload-cover" data-id="${item.id}">上传封面</button>
+              <button class="small-button ${item.status === 'published' ? 'danger' : ''}" data-action="toggle-status" data-id="${item.id}" data-status="${item.status}">
+                ${item.status === 'published' ? '下线' : '上线'}
+              </button>
+            </div>
+          </div>`;
+        // Bind actions
+        card.querySelector('[data-action="edit-idea"]').addEventListener("click", () => openIdeaDialog(item));
+        card.querySelector('[data-action="upload-cover"]').addEventListener("click", () => triggerCoverUpload(item.id));
+        card.querySelector('[data-action="toggle-status"]').addEventListener("click", async () => {
+          const newStatus = item.status === "published" ? "draft" : "published";
+          const label = newStatus === "published" ? "上线" : "下线";
+          if (!window.confirm(`确认${label}「${item.title}」？`)) return;
+          await runAction(async () => {
+            await api(`/api/pipeline/ideas/${item.id}/status`, {
+              method: "PATCH",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ status: newStatus }),
+            });
+            showToast(`已${label}`);
+            await loadIdeas();
+          });
+        });
+        ideaCardContainer.appendChild(card);
+      });
+    }
+
+    function openIdeaDialog(item) {
+      const isEdit = !!item;
+      ideaDialogTitle.textContent = isEdit ? "编辑创意" : "新增创意";
+      ideaDialogMeta.textContent = isEdit ? `ID: ${item.id}` : "";
+      ideaFormId.value = isEdit ? item.id : "";
+      ideaFormTitle.value = isEdit ? item.title : "";
+      ideaFormDesc.value = isEdit ? (item.description || "") : "";
+      ideaFormCategory.value = isEdit ? (item.category || "") : "";
+      ideaFormTarget.value = isEdit ? item.target_support_count : 100;
+      ideaFormSort.value = isEdit ? item.sort_order : 0;
+      ideaFormCoverFile.value = "";
+      if (isEdit && item.cover_url) {
+        ideaCoverPreview.src = item.cover_url;
+        ideaCoverPreview.style.display = "block";
+      } else {
+        ideaCoverPreview.style.display = "none";
+      }
+      ideaDialog.showModal();
+    }
+
+    function triggerCoverUpload(ideaId) {
+      const input = document.createElement("input");
+      input.type = "file";
+      input.accept = "image/jpeg,image/png,image/webp";
+      input.addEventListener("change", async () => {
+        const file = input.files[0];
+        if (!file) return;
+        const formData = new FormData();
+        formData.append("file", file);
+        try {
+          showToast("正在上传封面...");
+          const response = await fetch(`/api/pipeline/ideas/${ideaId}/cover`, {
+            method: "POST",
+            body: formData,
+          });
+          const data = await response.json();
+          if (!response.ok || data.ok === false) {
+            throw new Error(data.error || "上传失败");
+          }
+          showToast("封面已上传");
+          await loadIdeas();
+        } catch (error) {
+          showToast(error instanceof Error ? error.message : "上传失败", "error");
+        }
+      });
+      input.click();
+    }
+
+    ideaFormSubmitBtn.addEventListener("click", async () => {
+      const title = ideaFormTitle.value.trim();
+      if (!title) {
+        showToast("创意名称不能为空", "error");
+        return;
+      }
+      const ideaId = ideaFormId.value;
+      const selectedOpt = ideaFormCategory.options[ideaFormCategory.selectedIndex];
+      const payload = {
+        title,
+        description: ideaFormDesc.value.trim(),
+        category: ideaFormCategory.value,
+        category_color: (selectedOpt && selectedOpt.dataset.color) || "",
+        target_support_count: parseInt(ideaFormTarget.value) || 100,
+        sort_order: parseInt(ideaFormSort.value) || 0,
+      };
+      // Handle cover file upload
+      const coverFile = ideaFormCoverFile.files[0];
+      try {
+        if (ideaId) {
+          // Edit
+          await runAction(async () => {
+            await api(`/api/pipeline/ideas/${ideaId}`, {
+              method: "PATCH",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(payload),
+            });
+            if (coverFile) {
+              const formData = new FormData();
+              formData.append("file", coverFile);
+              const response = await fetch(`/api/pipeline/ideas/${ideaId}/cover`, {
+                method: "POST",
+                body: formData,
+              });
+              const data = await response.json();
+              if (!response.ok || data.ok === false) {
+                showToast("封面上传失败，但创意已保存", "error");
+              }
+            }
+            ideaDialog.close();
+            showToast("创意已更新");
+            await loadIdeas();
+          });
+        } else {
+          // Create
+          await runAction(async () => {
+            const result = await api("/api/pipeline/ideas", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(payload),
+            });
+            if (coverFile && result.item) {
+              const formData = new FormData();
+              formData.append("file", coverFile);
+              await fetch(`/api/pipeline/ideas/${result.item.id}/cover`, {
+                method: "POST",
+                body: formData,
+              });
+            }
+            ideaDialog.close();
+            showToast("创意已创建");
+            await loadIdeas();
+          });
+        }
+      } catch (error) {
+        showToast(error instanceof Error ? error.message : "保存失败", "error");
+      }
+    });
+
     function switchTab(tab) {
       activeTab = tab;
       nodeTab.classList.toggle("active", tab === "node");
@@ -2176,11 +2600,13 @@
       diseaseTab.classList.toggle("active", tab === "disease");
       contentReviewTab.classList.toggle("active", tab === "content");
       reportReviewTab.classList.toggle("active", tab === "report");
+      ideaTab.classList.toggle("active", tab === "idea");
       nodeSection.hidden = tab !== "node";
       identitySection.hidden = tab !== "identity";
       diseaseSection.hidden = tab !== "disease";
       contentReviewSection.hidden = tab !== "content";
       reportReviewSection.hidden = tab !== "report";
+      ideaSection.hidden = tab !== "idea";
       if (tab === "identity" && !identityRowsEl.children.length) {
         if (activeIdentityTab === "product") {
           loadProductIdentityItems();
@@ -2203,6 +2629,9 @@
       }
       if (tab === "node" && !rowsEl.children.length) {
         loadItems();
+      }
+      if (tab === "idea" && !ideaCardContainer.children.length) {
+        loadIdeaCategories().then(() => loadIdeas());
       }
     }
 
@@ -2287,11 +2716,17 @@
     reportReviewPostFilter.addEventListener("keydown", (event) => {
       if (event.key === "Enter") loadReportReviewItems();
     });
+    ideaRefreshBtn.addEventListener("click", loadIdeas);
+    ideaApplyFilter.addEventListener("click", loadIdeas);
+    ideaStatusFilter.addEventListener("change", loadIdeas);
+    ideaCategoryFilter.addEventListener("change", loadIdeas);
+    ideaCreateBtn.addEventListener("click", () => openIdeaDialog(null));
     nodeTab.addEventListener("click", () => switchTab("node"));
     identityTab.addEventListener("click", () => switchTab("identity"));
     diseaseTab.addEventListener("click", () => switchTab("disease"));
     contentReviewTab.addEventListener("click", () => switchTab("content"));
     reportReviewTab.addEventListener("click", () => switchTab("report"));
+    ideaTab.addEventListener("click", () => switchTab("idea"));
     loadItems();
   </script>
 </body>

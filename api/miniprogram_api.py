@@ -44,6 +44,19 @@ from services.miniprogram_moment_report_service import (
     review_moment_report,
 )
 
+from services.miniprogram_idea_service import (
+    create_idea,
+    get_category_presets,
+    get_idea,
+    get_idea_support_count,
+    init_idea_tables,
+    list_ideas,
+    list_ideas_admin,
+    set_idea_status,
+    support_idea,
+    update_idea,
+)
+
 
 miniprogram_api = Blueprint("miniprogram_api", __name__, url_prefix="/api/miniprogram")
 
@@ -504,6 +517,153 @@ def product_ingredients():
     try:
         payload = _json_payload()
         return jsonify(get_catalog_product_ingredients(payload)), 200
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+# ===========================================================================
+# Idea crowdfunding endpoints
+# ===========================================================================
+
+@miniprogram_api.get("/ideas")
+def list_ideas_endpoint():
+    try:
+        user_id = _current_user_id(required=False)
+        limit = int(request.args.get("limit") or 50)
+        items = list_ideas(user_id=user_id, limit=limit)
+        return jsonify({"ok": True, "items": items, "total": len(items)}), 200
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@miniprogram_api.get("/ideas/<idea_id>")
+def get_idea_endpoint(idea_id: str):
+    try:
+        user_id = _current_user_id(required=False)
+        item = get_idea(idea_id, user_id=user_id)
+        return jsonify({"ok": True, "item": item}), 200
+    except LookupError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 404
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@miniprogram_api.post("/ideas/<idea_id>/support")
+def support_idea_endpoint(idea_id: str):
+    try:
+        user_id = _current_user_id(required=True)
+        item = support_idea(idea_id, user_id)
+        return jsonify({"ok": True, "item": item}), 200
+    except PermissionError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 401
+    except LookupError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 404
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@miniprogram_api.get("/idea-categories")
+def list_idea_categories_endpoint():
+    return jsonify({"ok": True, "items": get_category_presets()}), 200
+
+
+# ---------------------------------------------------------------------------
+# Admin idea management
+# ---------------------------------------------------------------------------
+
+@miniprogram_api.post("/admin/ideas")
+def create_idea_endpoint():
+    try:
+        _require_admin_token()
+        payload = _json_payload()
+        item = create_idea(
+            title=payload.get("title", ""),
+            description=payload.get("description", ""),
+            category=payload.get("category", ""),
+            category_color=payload.get("category_color", ""),
+            cover_url=payload.get("cover_url", ""),
+            target_support_count=payload.get("target_support_count", 100),
+            sort_order=payload.get("sort_order", 0),
+        )
+        return jsonify({"ok": True, "item": item}), 201
+    except PermissionError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 403
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@miniprogram_api.put("/admin/ideas/<idea_id>")
+@miniprogram_api.patch("/admin/ideas/<idea_id>")
+def update_idea_endpoint(idea_id: str):
+    try:
+        _require_admin_token()
+        payload = _json_payload()
+        item = update_idea(idea_id, **payload)
+        return jsonify({"ok": True, "item": item}), 200
+    except PermissionError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 403
+    except LookupError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 404
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@miniprogram_api.patch("/admin/ideas/<idea_id>/status")
+def set_idea_status_endpoint(idea_id: str):
+    try:
+        _require_admin_token()
+        payload = _json_payload()
+        status = payload.get("status", "")
+        item = set_idea_status(idea_id, status)
+        return jsonify({"ok": True, "item": item}), 200
+    except PermissionError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 403
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@miniprogram_api.get("/admin/ideas")
+def list_ideas_admin_endpoint():
+    try:
+        _require_admin_token()
+        status = request.args.get("status", "")
+        items = list_ideas_admin(status=status)
+        return jsonify({"ok": True, "items": items, "total": len(items)}), 200
+    except PermissionError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 403
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@miniprogram_api.post("/admin/ideas/<idea_id>/cover")
+def upload_idea_cover_endpoint(idea_id: str):
+    try:
+        _require_admin_token()
+        image_file = request.files.get("file")
+        if not image_file:
+            raise ValueError("请上传封面图片")
+        from services.miniprogram_moment_image_service import upload_moment_image
+        user_id = _current_user_id(required=False) or "admin"
+        result = upload_moment_image(image_file, user_id=user_id)
+        cover_url = result.get("item", {}).get("url", "")
+        item = update_idea(idea_id, cover_url=cover_url)
+        return jsonify({"ok": True, "item": item, "cover_url": cover_url}), 200
+    except PermissionError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 403
     except ValueError as exc:
         return jsonify({"ok": False, "error": str(exc)}), 400
     except Exception as exc:

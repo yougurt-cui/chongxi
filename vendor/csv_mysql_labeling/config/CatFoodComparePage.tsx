@@ -1541,6 +1541,35 @@ function ChangeFoodAdvicePanel({ advice }: { advice: ChangeFoodAdvice }) {
   );
 }
 
+function ChangeFoodAdvicePlaceholder({ selectedCount }: { selectedCount: number }) {
+  const ready = selectedCount >= 2;
+  return (
+    <section className="rounded-2xl border border-dashed border-[#DCE3F3] bg-white px-6 py-10 text-center shadow-[0_8px_24px_rgba(30,41,59,0.04)]">
+      <div className="mx-auto flex h-20 w-20 items-center justify-center rounded-2xl bg-[#F0EEFF] text-[34px] text-[#5145FF]">✦</div>
+      <h2 className="mt-5 text-[20px] font-bold text-[#172033]">AI 换粮建议</h2>
+      <p className="mx-auto mt-3 max-w-[560px] text-[13px] leading-6 text-[#7A8499]">
+        {ready
+          ? "已选择两款猫粮，点击“对比一下”后会自动生成换粮建议、注意事项和 7–10 天过渡方案。"
+          : "先选择当前粮和目标粮。完成对比后，这里会展示换粮建议、谨慎原因、警示信号和过渡计划。"}
+      </p>
+    </section>
+  );
+}
+
+function ChangeFoodAdviceLoading() {
+  return (
+    <section className="rounded-2xl border border-[#E1E5F0] bg-white px-6 py-8 shadow-[0_8px_24px_rgba(30,41,59,0.05)]">
+      <div className="flex items-center gap-4">
+        <span className="flex h-12 w-12 animate-pulse items-center justify-center rounded-xl bg-[#F0EEFF] text-[#5145FF]">✦</span>
+        <div>
+          <h2 className="text-[18px] font-bold text-[#172033]">正在生成 AI 换粮建议</h2>
+          <p className="mt-1 text-[13px] text-[#7A8499]">正在结合两款粮的营养得分、原料结构和风险标签生成建议。</p>
+        </div>
+      </div>
+    </section>
+  );
+}
+
 function CatFoodComparePage() {
   const [productOptions, setProductOptions] = useState<ProductOption[]>([]);
   const [productsLoading, setProductsLoading] = useState(true);
@@ -1700,6 +1729,7 @@ function CatFoodComparePage() {
 
   async function handleGenerateSummary() {
     if (!compareResult) return;
+    const compareKey = `${currentFood}::${targetFood}`;
     setSummaryLoading(true);
     setSummaryError("");
     try {
@@ -1716,6 +1746,7 @@ function CatFoodComparePage() {
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || "大模型总结生成失败");
       setSummary(data.advice || null);
+      setLastCompareKey(compareKey);
     } catch (error) {
       setSummaryError(error instanceof Error ? error.message : "大模型总结生成失败");
     } finally {
@@ -1758,6 +1789,13 @@ function CatFoodComparePage() {
     setCompareError("");
     setLastCompareKey("");
   }
+
+  useEffect(() => {
+    if (!compareResult || summary || summaryLoading) return;
+    const compareKey = `${currentFood}::${targetFood}`;
+    if (!currentFood || !targetFood || compareKey === lastCompareKey) return;
+    void handleGenerateSummary();
+  }, [compareResult, currentFood, lastCompareKey, summary, summaryLoading, targetFood]);
 
   const resultProducts = compareResult
     ? [
@@ -1802,9 +1840,10 @@ function CatFoodComparePage() {
                 <NutritionBurdenComparisonChart result={compareResult} />
               </>
             ) : (
-              <EmptyComparePanel selectedCount={selectedCount} />
+              <ChangeFoodAdvicePlaceholder selectedCount={selectedCount} />
             )}
             {summaryError && <div className="rounded-xl bg-rose-50 px-4 py-3 text-[13px] font-medium text-[#FF4D4F]">{summaryError}</div>}
+            {summaryLoading && <ChangeFoodAdviceLoading />}
             {summary && <ChangeFoodAdvicePanel advice={summary} />}
             <div className="pb-6 text-[12px] font-normal text-[#7A8499]">ⓘ　以上信息基于公开资料与营养标准整理，仅供参考，建议结合宠物实际情况与医生建议。</div>
           </div>
