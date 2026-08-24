@@ -1,0 +1,1864 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>宠析｜品牌增长引擎 Mock</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    background: #f6f8fb;
+    color: #172033;
+  }
+  button, input, select { font: inherit; }
+  .app { display:flex; min-height:100vh; }
+  .sidebar {
+    width: 238px;
+    background: #111827;
+    color: #fff;
+    padding: 24px 16px;
+    position: fixed;
+    inset: 0 auto 0 0;
+  }
+  .brand { padding: 0 10px 24px; border-bottom:1px solid rgba(255,255,255,.1); }
+  .brand h1 { font-size:22px; margin:0 0 5px; }
+  .brand p { font-size:12px; color:#94a3b8; margin:0; }
+  .nav { margin-top:18px; display:flex; flex-direction:column; gap:6px; }
+  .nav button {
+    border:0; cursor:pointer; text-align:left; border-radius:10px;
+    padding:12px 12px; color:#cbd5e1; background:transparent;
+  }
+  .nav button:hover,.nav button.active { background:#243047; color:#fff; }
+  .sidebar-bottom {
+    position:absolute; left:16px; right:16px; bottom:18px;
+    border-top:1px solid rgba(255,255,255,.1); padding-top:15px;
+    color:#94a3b8; font-size:12px; line-height:1.7;
+  }
+  main { margin-left:238px; width:calc(100% - 238px); }
+  .topbar {
+    height:70px; display:flex; align-items:center; justify-content:space-between;
+    padding:0 30px; background:#fff; border-bottom:1px solid #e8edf4;
+    position:sticky; top:0; z-index:5;
+  }
+  .topbar strong { font-size:16px; }
+  .user { display:flex; align-items:center; gap:10px; font-size:13px; color:#64748b; }
+  .avatar { width:34px; height:34px; border-radius:50%; background:#e2e8f0; display:grid; place-items:center; color:#334155; font-weight:700; }
+  .account-tools { margin-left:auto; display:flex; align-items:center; gap:10px; }
+  .subscription-alert { display:flex; align-items:center; gap:9px; min-height:36px; padding:7px 12px; border:1px solid #f4d58d; border-radius:8px; background:#fff8e7; color:#c66a16; font-size:12px; font-weight:650; }
+  .subscription-alert.paid { border-color:#bfe7d4; background:#eefaf4; color:#087a59; }
+  .subscription-alert.danger { border-color:#f3b9b9; background:#fff1f1; color:#c43d3d; }
+  .subscription-buy { border:0; background:transparent; color:inherit; font-weight:750; cursor:pointer; text-decoration:underline; text-underline-offset:2px; }
+  .account-menu { position:relative; }
+  .account-trigger { display:flex; align-items:center; gap:8px; border:1px solid #e2e5e9; background:#fff; border-radius:9px; padding:5px 9px 5px 6px; cursor:pointer; color:#30343b; }
+  .account-trigger .avatar { flex:0 0 auto; }
+  .account-trigger span { max-width:170px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px; }
+  .account-dropdown { position:absolute; top:44px; right:0; z-index:20; min-width:180px; padding:7px; border:1px solid #e2e5e9; border-radius:10px; background:#fff; box-shadow:0 10px 30px rgba(28,38,33,.13); }
+  .account-dropdown button { width:100%; border:0; border-radius:7px; padding:9px 10px; background:transparent; text-align:left; cursor:pointer; color:#41474d; }
+  .account-dropdown button:hover { background:#f3f6f4; }
+  .account-dropdown .logout { color:#cf4141; }
+  .page { display:none; padding:28px 30px 48px; max-width:1500px; margin:auto; }
+  .page.active { display:block; }
+  .hero {
+    display:flex; justify-content:space-between; align-items:flex-start; gap:20px; margin-bottom:22px;
+  }
+  .hero h2 { margin:0 0 8px; font-size:28px; }
+  .hero p { margin:0; color:#64748b; line-height:1.7; max-width:780px; }
+  .actions { display:flex; gap:10px; flex-wrap:wrap; }
+  .btn {
+    border:1px solid #d8e0eb; background:#fff; color:#334155; padding:9px 14px; border-radius:9px; cursor:pointer;
+  }
+  .btn.primary { background:#172033; color:white; border-color:#172033; }
+  .grid { display:grid; gap:16px; }
+  .grid-4 { grid-template-columns: repeat(4, minmax(0,1fr)); }
+  .grid-3 { grid-template-columns: repeat(3, minmax(0,1fr)); }
+  .grid-2 { grid-template-columns: repeat(2, minmax(0,1fr)); }
+  .card {
+    background:#fff; border:1px solid #e5eaf1; border-radius:14px; padding:18px; box-shadow:0 1px 2px rgba(15,23,42,.02);
+  }
+  .metric-label { font-size:13px; color:#64748b; margin-bottom:10px; }
+  .metric-value { font-size:28px; font-weight:750; letter-spacing:-.02em; }
+  .metric-sub { font-size:12px; color:#64748b; margin-top:8px; }
+  .up { color:#0f9f6e; }
+  .down { color:#dc2626; }
+  .section-title {
+    display:flex; align-items:center; justify-content:space-between; margin:24px 0 12px;
+  }
+  .section-title h3 { margin:0; font-size:17px; }
+  .section-title span { font-size:12px; color:#94a3b8; }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  th { color:#64748b; font-weight:600; text-align:left; padding:11px 10px; border-bottom:1px solid #edf1f5; background:#fafbfc; }
+  td { padding:13px 10px; border-bottom:1px solid #edf1f5; }
+  tr:hover td { background:#fbfcfe; }
+  .tag { display:inline-block; padding:4px 8px; border-radius:999px; background:#f1f5f9; color:#475569; font-size:11px; margin:2px 3px 2px 0; }
+  .tag.hot { background:#fff4e6; color:#b45309; }
+  .tag.good { background:#eafaf4; color:#087a59; }
+  .tag.risk { background:#fff0f0; color:#b91c1c; }
+  .score { font-weight:750; }
+  .progress { height:8px; background:#edf2f7; border-radius:999px; overflow:hidden; margin-top:8px; }
+  .progress > i { display:block; height:100%; background:#334155; border-radius:999px; }
+  .chart {
+    height:220px; padding:12px 6px 0; display:flex; align-items:flex-end; gap:12px;
+    border-bottom:1px solid #e5e7eb;
+  }
+  .bar-wrap { flex:1; height:100%; display:flex; flex-direction:column; justify-content:flex-end; align-items:center; min-width:35px; }
+  .bar { width:65%; border-radius:7px 7px 0 0; background:#334155; min-height:8px; }
+  .bar.alt { background:#94a3b8; }
+  .bar-label { margin-top:7px; font-size:11px; color:#64748b; }
+  .linechart { height:230px; position:relative; overflow:hidden; border-radius:10px; background:
+      linear-gradient(#eef2f7 1px, transparent 1px) 0 0/100% 25%,
+      linear-gradient(90deg, #f5f7fa 1px, transparent 1px) 0 0/16.66% 100%; }
+  svg { width:100%; height:100%; }
+  .filters { display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
+  input, select {
+    border:1px solid #dbe2ea; background:#fff; padding:9px 11px; border-radius:9px; color:#334155;
+  }
+  .search { min-width:280px; }
+  .insight { padding:14px 16px; border-left:3px solid #334155; background:#f8fafc; border-radius:8px; color:#475569; line-height:1.7; font-size:13px; }
+  .rank { display:flex; align-items:center; gap:12px; padding:12px 0; border-bottom:1px solid #edf1f5; }
+  .rank:last-child { border-bottom:0; }
+  .rank-no { width:24px; height:24px; border-radius:7px; background:#eef2f7; display:grid; place-items:center; font-size:12px; font-weight:700; }
+  .rank-main { flex:1; }
+  .rank-main b { display:block; font-size:13px; margin-bottom:3px; }
+  .rank-main span { font-size:11px; color:#64748b; }
+  .rank-val { text-align:right; font-size:12px; }
+  .compare-head { display:flex; justify-content:space-between; gap:14px; flex-wrap:wrap; }
+  .product-chip { padding:10px 12px; border:1px solid #dce3ec; border-radius:10px; background:#fff; min-width:170px; }
+  .product-chip b { display:block; margin-bottom:4px; }
+  .product-chip small { color:#64748b; }
+  .dna { display:grid; grid-template-columns:170px 1fr; gap:12px; font-size:13px; padding:10px 0; border-bottom:1px solid #edf1f5; }
+  .dna:last-child { border-bottom:0; }
+  .dna label { color:#64748b; }
+  .idea-card { border:1px solid #e4e9ef; border-radius:12px; padding:15px; background:#fff; }
+  .idea-card h4 { margin:0 0 8px; }
+  .idea-card p { margin:0 0 12px; color:#64748b; font-size:13px; line-height:1.6; }
+  .pill { padding:6px 10px; border-radius:999px; border:1px solid #dbe2ea; background:#fff; font-size:12px; cursor:pointer; }
+  .pill.active { background:#172033; color:#fff; border-color:#172033; }
+  .emptybox { text-align:center; padding:48px 20px; color:#64748b; }
+  .form-row { display:grid; grid-template-columns:160px 1fr; gap:14px; align-items:center; margin-bottom:14px; }
+  textarea { width:100%; min-height:120px; border:1px solid #dbe2ea; border-radius:10px; padding:12px; resize:vertical; font:inherit; }
+  @media(max-width:1050px){
+    .grid-4,.grid-3 { grid-template-columns:repeat(2,minmax(0,1fr)); }
+  }
+  @media(max-width:760px){
+    .sidebar { position:static; width:100%; }
+    .app { display:block; }
+    main { margin-left:0; width:100%; }
+    .sidebar-bottom { display:none; }
+    .nav { display:grid; grid-template-columns:repeat(2,1fr); }
+    .topbar { position:static; }
+    .topbar { height:auto!important; min-height:66px; flex-wrap:wrap; gap:10px; padding:10px 14px!important; }
+    .account-tools { width:100%; flex-wrap:wrap; }
+    .subscription-alert { flex:1 1 250px; }
+    .account-trigger span:not(.avatar) { max-width:120px; }
+    .grid-4,.grid-3,.grid-2 { grid-template-columns:1fr; }
+    .hero { flex-direction:column; }
+    .page { padding:20px 14px 36px; }
+    .form-row { grid-template-columns:1fr; gap:6px; }
+  }
+</style>
+
+
+
+<style>
+:root{
+  --cx-bg:#F7F8FA;
+  --cx-panel:#FFFFFF;
+  --cx-text:#171A1F;
+  --cx-text2:#30343B;
+  --cx-muted:#7B8088;
+  --cx-muted2:#A7ABB2;
+  --cx-line:#ECEEF1;
+  --cx-line2:#E2E5E9;
+  --cx-green:#19C37D;
+  --cx-green-dark:#0EAD6D;
+  --cx-green-soft:#EAF8F2;
+  --cx-green-soft2:#F4FBF8;
+  --cx-danger:#E05252;
+  --cx-warning:#D98A28;
+  --cx-radius:14px;
+  --cx-sidebar:210px;
+  --cx-shadow:0 1px 2px rgba(0,0,0,.015),0 4px 14px rgba(0,0,0,.035);
+}
+html{scroll-behavior:smooth}
+body{
+  margin:0!important;
+  background:var(--cx-bg)!important;
+  color:var(--cx-text)!important;
+  font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Helvetica Neue","Segoe UI","Microsoft YaHei",sans-serif!important;
+  font-size:14px!important;
+  -webkit-font-smoothing:antialiased;
+}
+.app{min-height:100vh!important}
+
+/* Sidebar */
+.sidebar{
+  width:var(--cx-sidebar)!important;
+  background:#FAFAFB!important;
+  color:var(--cx-text)!important;
+  padding:22px 12px!important;
+  border-right:1px solid var(--cx-line)!important;
+  box-shadow:none!important;
+}
+main{
+  margin-left:var(--cx-sidebar)!important;
+  width:calc(100% - var(--cx-sidebar))!important;
+}
+.brand{
+  padding:4px 10px 20px!important;
+  border-bottom:0!important;
+}
+.brand h1{
+  margin:0 0 4px!important;
+  font-size:19px!important;
+  line-height:1.2!important;
+  font-weight:700!important;
+  letter-spacing:-.02em!important;
+  color:var(--cx-text)!important;
+}
+.brand p{
+  margin:0!important;
+  color:var(--cx-muted)!important;
+  font-size:11px!important;
+}
+.nav{
+  margin-top:18px!important;
+  gap:5px!important;
+}
+.nav button{
+  min-height:42px!important;
+  padding:10px 12px!important;
+  border-radius:10px!important;
+  color:#50555D!important;
+  font-size:13px!important;
+  font-weight:500!important;
+  background:transparent!important;
+}
+.nav button:hover{
+  background:#F0F2F3!important;
+  color:var(--cx-text)!important;
+}
+.nav button.active{
+  background:var(--cx-green-soft)!important;
+  color:var(--cx-green-dark)!important;
+  font-weight:650!important;
+  box-shadow:none!important;
+}
+.sidebar-bottom{
+  color:var(--cx-muted2)!important;
+  border-top:1px solid var(--cx-line)!important;
+  font-size:10px!important;
+}
+
+/* top */
+.topbar{
+  height:66px!important;
+  background:rgba(247,248,250,.96)!important;
+  border-bottom:0!important;
+  box-shadow:none!important;
+  padding:0 26px!important;
+  backdrop-filter:none!important;
+}
+.topbar strong{
+  font-size:15px!important;
+  font-weight:650!important;
+  color:var(--cx-text)!important;
+}
+.user{color:var(--cx-muted)!important;font-size:12px!important}
+.avatar{
+  width:32px!important;height:32px!important;
+  background:#fff!important;
+  color:var(--cx-green-dark)!important;
+  border:1px solid var(--cx-line2)!important;
+  box-shadow:none!important;
+}
+
+/* page / hero */
+.page{
+  padding:18px 26px 56px!important;
+  max-width:none!important;
+  margin:0!important;
+}
+.hero{
+  margin-bottom:18px!important;
+  align-items:center!important;
+}
+.hero h2{
+  margin:0 0 8px!important;
+  color:var(--cx-text)!important;
+  font-family:inherit!important;
+  font-size:24px!important;
+  font-weight:700!important;
+  letter-spacing:-.025em!important;
+}
+.hero p{
+  max-width:860px!important;
+  margin:0!important;
+  color:var(--cx-muted)!important;
+  font-size:13px!important;
+  line-height:1.7!important;
+}
+
+/* Buttons / inputs */
+.btn{
+  min-height:36px!important;
+  padding:8px 13px!important;
+  border:1px solid var(--cx-line2)!important;
+  border-radius:9px!important;
+  background:#fff!important;
+  color:#3A3F46!important;
+  font-size:12px!important;
+  font-weight:550!important;
+  box-shadow:none!important;
+}
+.btn:hover{
+  transform:none!important;
+  border-color:#CCD1D6!important;
+  background:#FCFCFD!important;
+  box-shadow:none!important;
+}
+.btn.primary{
+  background:var(--cx-green)!important;
+  border-color:var(--cx-green)!important;
+  color:#fff!important;
+  box-shadow:none!important;
+}
+.btn.primary:hover{background:var(--cx-green-dark)!important}
+input,select,textarea{
+  min-height:38px!important;
+  border:1px solid var(--cx-line2)!important;
+  border-radius:9px!important;
+  background:#fff!important;
+  color:var(--cx-text2)!important;
+  font-size:12px!important;
+  box-shadow:none!important;
+}
+input:focus,select:focus,textarea:focus{
+  outline:none!important;
+  border-color:#9ADFC2!important;
+  box-shadow:0 0 0 3px rgba(25,195,125,.08)!important;
+}
+
+/* layout spacing */
+.grid{gap:16px!important}
+.grid-4{grid-template-columns:repeat(4,minmax(0,1fr))!important}
+.grid-3{grid-template-columns:repeat(3,minmax(0,1fr))!important}
+.grid-2{grid-template-columns:repeat(2,minmax(0,1fr))!important}
+.section-title{
+  margin:26px 0 12px!important;
+}
+.section-title h3{
+  margin:0!important;
+  font-size:15px!important;
+  font-weight:650!important;
+  color:var(--cx-text)!important;
+  letter-spacing:-.01em!important;
+}
+.section-title span{
+  color:var(--cx-muted2)!important;
+  font-size:11px!important;
+}
+
+/* cards */
+.card,.idea-card,.product-chip,.opportunity-map{
+  background:var(--cx-panel)!important;
+  border:1px solid var(--cx-line)!important;
+  border-radius:var(--cx-radius)!important;
+  box-shadow:var(--cx-shadow)!important;
+}
+.card{
+  padding:20px!important;
+}
+.card:hover,.idea-card:hover{
+  transform:none!important;
+  box-shadow:0 3px 16px rgba(0,0,0,.045)!important;
+  border-color:#E4E6E9!important;
+}
+.idea-card{padding:18px!important}
+.idea-card h4{
+  margin:0 0 8px!important;
+  font-size:14px!important;
+  font-weight:650!important;
+}
+.idea-card p{
+  color:var(--cx-muted)!important;
+  font-size:12px!important;
+  line-height:1.7!important;
+}
+
+/* metric */
+.metric-label{
+  color:var(--cx-muted)!important;
+  font-size:12px!important;
+  font-weight:500!important;
+  margin-bottom:10px!important;
+}
+.metric-value{
+  color:var(--cx-text)!important;
+  font-family:inherit!important;
+  font-size:28px!important;
+  line-height:1.1!important;
+  font-weight:700!important;
+  letter-spacing:-.02em!important;
+}
+.metric-sub{
+  color:var(--cx-muted2)!important;
+  font-size:11px!important;
+  margin-top:8px!important;
+}
+.up{color:var(--cx-green-dark)!important}
+.down{color:var(--cx-danger)!important}
+
+/* tags */
+.tag{
+  padding:3px 8px!important;
+  border-radius:999px!important;
+  border:0!important;
+  background:#F1F3F5!important;
+  color:#59606A!important;
+  font-size:10.5px!important;
+  font-weight:500!important;
+}
+.tag.good{background:var(--cx-green-soft)!important;color:var(--cx-green-dark)!important}
+.tag.hot{background:#FFF5E7!important;color:#B8751E!important}
+.tag.risk{background:#FFF0F0!important;color:#C44848!important}
+
+/* tables */
+table{
+  width:100%!important;
+  border-collapse:collapse!important;
+  font-size:12px!important;
+}
+th{
+  padding:12px 10px!important;
+  background:#FAFAFB!important;
+  color:#6C727B!important;
+  border-bottom:1px solid var(--cx-line)!important;
+  text-transform:none!important;
+  letter-spacing:0!important;
+  font-weight:600!important;
+  font-size:11px!important;
+}
+td{
+  padding:13px 10px!important;
+  border-bottom:1px solid #F0F1F3!important;
+  color:#40454C!important;
+}
+tr:hover td{background:#FCFCFD!important}
+td b{color:var(--cx-text)!important}
+
+/* insight */
+.insight{
+  margin-top:12px!important;
+  padding:14px 16px!important;
+  border:0!important;
+  border-radius:10px!important;
+  background:var(--cx-green-soft2)!important;
+  color:#4E645A!important;
+  font-size:12px!important;
+  line-height:1.7!important;
+}
+.insight b{color:var(--cx-green-dark)!important}
+
+/* rank */
+.rank{border-bottom:1px solid #F0F1F3!important;padding:12px 0!important}
+.rank-no{
+  background:#F0F5F2!important;
+  color:var(--cx-green-dark)!important;
+  border-radius:7px!important;
+}
+.rank-main b{color:var(--cx-text)!important;font-size:12.5px!important}
+.rank-main span{color:var(--cx-muted)!important}
+.rank-val{color:#555B63!important}
+
+/* progress */
+.progress{height:6px!important;background:#F0F2F4!important}
+.progress>i{background:var(--cx-green)!important}
+
+/* growth path: lighter, like filters rather than decorative steps */
+.growth-path{
+  display:flex!important;
+  flex-wrap:wrap!important;
+  gap:8px!important;
+  margin:0 0 18px!important;
+}
+.growth-step{
+  flex:0 0 auto!important;
+  min-width:112px!important;
+  padding:8px 11px!important;
+  border:1px solid var(--cx-line)!important;
+  border-radius:9px!important;
+  background:#fff!important;
+  color:var(--cx-muted)!important;
+  font-size:10.5px!important;
+  text-align:left!important;
+  box-shadow:none!important;
+}
+.growth-step b{
+  display:block!important;
+  margin:0 0 2px!important;
+  color:#5C626A!important;
+  font-size:11px!important;
+  font-weight:600!important;
+}
+.growth-step.active{
+  background:var(--cx-green-soft)!important;
+  border-color:#CDEEDD!important;
+  color:var(--cx-green-dark)!important;
+}
+.growth-step.active b{color:var(--cx-green-dark)!important}
+.growth-step::after{display:none!important}
+
+/* decision banner becomes a white decision card, not dark hero */
+.decision-banner{
+  margin-bottom:18px!important;
+  padding:20px 22px!important;
+  border:1px solid var(--cx-line)!important;
+  border-radius:var(--cx-radius)!important;
+  background:#fff!important;
+  color:var(--cx-text)!important;
+  box-shadow:var(--cx-shadow)!important;
+}
+.decision-banner small{
+  color:var(--cx-green-dark)!important;
+  font-size:11px!important;
+  font-weight:600!important;
+}
+.decision-banner strong{
+  display:block!important;
+  margin-top:5px!important;
+  color:var(--cx-text)!important;
+  font-size:17px!important;
+  line-height:1.5!important;
+  font-weight:680!important;
+}
+.decision-banner p{
+  margin:7px 0 0!important;
+  color:var(--cx-muted)!important;
+  font-size:12px!important;
+  line-height:1.65!important;
+}
+.decision-banner .btn{
+  background:#fff!important;
+  color:var(--cx-text2)!important;
+  border-color:var(--cx-line2)!important;
+}
+
+/* question cards */
+.question-card{
+  border-top:1px solid var(--cx-line)!important;
+  overflow:visible!important;
+}
+.question-card::before{display:none!important}
+.question-card .q{color:var(--cx-muted)!important;font-size:11px!important}
+.question-card .a{color:var(--cx-text)!important;font-size:15px!important;font-weight:650!important}
+
+/* opportunity map */
+.opportunity-grid{gap:16px!important}
+.opportunity-map{padding:20px!important;min-height:310px!important}
+.quadrant{
+  height:255px!important;
+  border-left:1px solid #D9DDE2!important;
+  border-bottom:1px solid #D9DDE2!important;
+  background:
+    linear-gradient(90deg,transparent 49.8%,#F0F1F3 50%,transparent 50.2%),
+    linear-gradient(transparent 49.8%,#F0F1F3 50%,transparent 50.2%)!important;
+}
+.quadrant .axis-x,.quadrant .axis-y{color:var(--cx-muted2)!important}
+.bubble{
+  background:rgba(25,195,125,.10)!important;
+  border:1px solid rgba(25,195,125,.24)!important;
+  color:#12845A!important;
+  box-shadow:none!important;
+}
+.bubble.hot{
+  background:rgba(25,195,125,.16)!important;
+  border-color:rgba(25,195,125,.34)!important;
+  color:#0E8D5C!important;
+}
+
+.product-chip.mine{
+  background:var(--cx-green-soft2)!important;
+  border-color:#CDEEDD!important;
+}
+.product-chip.mine::before{background:var(--cx-green)!important}
+
+@media(max-width:1050px){
+  .grid-4,.grid-3{grid-template-columns:repeat(2,minmax(0,1fr))!important}
+}
+@media(max-width:820px){
+  .sidebar{position:static!important;width:100%!important}
+  main{margin-left:0!important;width:100%!important}
+  .grid-4,.grid-3,.grid-2{grid-template-columns:1fr!important}
+  .page{padding:16px 14px 36px!important}
+}
+.cb-shell{display:grid;gap:12px}.cb-shell>*{min-width:0}.cb-titlebar{display:flex;align-items:flex-start;justify-content:space-between;gap:18px}.cb-titlebar h2{font-size:27px;margin:0 0 12px}.cb-filters{display:flex;gap:12px;flex-wrap:wrap}.cb-control{display:flex;align-items:center;gap:7px;border:1px solid var(--cx-line2);background:#fff;border-radius:10px;padding:7px 11px}.cb-control span{font-size:12px;font-weight:650}.cb-control select{border:0!important;padding:2px!important;min-width:150px;background:transparent}.cb-updated{font-size:11px;color:var(--cx-muted)}.cb-panel{background:#fff;border:1px solid var(--cx-line2);border-radius:14px;padding:15px;box-shadow:var(--cx-shadow)}.cb-panel-head{display:flex;justify-content:space-between;gap:16px;align-items:center;margin-bottom:12px}.cb-panel-head h3{font-size:15px;margin:0}.cb-panel-head p{font-size:10.5px;color:var(--cx-muted);margin:3px 0 0}.cb-pool{overflow-x:auto;min-width:0}.cb-pool-table{border-collapse:collapse;font-size:12px;width:max-content;min-width:100%}.cb-pool-table th,.cb-pool-table td{padding:10px 12px;text-align:center;border-bottom:1px solid var(--cx-line);vertical-align:middle}.cb-pool-table th:first-child,.cb-pool-table td:first-child{text-align:left;font-weight:650;color:var(--cx-muted);font-size:11px;white-space:nowrap;width:110px}.cb-pool-table thead th{font-size:12px;font-weight:650;border-bottom:2px solid var(--cx-line2);padding-bottom:14px;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.cb-pool-table thead th.target{color:#1976d2}.cb-pool-table .sim-val{font-size:20px;font-weight:700;color:#1976d2}.cb-pool-table .sim-val.target{color:var(--cx-muted)}.cb-pool-table .struct-text{font-size:11px;color:#4b5563;white-space:normal}.cb-pool-table .diff-tags{display:flex;flex-wrap:wrap;gap:4px;justify-content:center}.cb-pool-table .diff-tags .tag{font-size:10px;padding:2px 8px;border-radius:99px;white-space:nowrap}.cb-evidence{display:grid;grid-template-columns:1.05fr .95fr 1.1fr;gap:12px}.cb-evidence-card{border:1px solid var(--cx-line2);border-radius:12px;padding:14px;min-height:230px}.cb-eyebrow{font-size:10px;color:var(--cx-muted);margin-bottom:4px}.cb-evidence-card h4{margin:0 0 9px;font-size:16px}.cb-evidence-card>p{font-size:11.5px;line-height:1.65;color:#4b5563}.cb-split{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:15px;padding-top:13px;border-top:1px dashed var(--cx-line2)}.cb-split b{font-size:11px;display:block;margin-bottom:7px}.cb-list{display:grid;gap:7px}.cb-score-row{display:grid;grid-template-columns:24px 1fr auto;gap:8px;align-items:center;padding:8px;border-bottom:1px solid var(--cx-line)}.cb-score-row .rank-dot{width:22px;height:22px}.cb-score-row b{font-size:11px}.cb-score-row strong{color:var(--cx-green-dark);font-size:12px}.cb-module{display:grid;grid-template-columns:72px 1fr;gap:8px;padding:8px 0;border-bottom:1px solid var(--cx-line)}.cb-module:last-child{border-bottom:0}.cb-module b{font-size:10.5px;color:var(--cx-green-dark)}.cb-module p{font-size:10px;line-height:1.45;margin:0}.cb-module small{display:block;color:var(--cx-muted);margin-top:3px}.cb-table-wrap{overflow:auto}.cb-table{min-width:960px;font-size:11px!important}.cb-table th,.cb-table td{padding:8px 10px!important;text-align:center!important}.cb-table th:first-child,.cb-table td:first-child{text-align:left!important;font-weight:650}.cb-common{color:var(--cx-green-dark);background:var(--cx-green-soft);border-radius:99px;padding:3px 8px;display:inline-block}.cb-note{font-size:10px;line-height:1.55;color:#667085;background:#f7faf8;border-left:3px solid var(--cx-green);padding:9px 11px;border-radius:6px;margin-top:10px}.cb-error{padding:28px;color:#b42318;background:#fff4f3;border-radius:12px}.cb-factor-tabs{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px;padding-bottom:10px;border-bottom:1px solid var(--cx-line2)}.cb-factor-tab{border:1px solid var(--cx-line2);background:#fff;color:var(--cx-muted);font-size:12px;font-weight:600;padding:6px 14px;border-radius:99px;cursor:pointer;transition:all .2s;white-space:nowrap}.cb-factor-tab:hover{border-color:var(--cx-green);color:var(--cx-green-dark)}.cb-factor-tab.active{background:var(--cx-green-dark);border-color:var(--cx-green-dark);color:#fff}.cb-tab-rank{font-size:9px;font-weight:700;padding:1px 5px;border-radius:99px;background:#fff3;color:#fff;margin-left:3px}.cb-factor-tab:not(.active) .cb-tab-rank{background:var(--cx-green-soft);color:var(--cx-green-dark)}.cb-factor-module{border:1px solid var(--cx-line2);border-radius:12px;padding:16px;margin-bottom:14px}.cb-factor-module.hidden{display:none}.cb-factor-head{display:flex;align-items:center;gap:10px;margin-bottom:12px}.cb-factor-badge{font-size:10px;font-weight:700;padding:3px 10px;border-radius:99px;background:var(--cx-green-soft);color:var(--cx-green-dark)}.cb-factor-head h4{font-size:15px;margin:0}.cb-factor-body{display:grid;grid-template-columns:280px 1fr;gap:18px}.cb-factor-chart{background:#f8faf9;border-radius:10px;padding:12px}.cb-chart-title{font-size:11px;font-weight:650;color:var(--cx-muted);margin-bottom:10px}.cb-bar-row{display:grid;grid-template-columns:90px 1fr 36px;gap:8px;align-items:center;margin-bottom:7px}.cb-bar-label{font-size:10px;color:#4b5563;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.cb-bar-track{height:18px;background:#eef1ef;border-radius:4px;overflow:hidden;position:relative}.cb-bar-fill{height:100%;border-radius:4px;transition:width .4s ease}.cb-bar-row.target .cb-bar-fill{background:linear-gradient(90deg,#1976d2,#42a5f5)}.cb-bar-row:not(.target) .cb-bar-fill{background:linear-gradient(90deg,#ff9800,#ffb74d)}.cb-bar-score{font-size:13px;font-weight:700;text-align:right}.cb-bar-row.target .cb-bar-score{color:#1976d2}.cb-bar-row:not(.target) .cb-bar-score{color:#ff9800}.cb-factor-table-wrap{overflow-x:auto;min-width:0}.cb-factor-table{border-collapse:collapse;font-size:11px;width:100%}.cb-factor-table th,.cb-factor-table td{padding:8px 10px;border-bottom:1px solid var(--cx-line);text-align:center;vertical-align:top}.cb-factor-table th:first-child,.cb-factor-table td:first-child{text-align:left;font-weight:650;color:var(--cx-muted);white-space:nowrap;width:80px}.cb-factor-table thead th{font-weight:650;border-bottom:2px solid var(--cx-line2);font-size:11px}.cb-factor-table thead th.target{color:#1976d2}.cb-factor-table tbody td{font-size:10.5px;line-height:1.5;color:#374151}.cb-factor-conclusion{margin-top:10px;padding:8px 12px;background:#e8f5e9;border-left:3px solid #4caf50;border-radius:4px;font-size:11.5px;color:#2e7d32;line-height:1.55}@media(max-width:1100px){.cb-evidence{grid-template-columns:1fr}.cb-factor-body{grid-template-columns:1fr}}@media(max-width:700px){.cb-titlebar{display:block}.cb-updated{margin:10px 0}}
+</style>
+
+
+<style>
+/* 用户需求盘点专用组件 */
+:root{
+  --green:var(--cx-green);
+  --green-dark:var(--cx-green-dark);
+  --green-soft:var(--cx-green-soft);
+  --green-soft2:var(--cx-green-soft2);
+  --muted:var(--cx-muted);
+  --muted2:var(--cx-muted2);
+  --line:var(--cx-line);
+  --line2:var(--cx-line2);
+  --red:var(--cx-danger);
+}
+.kicker{font-size:11px;color:var(--green-dark);font-weight:650;margin-bottom:5px}
+.big-number{font-size:34px;font-weight:740;letter-spacing:-.03em}
+.map-wrap{display:grid;grid-template-columns:1.25fr .75fr;gap:16px}
+.map-card{padding:18px}
+.scatter{
+  position:relative;height:330px;border-left:1px solid #D9DDE2;border-bottom:1px solid #D9DDE2;
+  background:
+    linear-gradient(90deg,transparent 49.8%,#F0F1F3 50%,transparent 50.2%),
+    linear-gradient(transparent 49.8%,#F0F1F3 50%,transparent 50.2%);
+}
+.axis-x{position:absolute;right:0;bottom:-24px;font-size:11px;color:var(--muted2)}
+.axis-y{position:absolute;left:0;top:-20px;font-size:11px;color:var(--muted2)}
+.bubble{
+  position:absolute;border-radius:50%;display:grid;place-items:center;text-align:center;
+  padding:8px;font-size:11px;font-weight:650;
+  background:rgba(25,195,125,.11);border:1px solid rgba(25,195,125,.26);color:#12845A;
+}
+.bubble.hot{background:rgba(233,149,45,.13);border-color:rgba(233,149,45,.28);color:#B26A15}
+.rank{display:flex;gap:12px;align-items:center;padding:12px 0;border-bottom:1px solid #F0F1F3}
+.rank:last-child{border-bottom:0}
+.rank-no{width:25px;height:25px;border-radius:7px;background:#F0F5F2;color:var(--green-dark);display:grid;place-items:center;font-size:11px;font-weight:700}
+.rank-main{flex:1}
+.rank-main b{display:block;font-size:12.5px;margin-bottom:2px}
+.rank-main span{font-size:11px;color:var(--muted)}
+.rank-val{font-size:11px;text-align:right}
+.scene-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
+.scene-card{
+  border:1px solid var(--line);border-radius:12px;padding:15px;background:#fff;min-height:128px;
+}
+.scene-card h4{margin:0 0 8px;font-size:13px}
+.scene-card p{margin:0;color:var(--muted);font-size:11.5px;line-height:1.55}
+.scene-foot{margin-top:12px;display:flex;justify-content:space-between;align-items:center}
+.flow{
+  position:relative;min-height:360px;background:#fff;border:1px solid var(--line);border-radius:14px;
+  overflow:hidden;padding:24px;
+}
+.flow-node{
+  position:absolute;width:150px;padding:12px;border-radius:11px;background:#fff;border:1px solid var(--line2);
+  box-shadow:0 3px 10px rgba(0,0,0,.035);
+}
+.flow-node strong{display:block;font-size:12px;margin-bottom:4px}
+.flow-node span{font-size:10.5px;color:var(--muted)}
+.flow-node.center{border-color:#CDEEDD;background:var(--green-soft2)}
+.flow-line{position:absolute;height:2px;background:#DDE2E7;transform-origin:left center}
+.flow-line.green{background:#9ADFC2}
+.flow-line.red{background:#F0B6B3}
+.flow-label{position:absolute;font-size:10px;color:var(--muted)}
+.signal-list{display:flex;flex-direction:column;gap:10px}
+.signal{
+  display:grid;grid-template-columns:88px 1fr auto;gap:10px;align-items:center;
+  padding:12px 0;border-bottom:1px solid #F0F1F3;
+}
+.signal:last-child{border-bottom:0}
+.signal time{font-size:10.5px;color:var(--muted2)}
+.signal b{font-size:12px}
+.signal p{margin:3px 0 0;color:var(--muted);font-size:11px}
+.demand-dashboard{display:grid;gap:16px}.demand-dashboard>*{min-width:0}
+.dashboard-summary{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+.dashboard-summary .card{padding:16px 18px}
+.dashboard-bars{display:grid;gap:12px}
+.dashboard-bar{display:grid;grid-template-columns:150px 1fr 72px;gap:12px;align-items:center;font-size:12px}
+.dashboard-track{height:8px;border-radius:999px;background:#edf1f3;overflow:hidden}
+.dashboard-fill{height:100%;border-radius:999px;background:var(--cx-green)}
+.dashboard-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.dashboard-panel{min-width:0}
+.dashboard-table-wrap{overflow:auto}
+.dashboard-table td,.dashboard-table th{white-space:nowrap}
+.heat-cell{text-align:center;border-radius:5px;font-weight:650}
+.heat-high{background:#ff9d93;color:#81241d}.heat-mid{background:#ffe29a;color:#7b5712}.heat-low{background:#c7ebbd;color:#276b2c}
+.path-row{display:grid;grid-template-columns:minmax(0,1fr) 80px 90px;gap:12px;align-items:center;padding:11px 0;border-bottom:1px solid var(--cx-line)}
+.path-row:last-child{border-bottom:0}
+.empty-state{padding:46px 20px;text-align:center;color:var(--cx-muted)}
+.dashboard-error{padding:18px;border:1px solid #fecaca;border-radius:12px;background:#fff7f7;color:#b91c1c}
+.prototype-section{border:1px solid var(--line);border-radius:15px;background:#fff;padding:16px;box-shadow:0 3px 14px rgba(30,48,40,.035)}
+.prototype-head{display:flex;justify-content:space-between;gap:16px;align-items:flex-start;margin-bottom:14px}
+.prototype-head h3{font-size:18px;margin:0 0 4px}.prototype-head p{margin:0;color:var(--muted);font-size:11px}
+.chart-tabs{display:flex;border:1px solid var(--line);border-radius:7px;overflow:hidden;background:#fff}
+.chart-tab{border:0;border-right:1px solid var(--line);background:#fff;padding:9px 24px;font:inherit;font-size:11px;font-weight:650;color:#4e5964;cursor:pointer}
+.chart-tab:last-child{border-right:0}.chart-tab.active{background:#f0fbf5;color:#079454;box-shadow:inset 0 -2px #14b866}
+.bubble-chart{position:relative;height:310px;margin:18px 10px 38px 44px;border-left:1px solid #cfd6dd;border-bottom:1px solid #cfd6dd;background:linear-gradient(90deg,transparent calc(50% - .5px),#dbe1e6 50%,transparent calc(50% + .5px)),linear-gradient(transparent calc(50% - .5px),#dbe1e6 50%,transparent calc(50% + .5px))}
+.bubble-chart:after{content:'';position:absolute;right:-1px;bottom:-4px;border-left:6px solid #9aa5af;border-top:3px solid transparent;border-bottom:3px solid transparent}
+.bubble-axis{position:absolute;font-size:10px;color:#65717c}.bubble-axis.x{bottom:-27px;left:42%;}.bubble-axis.y{left:-38px;top:-17px}.quadrant{position:absolute;font-size:10px;color:#10975b;font-weight:700}.q1{left:8px;top:7px}.q2{right:8px;top:7px}.q3{left:8px;bottom:7px}.q4{right:8px;bottom:7px}
+.need-bubble{position:absolute;transform:translate(-50%,50%);border-radius:50%;display:flex;flex-direction:column;justify-content:center;align-items:center;text-align:center;background:rgba(40,174,104,.12);border:1px solid rgba(32,165,94,.22);color:#087e48;line-height:1.35;cursor:pointer;transition:.18s ease;box-shadow:0 3px 10px rgba(24,137,80,.05);font-family:inherit}
+.need-bubble:hover,.need-bubble.active{transform:translate(-50%,50%) scale(1.08);z-index:3;background:rgba(40,174,104,.24);box-shadow:0 7px 20px rgba(24,137,80,.14)}.need-bubble b{font-size:11px}.need-bubble span{font-size:10px}
+.bubble-detail{min-height:34px;margin:-24px 12px 12px 44px;padding:8px 11px;border-radius:7px;background:#f5fbf8;color:#40564a;font-size:10px}.bubble-tick{position:absolute;font-size:9px;color:#9aa4ad}.bubble-tick.x{bottom:-17px;transform:translateX(-50%)}.bubble-tick.y{left:-38px;transform:translateY(50%)}
+.matrix-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;align-items:stretch}.matrix-card{border:1px solid var(--line);border-radius:10px;padding:12px;overflow:auto;display:flex;flex-direction:column}.matrix-card h4{font-size:11px;margin:0 0 10px;text-align:center;font-weight:650;color:#3a4148}.matrix-card table{font-size:10px;width:100%;table-layout:fixed;border-collapse:collapse;flex:1}.matrix-card th,.matrix-card td{padding:5px 3px;text-align:center;border:1px solid #ebedef;height:24px;line-height:1.2}.matrix-card th{background:#f5f7f8;font-weight:650;color:#525c64}.matrix-card td:first-child,.matrix-card th:first-child{text-align:left;width:30%}.matrix-card td:first-child{background:#f9fafb;font-weight:650}
+.decision-grid{display:grid;grid-template-columns:.95fr 1.15fr;gap:10px}.decision-card{border:1px solid var(--line);border-radius:10px;padding:14px}.decision-card h4{margin:0 0 12px;color:#079454;font-size:12px}
+.factor-row{display:grid;grid-template-columns:105px 1fr 46px;gap:9px;align-items:center;padding:9px 0;border-bottom:1px solid #f0f2f4;font-size:10px}.factor-row:last-child{border-bottom:0}.factor-icon{display:inline-flex;width:21px;height:21px;border-radius:50%;align-items:center;justify-content:center;border:1px solid currentColor;margin-right:6px}.factor-track{height:5px;background:#edf1f3;border-radius:9px;overflow:hidden}.factor-fill{height:100%;border-radius:9px}
+.sankey{position:relative;height:275px;overflow:hidden}.sankey svg{position:absolute;inset:0;width:100%;height:100%}.sankey-col{position:absolute;top:0;bottom:0;display:flex;flex-direction:column;justify-content:space-around;z-index:2}.sankey-col.left{left:0;width:112px}.sankey-col.right{right:0;width:104px}.sankey-node{padding:8px;border:1px solid currentColor;border-radius:7px;background:#fff;font-size:10px;font-weight:650}.sankey-node small{display:block;margin-top:2px;font-weight:500}.flow-path{fill:none;stroke-opacity:.15;transition:.18s}.flow-path:hover{stroke-opacity:.38}
+.migration-grid{display:grid;grid-template-columns:minmax(300px,1fr) minmax(300px,1fr);gap:12px;align-items:stretch}.migration-flow{position:relative;height:275px;overflow:hidden}.migration-flow svg{position:absolute;inset:0;width:100%;height:100%}.migration-center{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);background:#fff;border:1px solid #cfe9dc;border-radius:10px;padding:14px 18px;text-align:center;color:#07894e;box-shadow:0 5px 18px rgba(12,112,66,.08);z-index:2}.migration-brand{position:absolute;padding:6px 9px;background:#fff;border:1px solid var(--line);border-radius:6px;font-size:9px;z-index:2}.migration-table{border:1px solid var(--line);border-radius:9px;padding:10px}.migration-table h4{margin:0 0 8px;font-size:11px}.path-reason-row{display:grid;grid-template-columns:minmax(80px,.7fr) 1fr;gap:8px;padding:8px 6px;border-bottom:1px solid #f0f2f4;font-size:9.5px;align-items:center}.path-reason-row:last-child{border-bottom:0}.path-reason-row .path-label{font-weight:650;color:#3a4148}.path-reason-badges{display:flex;flex-wrap:wrap;gap:5px}.reason-badge{display:inline-flex;align-items:center;gap:3px;padding:3px 7px;border-radius:5px;background:#f0fbf5;border:1px solid #d4eedf;font-size:9px;color:#1a6b3e}.reason-badge .share{font-weight:650}.reason-badge.dim{background:#f5f7f8;border-color:#e8eaec;color:#6b7280}
+.reason-layout{display:grid;grid-template-columns:1.35fr .65fr;gap:20px;margin-top:10px}.reason-insight{border:1px solid #d7ebe0;background:#f5fbf8;border-radius:8px;padding:15px;font-size:10px;line-height:1.7;color:#53625a}.reason-insight b{display:block;color:#07894e;margin-bottom:5px}
+
+/* 增长机会：交叉需求与病症供需总览 */
+.cross-analysis{display:grid;gap:16px;margin:18px 0 24px}
+.cross-card{padding:0!important;overflow:hidden}
+.cross-card-head{display:flex;justify-content:space-between;gap:18px;align-items:flex-start;padding:18px 20px 14px;border-bottom:1px solid var(--cx-line)}
+.cross-card-head h3{margin:0 0 5px;font-size:16px}.cross-card-head p{margin:0;color:var(--cx-muted);font-size:11px;line-height:1.6}
+.metric-note{max-width:470px;padding:9px 12px;border:1px solid #dceee4;border-radius:9px;background:#f6fcf9;color:#51665b;font-size:10.5px;line-height:1.6}
+.cross-table-wrap{overflow:auto;padding:0 16px 8px}
+.cross-table{min-width:900px}
+.cross-table th{text-align:center!important;vertical-align:bottom}.cross-table td{text-align:center!important}
+.cross-table th:nth-child(2),.cross-table td:nth-child(2){text-align:left!important}
+.group-demand{background:#f2fbf6!important;color:#128455!important}.group-supply{background:#f3f8ff!important;color:#2969b0!important}
+.rank-dot{display:inline-grid;place-items:center;width:22px;height:22px;border-radius:50%;background:#ecf8f1;color:#0d9959;font-weight:750}
+.rank-dot.top{background:#16a368;color:#fff}.cross-name{font-weight:650;color:var(--cx-text)}
+.trend-up{color:#e04444;font-weight:650}.trend-down{color:#21835d;font-weight:650}.trend-flat{color:var(--cx-muted)}
+.mini-meter{display:inline-flex;align-items:center;gap:8px;min-width:105px}.mini-track{width:58px;height:6px;border-radius:99px;background:#edf1f3;overflow:hidden}.mini-fill{display:block;height:100%;border-radius:99px;background:#19a768}
+.cross-footnote{padding:0 20px 15px;color:var(--cx-muted);font-size:10.5px;line-height:1.65}
+.disease-table{min-width:760px}.disease-table td:first-child,.disease-table th:first-child{text-align:left!important}.disease-table td:not(:first-child),.disease-table th:not(:first-child){text-align:center!important}
+.sample-muted{display:block;margin-top:3px;color:var(--cx-muted2);font-size:10px}
+.disease-representative{display:grid;gap:16px}
+.disease-toolbar{display:flex;justify-content:space-between;gap:14px;align-items:center;padding:15px 18px}
+.disease-toolbar label{font-size:11px;color:var(--cx-muted)}.disease-toolbar select{min-width:210px;margin-left:8px}
+.disease-summary{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
+.disease-summary .card{padding:16px!important}.disease-summary .metric-value{font-size:24px!important}
+.representative-layout{display:grid;grid-template-columns:1.15fr .85fr;gap:16px;align-items:start}
+.product-list{display:grid;gap:10px;padding:14px}.representative-product{display:grid;grid-template-columns:32px minmax(180px,1fr) 105px 105px;gap:12px;align-items:center;padding:12px;border:1px solid var(--cx-line);border-radius:10px;background:#fff}
+.representative-product:hover{border-color:#cfe9dc;background:#fbfefc}.product-copy b{display:block;font-size:12.5px;margin-bottom:4px}.product-copy small{display:block;color:var(--cx-muted);line-height:1.5;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.evidence-stat{text-align:right;font-size:11px}.evidence-stat b{display:block;font-size:13px;color:var(--cx-text)}
+.ingredient-cloud{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px;padding:14px}.ingredient-chip{padding:11px;border:1px solid var(--cx-line);border-radius:9px;background:#fff}.ingredient-chip-head{display:flex;justify-content:space-between;gap:8px;align-items:center}.ingredient-chip b{font-size:12px}.ingredient-chip p{margin:7px 0 0;color:var(--cx-muted);font-size:10px;line-height:1.5}
+.nutrition-role-groups{display:grid;gap:12px;padding:14px}.nutrition-role-group{border:1px solid var(--cx-line);border-radius:11px;background:#fbfcfc;overflow:hidden}.nutrition-role-head{display:flex;justify-content:space-between;gap:10px;align-items:center;padding:10px 12px;border-bottom:1px solid var(--cx-line);background:#f5faf7}.nutrition-role-head b{font-size:12px;color:#16784f}.nutrition-role-head span{font-size:10px;color:var(--cx-muted)}.nutrition-role-items{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;padding:10px}.nutrition-role-item{padding:9px 10px;border:1px solid #edf0ee;border-radius:8px;background:#fff}.nutrition-role-item b{display:block;font-size:11.5px}.nutrition-role-item small{display:block;margin-top:4px;color:var(--cx-muted);font-size:9.5px;line-height:1.45}
+.scope-warning{padding:13px 16px;border-radius:10px;background:#fffaf1;border:1px solid #f4e3bd;color:#735d32;font-size:10.5px;line-height:1.65}
+
+/* 增长机会洞察：按参考图的紧凑数据工作台 */
+.growth-opportunity-dashboard{display:grid;gap:12px}.growth-opportunity-dashboard>*{min-width:0}.go-panel{background:#fff;border:1px solid #dfe6e2;border-radius:12px;overflow:hidden;box-shadow:0 1px 4px rgba(21,57,39,.035)}
+.go-head{display:flex;justify-content:space-between;gap:14px;align-items:center;padding:13px 15px 10px}.go-head h3{margin:0 0 3px;font-size:15px}.go-head p{margin:0;color:#89918d;font-size:10.5px}.go-date{padding:5px 10px;border-radius:999px;background:#eaf8f1;color:#0b9560;font-size:10.5px;font-weight:650}
+.go-table-wrap{overflow:auto;padding:0 10px 8px}.go-table{min-width:850px;font-size:11px!important}.go-table th{padding:8px 9px!important;text-align:center!important}.go-table td{padding:8px 9px!important;text-align:center!important}.go-table td:first-child,.go-table th:first-child{text-align:left!important}.go-table tbody tr{cursor:pointer}.go-table tbody tr.selected td{background:#f0fbf5!important}.go-table tbody tr:hover td{background:#f7fcf9!important}
+.go-rate{display:inline-flex;align-items:center;gap:8px;min-width:115px;justify-content:center}.go-rate-track{width:55px;height:5px;background:#edf1ef;border-radius:99px;overflow:hidden}.go-rate-fill{display:block;height:100%;background:#14a66a;border-radius:99px}.go-sub{display:block;color:#a0a7a3;font-size:9.5px;margin-top:2px}
+.go-cross-table td:nth-child(2),.go-cross-table th:nth-child(2){text-align:left!important}.go-opportunity-tag{display:inline-block;padding:3px 8px;border-radius:5px;font-size:9.5px;font-weight:650}.go-opportunity-tag.high{background:#e7f7ee;color:#098a56}.go-opportunity-tag.growth{background:#fff1df;color:#c77414}.go-opportunity-tag.chance{background:#eaf2ff;color:#3272c8}.go-opportunity-tag.watch{background:#f1f2f3;color:#69716d}
+.go-detail{border-color:#91d8b5}.go-detail-head{display:flex;justify-content:space-between;gap:15px;align-items:center;padding:12px 15px}.go-detail-head h3{margin:0;font-size:16px}.go-select{min-width:180px}
+.go-detail-grid{display:grid;grid-template-columns:1.3fr 1fr;gap:12px;padding:0 12px 12px}.go-insight-card{border:1px solid #e2e8e4;border-radius:9px;padding:12px;min-width:0}.go-insight-card h4{margin:0 0 10px;font-size:11.5px}.go-compare-chart{height:155px;display:flex;align-items:flex-end;justify-content:center;gap:60px;border-bottom:1px solid #dce4df;padding:12px 20px 0}.go-compare-col{height:100%;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;gap:5px;color:#6f7773;font-size:9px}.go-compare-col b{font-size:11px;color:#29322e}.go-compare-bar{width:42px;min-height:5px;border-radius:5px 5px 0 0;background:#8da6d8}.go-compare-bar.current{background:#13a467}.go-growth-note{margin-top:9px;padding:8px 10px;border-radius:7px;background:#eef9f3;color:#47715c;font-size:9.5px;line-height:1.55}
+.go-feature{display:grid;grid-template-columns:25px 1fr auto;gap:8px;align-items:center;padding:8px 0;border-bottom:1px solid #eef1ef}.go-feature:last-child{border-bottom:0}.go-feature b{font-size:10.5px}.go-feature small{display:block;color:#8c9490;font-size:9px;margin-top:2px}.go-feature-val{font-size:10px;color:#59615d}.go-product{display:grid;grid-template-columns:24px 1fr auto;gap:8px;align-items:center;padding:8px 0;border-bottom:1px solid #eef1ef}.go-product:last-child{border-bottom:0}.go-product b{font-size:10.5px}.go-product small{display:block;color:#969d99;font-size:9px}.go-product-rate{font-size:10px;color:#45504a}
+.go-material-panel{border-color:#dfe6e2}.go-material-head{display:flex;justify-content:space-between;gap:15px;align-items:flex-start;padding:17px 18px;border-bottom:1px solid #e7ebe9}.go-material-head h3{margin:0 0 5px;font-size:19px}.go-material-head p{margin:0;color:#89918d;font-size:11px}.go-role-count{padding:7px 13px;border-radius:999px;background:#eaf8f1;color:#0b9b61;font-size:12px;font-weight:650}.go-material-groups{display:grid;gap:14px;padding:14px}.go-material-group{border:1px solid #dfe7e3;border-radius:13px;background:#fbfdfc;overflow:hidden}.go-material-group-head{display:flex;justify-content:space-between;gap:12px;align-items:center;padding:13px 15px;border-bottom:1px solid #e7ece9;background:#f4faf7}.go-material-group-head b{font-size:14px;color:#128854}.go-material-group-head span{font-size:10.5px;color:#7e8883}.go-material-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;padding:13px}.go-material-item{padding:12px 14px;border:1px solid #e4e9e6;border-radius:10px;background:#fff}.go-material-item b{display:block;font-size:12.5px;margin-bottom:7px}.go-material-item p{margin:0;color:#7d8682;font-size:10.5px;line-height:1.55}
+.go-explanation{display:flex;gap:14px;align-items:center;padding:14px 18px;border:1px solid #77cfa5;border-radius:10px;background:linear-gradient(90deg,#f4fcf8,#fff)}.go-bulb{width:50px;height:50px;flex:0 0 50px;border-radius:50%;display:grid;place-items:center;background:#0ca566;color:#fff;font-size:23px}.go-explanation h3{margin:0 0 5px;color:#0b8c59;font-size:16px}.go-explanation p{margin:0;color:#58635e;font-size:11px;line-height:1.65}
+
+@media(max-width:1100px){
+  .scene-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .map-wrap{grid-template-columns:1fr}
+}
+@media(max-width:760px){
+  .scene-grid{grid-template-columns:1fr}
+  .dashboard-summary,.dashboard-grid{grid-template-columns:1fr}
+  .matrix-grid,.decision-grid,.migration-grid,.reason-layout{grid-template-columns:1fr}
+  .dashboard-bar{grid-template-columns:110px 1fr 60px}
+  .cross-card-head{flex-direction:column}.metric-note{max-width:none}
+  .disease-summary,.representative-layout{grid-template-columns:1fr}.representative-product{grid-template-columns:30px minmax(150px,1fr) 90px}.representative-product .evidence-stat:last-child{display:none}.ingredient-cloud,.nutrition-role-items{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .go-detail-grid{grid-template-columns:1fr}.go-detail-head{align-items:flex-start;flex-direction:column}.go-select{width:100%}
+  .go-material-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.go-material-head{flex-direction:column}
+}
+.ei-dashboard{display:grid;gap:12px}.ei-dashboard>*{min-width:0}.ei-section-title{display:flex;align-items:center;gap:12px;margin:0 0 8px}.ei-section-title b{font-size:23px;letter-spacing:.08em;color:#079957}.ei-section-title h3{margin:0;font-size:17px}.ei-main{display:grid;grid-template-columns:120px 1.1fr repeat(4,minmax(120px,.8fr));align-items:center;background:#fff;border:1px solid #dfe5e2;border-radius:13px;padding:13px 18px;box-shadow:0 5px 18px rgba(30,55,43,.08)}.ei-icon{width:76px;height:76px;border-radius:50%;display:grid;place-items:center;background:linear-gradient(145deg,#42c887,#079957);font-size:39px;color:#fff}.ei-need h2{margin:0;font-size:29px}.ei-need small{display:block;color:#778079;margin-top:7px}.ei-metric{text-align:center;border-left:1px solid #dde3df;padding:8px}.ei-metric span{display:block;font-size:11px;color:#535c57}.ei-metric b{display:block;font-size:20px;color:#079957;margin-top:5px}.ei-main-note{grid-column:1/-1;border-top:1px solid #dfe5e2;margin-top:10px;padding-top:9px;color:#3e4842;font-size:11px}.ei-select{margin-left:auto}.ei-select select{min-width:190px}.ei-table-panel{background:#fff;border:1px solid #dfe5e2;border-radius:12px;padding:0 12px;box-shadow:0 4px 14px rgba(30,55,43,.06)}.ei-table{font-size:11.5px!important}.ei-table th,.ei-table td{text-align:center!important;padding:8px 10px!important}.ei-table th:nth-child(2),.ei-table td:nth-child(2){text-align:left!important}.ei-no{display:inline-grid;place-items:center;width:21px;height:21px;border-radius:6px;background:#ddf5e8;color:#078b50;font-weight:700}.ei-red{color:#ef3333;font-weight:650}.ei-scenes,.ei-opportunities{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}.ei-scene{background:#fff;border:1px solid #dfe5e2;border-radius:12px;padding:14px;min-height:128px;box-shadow:0 4px 14px rgba(30,55,43,.06)}.ei-scene-head{display:flex;gap:11px;align-items:center}.ei-scene-icon{width:42px;height:42px;border-radius:50%;display:grid;place-items:center;background:#e7f8ef;color:#079957;font-size:22px}.ei-scene h4{margin:0 0 4px;font-size:14px}.ei-scene .tag{background:#ddf5e8;color:#078b50}.ei-scene p{font-size:11px;line-height:1.65;margin:10px 0 0;color:#48534d}.ei-opportunity{position:relative;background:linear-gradient(145deg,#fff,#f8fcfa);border:1px solid #bfe2d1;border-radius:12px;padding:15px;min-height:168px}.ei-opportunity .code{display:inline-block;background:#079957;color:#fff;border-radius:4px;padding:3px 9px;font-weight:700}.ei-opportunity h4{font-size:15px;margin:9px 0}.ei-opportunity dl{display:grid;grid-template-columns:66px 1fr;gap:6px;margin:0;font-size:10.5px}.ei-opportunity dt{color:#59635e}.ei-opportunity dd{margin:0;border-bottom:1px solid #e5ebe8;padding-bottom:5px}.ei-footnote{font-size:10px;color:#737d77;padding:8px 12px;background:#f6faf8;border-radius:8px}@media(max-width:1100px){.ei-main{grid-template-columns:90px 1fr repeat(2,1fr)}.ei-metric:nth-of-type(3){border-left:0}.ei-scenes,.ei-opportunities{grid-template-columns:1fr}}@media(max-width:700px){.ei-main{grid-template-columns:1fr}.ei-icon{margin:auto}.ei-need{text-align:center}.ei-metric{border-left:0;border-top:1px solid #e3e8e5}.ei-section-title{flex-wrap:wrap}.ei-select{width:100%;margin:0}.ei-select select{width:100%}}
+.sr-dashboard{display:grid;gap:12px}.sr-dashboard>*{min-width:0}.sr-title h2{font-size:27px;margin:0 0 5px}.sr-title p{margin:0;color:#68716c}.sr-step{display:flex;align-items:center;gap:9px;margin:0 0 7px}.sr-step b{background:#079957;color:#fff;border-radius:5px;padding:3px 8px;font-size:12px}.sr-step h3{margin:0;font-size:15px}.sr-panel{background:#fff;border:1px solid #dfe5e2;border-radius:12px;padding:12px 15px;box-shadow:0 4px 14px rgba(30,55,43,.06)}.sr-upload{display:grid;grid-template-columns:1fr 1.8fr 150px;gap:18px;align-items:center}.sr-drop{border:1px dashed #aebcb5;border-radius:9px;min-height:112px;display:grid;place-items:center;text-align:center;color:#4d5952}.sr-drop i{display:block;font-style:normal;font-size:32px;color:#079957}.sr-drop small{display:block;color:#7e8782;margin-top:5px}.sr-target{display:grid;grid-template-columns:68px 1fr;gap:12px;align-items:center}.sr-product-icon{width:64px;height:82px;border-radius:8px;background:linear-gradient(145deg,#edf8f2,#ccebdc);display:grid;place-items:center;color:#078b50;font-weight:800;font-size:18px}.sr-target h4{font-size:17px;margin:0 0 8px}.sr-target p{font-size:11px;color:#727b76;margin:7px 0}.sr-target select{max-width:360px;width:100%}.sr-actions{display:grid;gap:9px}.sr-actions button{width:100%}.sr-recalls{display:grid;grid-template-columns:1fr 1fr .9fr;gap:14px}.sr-recall{display:grid;grid-template-columns:72px 1fr;gap:12px;align-items:center;border:1px solid #dfe5e2;border-radius:11px;padding:12px;min-height:120px}.sr-recall h4{margin:0 0 8px;font-size:15px}.sr-recall-metrics{display:flex;gap:25px}.sr-recall-metrics span{font-size:10px;color:#69736e}.sr-recall-metrics b{display:block;font-size:18px;color:#079957}.sr-recall p{font-size:10.5px;margin:5px 0}.sr-more{display:grid;place-items:center;text-align:center;border:1px solid #dfe5e2;border-radius:11px}.sr-more strong{font-size:16px}.sr-more span{display:block;font-size:28px;color:#68736d}.sr-table-wrap{overflow:auto}.sr-table{min-width:850px;font-size:11px!important}.sr-table th,.sr-table td{text-align:center!important;padding:8px 10px!important}.sr-table th:nth-child(-n+3),.sr-table td:nth-child(-n+3){text-align:left!important}.sr-warning{text-align:center;color:#ef4b4b;background:#fff0f0;padding:5px 10px;border-radius:6px;font-size:10px;margin:-2px auto 7px;max-width:580px}.sr-risk-level{display:inline-block;min-width:58px;border-radius:99px;padding:4px 9px;font-weight:650}.sr-risk-level.high{background:#ffe8e8;color:#e63131}.sr-risk-level.mid{background:#fff2df;color:#e97618}.sr-risk-level.low{background:#f0f2f3;color:#65706a}.sr-rate-high{color:#ef3131;font-weight:750}.sr-rate-mid{color:#f07819;font-weight:750}.sr-scope{font-size:10px;color:#6e7772;background:#f7faf8;padding:8px 10px;border-radius:7px}@media(max-width:1050px){.sr-upload{grid-template-columns:1fr}.sr-recalls{grid-template-columns:1fr}}@media(max-width:700px){.sr-target{grid-template-columns:1fr}.sr-product-icon{margin:auto}}
+.pp-dashboard{display:grid;gap:10px}.pp-dashboard>*{min-width:0}.pp-title h2{font-size:27px;margin:0 0 5px}.pp-title p{color:#6c7570;margin:0}.pp-panel{background:#fff;border:1px solid #dfe5e2;border-radius:12px;padding:12px 14px;box-shadow:0 3px 12px rgba(30,55,43,.05)}.pp-head{display:flex;align-items:center;gap:10px;border-bottom:1px solid #e7ebe9;padding-bottom:9px;margin-bottom:10px}.pp-head>span{background:#079957;color:#fff;border-radius:5px;padding:3px 8px;font-weight:700}.pp-head h3{margin:0;font-size:15px}.pp-filters{margin-left:auto;display:flex;gap:9px}.pp-filters select{padding:6px 9px!important;font-size:11px}.pp-market{display:grid;grid-template-columns:.85fr 1.15fr;gap:28px}.pp-chart-box h4{margin:0 0 4px;font-size:12px}.pp-chart-box>small{color:#7c8580}.pp-donut-area{display:flex;align-items:center;justify-content:center;gap:28px;height:180px}.pp-donut{width:150px;height:150px;border-radius:50%;position:relative;display:grid;place-items:center}.pp-donut:after{content:"";position:absolute;width:82px;height:82px;background:#fff;border-radius:50%}.pp-donut-center{z-index:1;text-align:center}.pp-donut-center b{display:block;font-size:23px}.pp-legend{display:grid;gap:7px;font-size:10.5px}.pp-legend i{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:6px}.pp-bars{display:grid;gap:9px;padding:15px 5px}.pp-bar{display:grid;grid-template-columns:150px 1fr 90px;gap:10px;align-items:center;font-size:10.5px}.pp-track{height:9px;background:#eef2ef;border-radius:2px;overflow:hidden}.pp-fill{height:100%;background:#42b883}.pp-metrics{display:grid;grid-template-columns:repeat(3,1fr) 150px;gap:12px;margin-bottom:9px}.pp-metric{border:1px solid #e1e7e4;border-radius:8px;padding:8px 13px}.pp-metric span{font-size:9.5px;color:#68736d}.pp-metric b{display:block;font-size:14px;margin-top:3px}.pp-detail-btn{display:grid;place-items:center;color:#078b50;border:1px solid #079957;border-radius:7px;font-size:11px}.pp-table-wrap{overflow:auto}.pp-table{min-width:1050px;font-size:10px!important}.pp-table th,.pp-table td{padding:6px 9px!important;white-space:nowrap}.pp-mini-bar{width:80px;height:7px;background:#eef2ef;border-radius:2px;overflow:hidden;margin-bottom:3px}.pp-mini-bar>div{height:100%;background:linear-gradient(90deg,#42b883,#34d399)}.pp-role-tabs{display:grid;grid-template-columns:repeat(4,1fr);gap:30px;margin:-3px auto 10px;max-width:900px}.pp-role{border-radius:8px;padding:8px 14px;text-align:center;font-size:10px}.pp-role b{display:block;font-size:11px}.pp-role.main{background:#effaf3;color:#168758}.pp-role.assist{background:#f0f6ff;color:#4a78c4}.pp-role.extra{background:#fff5ea;color:#d67a24}.pp-role.risk{background:#fff0f0;color:#d95757}.pp-pager{display:flex;justify-content:space-between;align-items:center;margin-top:8px;font-size:10px;color:#6d7771}.pp-pages{display:flex;gap:5px}.pp-pages button{border:1px solid #dce4df;background:#fff;border-radius:5px;padding:4px 9px}.pp-pages button.active{background:#079957;color:#fff}.pp-scope{font-size:9.5px;color:#7b847f}@media(max-width:1050px){.pp-market{grid-template-columns:1fr}.pp-metrics{grid-template-columns:repeat(2,1fr)}.pp-role-tabs{grid-template-columns:repeat(2,1fr)}}@media(max-width:700px){.pp-head{flex-wrap:wrap}.pp-filters{margin:0;width:100%;flex-direction:column}.pp-donut-area{height:auto;flex-direction:column}.pp-bar{grid-template-columns:110px 1fr 65px}.pp-metrics{grid-template-columns:1fr}}
+</style>
+
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar">
+    <div class="brand">
+      <h1>宠析</h1>
+      <p>宠物食品品牌增长引擎</p>
+    </div>
+    <div class="nav">
+      <button class="active" data-page="demand-inventory">01 用户需求盘点</button>
+      <button data-page="opportunity">02 增长机会洞察</button>
+      <button data-page="competitor">03 竞品增长拆解</button>
+      <button data-page="ingredients">04 产品机会地图</button>
+      <button data-page="diagnosis">05 SKU 风险预测</button>
+      <button data-page="portrait">06 全网产品画像</button>
+    </div>
+    <div class="sidebar-bottom">PROFESSIONAL WORKSPACE<br>用户反馈 · SKU · 配方 · 原料</div>
+  </aside>
+
+  <main>
+    <div class="topbar">
+      <strong id="topTitle">用户需求盘点</strong>
+      <div class="account-tools">
+        <div id="subscriptionAlert" class="subscription-alert">正在验证企业登录状态…</div>
+        <div class="user"><span id="dataUpdatedAt">数据更新：2026-08-12</span></div>
+        <div class="account-menu">
+          <button id="accountTrigger" class="account-trigger" type="button" aria-expanded="false"><span id="accountAvatar" class="avatar">CX</span><span id="accountCompany">企业用户</span>⌄</button>
+          <div id="accountDropdown" class="account-dropdown" hidden>
+            <button id="accountPurchase" type="button">开通 / 续费正式版</button>
+            <button id="accountLogout" class="logout" type="button">退出登录</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <section class="page active" id="demand-inventory">
+      <div class="hero">
+        <div>
+          <h2>用户需求盘点</h2>
+          <p>从需求地图到选择洞察，再到品牌迁移，基于 Need、Decision、Switch 三类标签全面理解用户需求与决策路径。</p>
+        </div>
+        <div class="actions"><button class="btn" id="demandRefresh">刷新数据</button></div>
+      </div>
+      <div id="demandDashboard" class="demand-dashboard">
+        <div class="empty-state">正在加载真实标签数据…</div>
+      </div>
+    </section>
+
+    <section class="page" id="opportunity">
+  <div class="hero">
+    <div>
+      <h2>增长机会洞察</h2>
+      <p>基于用户需求增长、市场承接情况与改善反馈，识别值得进入的产品机会。</p>
+    </div>
+    <div class="actions">
+      <span class="tag good">真实数据驱动</span>
+    </div>
+  </div>
+
+  <div id="growthOpportunityDashboard" class="growth-opportunity-dashboard">
+    <div class="card"><div class="empty-state">正在加载增长机会洞察…</div></div>
+  </div>
+
+  <div id="opportunityLegacy" hidden>
+
+  <div class="growth-path">
+    <div class="growth-step active"><b>01 看市场</b>哪里值得增长</div>
+    <div class="growth-step"><b>02 看用户</b>需求在怎么变</div>
+    <div class="growth-step"><b>03 看竞品</b>别人怎么赢</div>
+    <div class="growth-step"><b>04 找空位</b>市场还缺什么</div>
+    <div class="growth-step"><b>05 诊断自己</b>SKU 卡在哪里</div>
+  </div>
+
+  <div id="crossAnalysis" class="cross-analysis">
+    <div class="card"><div class="empty-state">正在加载交叉需求与病症供需数据…</div></div>
+  </div>
+
+  <div class="grid grid-4">
+    <div class="card"><div class="metric-label">高潜产品机会</div><div class="metric-value">8</div><div class="metric-sub up">较上月 +2</div></div>
+    <div class="card"><div class="metric-label">用户需求信号</div><div class="metric-value">24,680</div><div class="metric-sub up">近30日 +18.6%</div></div>
+    <div class="card"><div class="metric-label">竞品 SKU 库</div><div class="metric-value">1,286</div><div class="metric-sub">覆盖 96 个品牌</div></div>
+    <div class="card"><div class="metric-label">可分析功能需求</div><div class="metric-value">34</div><div class="metric-sub">覆盖肠胃 / 皮肤 / 泌尿 / 体重等</div></div>
+  </div>
+
+  <div class="section-title">
+    <h3>功能需求机会 TOP 4</h3>
+    <span>机会指数 = 需求规模 × 需求增速 × 产品供给缺口 × 现有解决表现</span>
+  </div>
+
+  <div class="card">
+    <table>
+      <thead><tr><th>功能需求</th><th>需求信号量</th><th>近12月趋势</th><th>产品供给</th><th>主要问题</th><th>机会指数</th><th>判断</th></tr></thead>
+      <tbody>
+        <tr><td><b>黑下巴管理</b></td><td>8,410</td><td class="up">↑ 46%</td><td>低</td><td><span class="tag risk">油脂残留</span><span class="tag risk">口周问题</span></td><td class="score">88</td><td><span class="tag hot">高潜</span></td></tr>
+        <tr><td><b>肠胃敏感</b></td><td>18,620</td><td class="up">↑ 32%</td><td>高</td><td><span class="tag">软便</span><span class="tag">呕吐</span><span class="tag">便臭</span></td><td class="score">82</td><td><span class="tag hot">需做细分</span></td></tr>
+        <tr><td><b>泌尿支持</b></td><td>5,430</td><td class="up">↑ 28%</td><td>中</td><td><span class="tag">尿闭风险</span><span class="tag">结晶</span></td><td class="score">78</td><td><span class="tag good">值得进入</span></td></tr>
+        <tr><td><b>体重管理</b></td><td>6,820</td><td class="up">↑ 21%</td><td>中</td><td><span class="tag">易胖</span><span class="tag">饱腹感</span></td><td class="score">72</td><td><span class="tag">持续观察</span></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="section-title">
+    <h3>TOP 4 需求增长趋势</h3>
+    <span>近 6 个月 · 以 3 月需求信号量 = 100，比较各需求增长速度</span>
+  </div>
+
+  <div class="card" style="padding:22px 22px 16px;">
+    <div style="display:flex;gap:20px;flex-wrap:wrap;margin-bottom:16px;font-size:11px;color:#7B8088;">
+      <span><i style="display:inline-block;width:18px;height:3px;background:#19C37D;border-radius:3px;margin-right:6px;vertical-align:middle;"></i>黑下巴管理</span>
+      <span><i style="display:inline-block;width:18px;height:3px;background:#2F6FED;border-radius:3px;margin-right:6px;vertical-align:middle;"></i>肠胃敏感</span>
+      <span><i style="display:inline-block;width:18px;height:3px;background:#F59E0B;border-radius:3px;margin-right:6px;vertical-align:middle;"></i>泌尿支持</span>
+      <span><i style="display:inline-block;width:18px;height:3px;background:#8B5CF6;border-radius:3px;margin-right:6px;vertical-align:middle;"></i>体重管理</span>
+    </div>
+    <svg viewBox="0 0 1100 320" preserveAspectRatio="none" style="width:100%;height:310px;">
+      <g stroke="#EFF1F3" stroke-width="1">
+        <line x1="55" y1="45" x2="1070" y2="45"/><line x1="55" y1="105" x2="1070" y2="105"/><line x1="55" y1="165" x2="1070" y2="165"/><line x1="55" y1="225" x2="1070" y2="225"/><line x1="55" y1="285" x2="1070" y2="285"/>
+      </g>
+      <g fill="#A7ABB2" font-size="11">
+        <text x="15" y="289">100</text><text x="15" y="229">115</text><text x="15" y="169">130</text><text x="15" y="109">145</text><text x="15" y="49">160</text>
+        <text x="64" y="312">3月</text><text x="255" y="312">4月</text><text x="450" y="312">5月</text><text x="645" y="312">6月</text><text x="840" y="312">7月</text><text x="1025" y="312">8月</text>
+      </g>
+      <polyline fill="none" stroke="#19C37D" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" points="75,285 270,253 465,209 660,165 855,129 1040,101"/>
+      <polyline fill="none" stroke="#2F6FED" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" points="75,285 270,265 465,241 660,209 855,181 1040,157"/>
+      <polyline fill="none" stroke="#F59E0B" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" points="75,285 270,273 465,253 660,225 855,201 1040,181"/>
+      <polyline fill="none" stroke="#8B5CF6" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" points="75,285 270,277 465,261 660,241 855,221 1040,205"/>
+    </svg>
+    <div class="insight"><b>趋势解读：</b>黑下巴管理的需求增长速度最快；肠胃敏感虽然需求规模最大，但增长速度相对较缓，说明更适合从“软便、便臭、换粮敏感”等细分问题寻找新增量。</div>
+  </div>
+
+  <div class="section-title">
+    <h3>未满足需求 TOP 4</h3>
+    <span>从“原始主需求 → 高频伴随问题 → 未解决问题”识别下一层新需求</span>
+  </div>
+
+  <div class="card">
+    <table>
+      <thead><tr><th>原始主需求</th><th>高频伴随问题</th><th>问题共现率</th><th>当前解决情况</th><th>新需求机会</th></tr></thead>
+      <tbody>
+        <tr><td><b>肠胃敏感 / 软便</b></td><td><span class="tag">便臭</span></td><td><b>24.3%</b></td><td><span class="tag hot">仍高频存在</span></td><td><b>软便 + 便臭联合管理</b></td></tr>
+        <tr><td><b>肠胃敏感 / 软便</b></td><td><span class="tag risk">黑下巴</span><span class="tag risk">油腻</span></td><td><b>18.7%</b></td><td><span class="tag hot">部分用户仍反馈</span></td><td><b>肠胃 + 低油脂体验管理</b></td></tr>
+        <tr><td><b>体重管理 / 易胖</b></td><td><span class="tag">饥饿感强</span><span class="tag">总想吃</span></td><td><b>21.6%</b></td><td><span class="tag hot">低脂 ≠ 饱腹</span></td><td><b>易胖猫饱腹管理</b></td></tr>
+        <tr><td><b>食物敏感 / 过敏</b></td><td><span class="tag">多肉源适配困难</span></td><td><b>16.9%</b></td><td><span class="tag hot">规避难度高</span></td><td><b>敏感猫单一肉源方案</b></td></tr>
+      </tbody>
+    </table>
+    <div class="insight"><b>业务含义：</b>这里不直接判断“现有功能粮导致了其他问题”，而是识别：用户为了 A 需求购买相关产品后，B 问题仍然高频存在或没有被充分解决。A + B 的组合，就可能形成下一层值得验证的新需求机会。</div>
+  </div>
+  </div>
+</section>
+
+    <section class="page" id="symptoms">
+      <div id="legacyExperienceInsightDashboard" class="experience-insight-dashboard">
+        <div class="card"><div class="empty-state">正在加载 Experience 用户洞察…</div></div>
+      </div>
+      <div hidden>
+      <div class="hero">
+        <div><h2>用户需求洞察</h2><p>回答“消费者最近为什么买粮、哪些问题正在变得更重要、增长来自哪类猫和哪种需求”，用于定义目标人群和新品切口。</p></div>
+        <div class="filters"><span class="tag good">远程病症线索</span><span class="tag">本地标准产品与配方</span></div>
+      </div>
+
+<div class="growth-path">
+  <div class="growth-step"><b>01 看市场</b>哪里值得增长</div>
+  <div class="growth-step active"><b>02 看用户</b>需求在怎么变</div>
+  <div class="growth-step"><b>03 看竞品</b>别人怎么赢</div>
+  <div class="growth-step"><b>04 找空位</b>市场还缺什么</div>
+  <div class="growth-step"><b>05 诊断自己</b>SKU 卡在哪里</div>
+</div>
+
+      <div id="diseaseRepresentativeDashboard" class="disease-representative">
+        <div class="card"><div class="empty-state">正在加载病症代表产品与原料…</div></div>
+      </div>
+
+      <div id="symptomLegacy" hidden>
+
+      <div class="grid grid-4">
+        <div class="card"><div class="metric-label">需求规模</div><div class="metric-value">6,382</div><div class="metric-sub up">同比 +29.1%</div></div>
+        <div class="card"><div class="metric-label">改善率</div><div class="metric-value">44.8%</div><div class="metric-sub up">同比 +6.4pct</div></div>
+        <div class="card"><div class="metric-label">加重率</div><div class="metric-value">21.6%</div><div class="metric-sub up">同比 -4.7pct</div></div>
+        <div class="card"><div class="metric-label">竞争 SKU</div><div class="metric-value">416</div><div class="metric-sub">肠胃型产品占 61%</div></div>
+      </div>
+      <div class="section-title"><h3>需求增长走势</h3><span>反馈量与改善率</span></div>
+      <div class="card">
+        <div class="linechart">
+          <svg viewBox="0 0 1000 230" preserveAspectRatio="none">
+            <polyline fill="none" stroke="#172033" stroke-width="4" points="0,178 110,168 220,151 330,160 440,130 550,112 660,118 770,86 880,68 1000,38"/>
+            <polyline fill="none" stroke="#94a3b8" stroke-width="3" stroke-dasharray="8 7" points="0,190 110,182 220,176 330,165 440,158 550,149 660,140 770,130 880,119 1000,101"/>
+          </svg>
+        </div>
+        <div class="insight">增长解读：软便仍是肠胃赛道的核心需求，但单纯“肠胃敏感”已经拥挤。更值得关注的是软便与便臭、换粮敏感等共现问题，这些可进一步转成细分人群和产品卖点。</div>
+      </div>
+
+      <div class="grid grid-3">
+        <div><div class="section-title"><h3>高关联产品方案</h3><span>出现频率</span></div><div class="card">
+          <div class="rank"><div class="rank-no">1</div><div class="rank-main"><b>菊苣根 / 菊粉</b><span>益生元体系</span></div><div class="rank-val">62%</div></div>
+          <div class="rank"><div class="rank-no">2</div><div class="rank-main"><b>酵母</b><span>肠道支持</span></div><div class="rank-val">51%</div></div>
+          <div class="rank"><div class="rank-no">3</div><div class="rank-main"><b>车前子</b><span>可溶性纤维</span></div><div class="rank-val">38%</div></div>
+          <div class="rank"><div class="rank-no">4</div><div class="rank-main"><b>南瓜</b><span>膳食纤维</span></div><div class="rank-val">34%</div></div>
+        </div></div>
+        <div><div class="section-title"><h3>需求承接较好的产品</h3><span>样例</span></div><div class="card">
+          <div class="rank"><div class="rank-no">1</div><div class="rank-main"><b>品牌A · 肠胃配方</b><span>n=384</span></div><div class="rank-val up">改善 62%</div></div>
+          <div class="rank"><div class="rank-no">2</div><div class="rank-main"><b>品牌B · 鲜肉烘焙</b><span>n=296</span></div><div class="rank-val up">改善 57%</div></div>
+          <div class="rank"><div class="rank-no">3</div><div class="rank-main"><b>品牌C · 单一肉源</b><span>n=211</span></div><div class="rank-val up">改善 52%</div></div>
+        </div></div>
+        <div><div class="section-title"><h3>高共现需求</h3><span>共现比例</span></div><div class="card">
+          <div class="rank"><div class="rank-no">1</div><div class="rank-main"><b>呕吐</b><span>同一用户案例共现</span></div><div class="rank-val">29%</div></div>
+          <div class="rank"><div class="rank-no">2</div><div class="rank-main"><b>便臭</b><span>同一用户案例共现</span></div><div class="rank-val">24%</div></div>
+          <div class="rank"><div class="rank-no">3</div><div class="rank-main"><b>食欲下降</b><span>同一用户案例共现</span></div><div class="rank-val">13%</div></div>
+        </div></div>
+      </div>
+      </div>
+      </div>
+    </section>
+
+
+
+<section class="page" id="competitor">
+  <div id="competitorBreakdownApp"><div class="card"><div class="empty-state">正在加载竞品增长拆解…</div></div></div>
+  <div hidden>
+  <div class="hero">
+    <div>
+      <h2>竞品增长拆解</h2>
+      <p>围绕一个具体病症 / 功能需求，先选出表现较好的典型 SKU 形成竞品池，再用用户反馈与配方数据解释：这些 SKU 为什么表现好、适合谁、又容易在哪类用户身上出问题。</p>
+    </div>
+    <button class="btn primary">+ 新建竞品池</button>
+  </div>
+
+  <div class="growth-path">
+    <div class="growth-step"><b>01 看市场</b>哪里值得增长</div>
+    <div class="growth-step"><b>02 看用户</b>需求在怎么变</div>
+    <div class="growth-step active"><b>03 看竞品</b>别人怎么赢</div>
+    <div class="growth-step"><b>04 找空位</b>市场还缺什么</div>
+    <div class="growth-step"><b>05 诊断自己</b>SKU 卡在哪里</div>
+  </div>
+
+  <!-- 病症与竞品池 -->
+  <div class="section-title">
+    <h3>01 选择病症与典型竞品</h3>
+    <span>从“用户需求洞察”中的需求标杆 SKU 自动带入，也可手动补充</span>
+  </div>
+
+  <div class="card">
+    <div style="display:flex;justify-content:space-between;gap:18px;align-items:flex-end;flex-wrap:wrap;">
+      <div class="filters">
+        <div>
+          <div class="metric-label">当前研究病症 / 需求</div>
+          <select style="min-width:220px;">
+            <option>软便 / 拉稀</option>
+            <option>呕吐</option>
+            <option>黑下巴</option>
+            <option>便秘</option>
+            <option>便臭</option>
+            <option>泌尿问题</option>
+            <option>体重管理</option>
+          </select>
+        </div>
+        <div>
+          <div class="metric-label">产品类型</div>
+          <select style="min-width:180px;"><option>肠胃功能粮</option><option>全部相关产品</option></select>
+        </div>
+        <div>
+          <div class="metric-label">时间范围</div>
+          <select><option>近12个月</option><option>近6个月</option></select>
+        </div>
+      </div>
+      <button class="btn">重新推荐典型 SKU</button>
+    </div>
+
+    <div style="margin-top:20px;">
+      <div class="metric-label">当前竞品池 · 按“软便改善表现 + 有效反馈量”筛选</div>
+      <div class="grid grid-4">
+        <div class="product-chip mine">
+          <b>品牌A · SKU-01</b>
+          <small>软便改善 62% · n=384</small>
+          <div style="margin-top:8px;"><span class="tag good">标杆 SKU</span></div>
+        </div>
+        <div class="product-chip">
+          <b>品牌B · SKU-17</b>
+          <small>软便改善 57% · n=296</small>
+          <div style="margin-top:8px;"><span class="tag good">表现较好</span></div>
+        </div>
+        <div class="product-chip">
+          <b>品牌C · SKU-05</b>
+          <small>软便改善 52% · n=211</small>
+          <div style="margin-top:8px;"><span class="tag">对照 SKU</span></div>
+        </div>
+        <div class="product-chip" style="display:grid;place-items:center;min-height:92px;color:#7B8088;cursor:pointer;">
+          + 添加竞品
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 证据层 -->
+  <div class="section-title">
+    <h3>02 证据层：为什么这些 SKU 表现好</h3>
+    <span>不直接把“原料”当成因果，而是用人群、用户感知和结果表现形成证据链</span>
+  </div>
+
+  <div class="grid grid-3">
+    <div class="card question-card">
+      <div class="q">人群匹配</div>
+      <div class="a">肠胃敏感 / 换粮易软便猫更集中</div>
+      <div class="metric-sub">在高表现 SKU 的正向反馈中，肠胃敏感、换粮敏感相关用户占比更高。</div>
+      <div style="margin-top:14px;">
+        <div class="dna"><label>核心人群</label><div>换粮易软便猫</div></div>
+        <div class="dna"><label>次级人群</label><div>肠胃敏感 / 玻璃胃</div></div>
+      </div>
+    </div>
+
+    <div class="card question-card">
+      <div class="q">用户感知</div>
+      <div class="a">“便便稳定 / 成形”比“添加益生元”更突出</div>
+      <div class="metric-sub">用户真正记住的是使用结果，而不是单一原料名称。</div>
+      <div style="margin-top:14px;">
+        <div class="dna"><label>高频正向词</label><div><span class="tag good">便便成形</span><span class="tag good">软便减少</span></div></div>
+        <div class="dna"><label>典型表达</label><div>“换粮之后稳定很多”</div></div>
+      </div>
+    </div>
+
+    <div class="card question-card">
+      <div class="q">结果证据</div>
+      <div class="a">软便改善表现持续高于同类</div>
+      <div class="metric-sub">用真实反馈验证“用户感知”是否具有稳定性。</div>
+      <div style="margin-top:14px;">
+        <div class="dna"><label>品牌A</label><div><b class="up">62%</b> · 同类 +8.4pct</div></div>
+        <div class="dna"><label>品牌B</label><div><b class="up">57%</b> · 同类 +3.6pct</div></div>
+        <div class="dna"><label>赛道均值</label><div>53.6%</div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 因子拆解 -->
+  <div class="section-title">
+    <h3>03 标杆 SKU 因子拆解</h3>
+    <span>找“高表现 SKU 的共性”，作为做同类产品时值得参考的基础能力</span>
+  </div>
+
+  <div class="card">
+    <table>
+      <thead>
+        <tr>
+          <th>增长因子</th>
+          <th>品牌A · SKU-01</th>
+          <th>品牌B · SKU-17</th>
+          <th>品牌C · SKU-05</th>
+          <th>标杆共性判断</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><b>目标人群</b></td>
+          <td>换粮敏感猫</td>
+          <td>肠胃敏感猫</td>
+          <td>玻璃胃 / 幼猫</td>
+          <td><span class="tag good">人群定位较聚焦</span></td>
+        </tr>
+        <tr>
+          <td><b>动物蛋白结构</b></td>
+          <td>鸡 + 鱼</td>
+          <td>鸡肉为主</td>
+          <td>鸭 + 鱼</td>
+          <td>复杂度相对受控</td>
+        </tr>
+        <tr>
+          <td><b>纤维支持</b></td>
+          <td>车前子 + 菊苣根</td>
+          <td>南瓜 + 酵母</td>
+          <td>菊苣根 + 甜菜粕</td>
+          <td><span class="tag good">均有纤维支持体系</span></td>
+        </tr>
+        <tr>
+          <td><b>益生元 / 肠道支持</b></td>
+          <td>有</td>
+          <td>有</td>
+          <td>有</td>
+          <td><span class="tag good">高频共性</span></td>
+        </tr>
+        <tr>
+          <td><b>用户结果感知</b></td>
+          <td>便便成形</td>
+          <td>软便改善</td>
+          <td>换粮稳定</td>
+          <td><span class="tag good">结果型感知明显</span></td>
+        </tr>
+        <tr>
+          <td><b>主要负向问题</b></td>
+          <td>黑下巴 / 油</td>
+          <td>呕吐</td>
+          <td>适口性波动</td>
+          <td><span class="tag hot">仍存在未解决问题</span></td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="insight">
+      <b>标杆共性：</b>表现较好的 SKU 并不是简单因为“用了某一种原料”，而是呈现出“人群定位更聚焦 + 肠道支持体系较完整 + 用户能明确感知到结果”的共同特征。这里适合用于提炼“同类新品应该具备的基础能力”。
+    </div>
+  </div>
+
+  <!-- 人群场景 -->
+  <div class="grid grid-2">
+    <div>
+      <div class="section-title">
+        <h3>04 典型人群使用场景</h3>
+        <span>哪些用户更容易出现正向体验</span>
+      </div>
+      <div class="card">
+        <div class="rank">
+          <div class="rank-no">1</div>
+          <div class="rank-main"><b>换粮后容易软便的敏感猫</b><span>从其他粮切换后，希望排便更稳定</span></div>
+          <div class="rank-val"><span class="tag good">高匹配</span></div>
+        </div>
+        <div class="rank">
+          <div class="rank-no">2</div>
+          <div class="rank-main"><b>长期便便偏软、但食欲正常</b><span>核心诉求集中在便便成形与稳定</span></div>
+          <div class="rank-val"><span class="tag good">较匹配</span></div>
+        </div>
+        <div class="rank">
+          <div class="rank-no">3</div>
+          <div class="rank-main"><b>对复杂配方适应一般的猫</b><span>用户倾向于更简单、可预期的肠胃方案</span></div>
+          <div class="rank-val"><span class="tag">可关注</span></div>
+        </div>
+        <div class="insight"><b>典型场景：</b>这类标杆 SKU 的正向反馈更集中在“软便稳定”和“换粮适应”场景，而不是所有肠胃问题都同样突出。</div>
+      </div>
+    </div>
+
+    <div>
+      <div class="section-title">
+        <h3>05 避雷人群使用场景</h3>
+        <span>哪些用户更容易出现负向体验</span>
+      </div>
+      <div class="card">
+        <div class="rank">
+          <div class="rank-no">1</div>
+          <div class="rank-main"><b>易黑下巴 / 油脂敏感猫</b><span>部分 SKU 中油腻与黑下巴负反馈更集中</span></div>
+          <div class="rank-val"><span class="tag risk">高风险</span></div>
+        </div>
+        <div class="rank">
+          <div class="rank-no">2</div>
+          <div class="rank-main"><b>换粮期容易呕吐的猫</b><span>软便可能改善，但呕吐体验未必同步改善</span></div>
+          <div class="rank-val"><span class="tag hot">需观察</span></div>
+        </div>
+        <div class="rank">
+          <div class="rank-no">3</div>
+          <div class="rank-main"><b>极度挑食 / 适口性敏感猫</b><span>部分对照 SKU 存在拒食和适口性波动</span></div>
+          <div class="rank-val"><span class="tag hot">需观察</span></div>
+        </div>
+        <div class="insight"><b>避雷价值：</b>这里不是给产品贴“好 / 坏”标签，而是帮助品牌理解同一款产品在不同人群上的适配边界，为下一页“产品机会地图”寻找差异化空间。</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 承接下一页 -->
+  <div class="section-title">
+    <h3>下一步：从标杆共性走向差异化</h3>
+    <span>竞品页只回答“什么值得借鉴”，差异化机会在下一页继续完成</span>
+  </div>
+  <div class="card" style="display:flex;justify-content:space-between;align-items:center;gap:20px;flex-wrap:wrap;">
+    <div>
+      <div class="metric-label">已识别的可借鉴基础能力</div>
+      <div style="margin-top:7px;">
+        <span class="tag good">聚焦肠胃敏感 / 换粮敏感人群</span>
+        <span class="tag good">纤维支持体系</span>
+        <span class="tag good">益生元 / 肠道支持</span>
+        <span class="tag good">结果型用户感知</span>
+      </div>
+      <div class="metric-sub" style="margin-top:10px;">下一步结合“便臭、黑下巴 / 油脂、换粮期呕吐”等仍未解决的问题，寻找产品差异化方向。</div>
+    </div>
+    <button class="btn primary" onclick="document.querySelector('[data-page=ingredients]').click()">进入产品机会地图 →</button>
+  </div>
+  </div>
+</section>
+
+
+
+
+<section class="page" id="ingredients">
+  <div class="section-title"><h3>用户需求洞察</h3><span>Experience 主需求 × 未满足痛点 × 用户场景 × 机会定义</span></div>
+  <div id="experienceInsightDashboard" class="experience-insight-dashboard">
+    <div class="card"><div class="empty-state">正在加载 Experience 用户洞察…</div></div>
+  </div>
+</section>
+
+
+
+<section class="page" id="diagnosis">
+  <div id="skuRiskDashboard"><div class="card"><div class="empty-state">正在加载 SKU 相似产品风险汇总…</div></div></div>
+  <div hidden>
+  <div class="hero">
+    <div>
+      <h2>SKU 增长诊断</h2>
+      <p>回答一个问题：<b>“我这个 SKU 为什么增长得动 / 为什么增长不动？”</b> 它不负责找整个市场的新机会，而是对一个已经存在的产品做体检，定位当前最大的增长瓶颈和最值得放大的增长杠杆。</p>
+    </div>
+    <div class="filters"><input class="search" value="蓝氏 · 某肠胃配方猫粮"><button class="btn primary">开始诊断</button></div>
+  </div>
+
+<div class="growth-path">
+  <div class="growth-step"><b>01 看市场</b>哪里值得增长</div>
+  <div class="growth-step"><b>02 看用户</b>需求在怎么变</div>
+  <div class="growth-step"><b>03 看竞品</b>别人怎么赢</div>
+  <div class="growth-step"><b>04 找空位</b>市场还缺什么</div>
+  <div class="growth-step active"><b>05 诊断自己</b>SKU 卡在哪里</div>
+</div>
+
+  <div class="decision-banner">
+    <div><small>宠析诊断结论</small><strong>不是“赛道没需求”，而是“产品差异不足 + 黑下巴负反馈”正在限制这个 SKU 的增长。</strong><p>增长机会仍然存在，因此优先级不是换赛道，而是收窄人群、放大已有正向证据并修复负向体验。</p></div>
+    <button class="btn">生成诊断报告</button>
+  </div>
+
+  <div class="grid grid-4">
+    <div class="card"><div class="metric-label">市场机会</div><div class="metric-value">82</div><div class="metric-sub good">需求仍充足</div></div>
+    <div class="card"><div class="metric-label">人群匹配</div><div class="metric-value">77</div><div class="metric-sub">当前定位略宽</div></div>
+    <div class="card"><div class="metric-label">产品差异</div><div class="metric-value">61</div><div class="metric-sub down">主要增长瓶颈</div></div>
+    <div class="card"><div class="metric-label">口碑 / 复购</div><div class="metric-value">69</div><div class="metric-sub down">黑下巴反馈拖累</div></div>
+  </div>
+
+  <div class="section-title"><h3>增长瓶颈定位</h3><span>市场 → 人群 → 选择理由 → 使用体验 → 复购</span></div>
+  <div class="card">
+    <table>
+      <thead><tr><th>增长环节</th><th>要回答的问题</th><th>当前判断</th><th>证据</th><th>优先级</th></tr></thead>
+      <tbody>
+        <tr><td><b>市场</b></td><td>这个需求还有没有增长空间？</td><td><span class="tag good">有</span></td><td>肠胃相关需求近12月 +32%</td><td>保持</td></tr>
+        <tr><td><b>人群</b></td><td>产品到底最适合谁？</td><td><span class="tag hot">偏宽</span></td><td>换粮敏感 / 软便猫反馈更集中</td><td>中</td></tr>
+        <tr><td><b>差异</b></td><td>用户为什么选你而不是别人？</td><td><span class="tag risk">不足</span></td><td>“鲜肉+益生元+肠胃”与竞品高度重合</td><td><b>高</b></td></tr>
+        <tr><td><b>体验</b></td><td>有没有问题阻止口碑扩散？</td><td><span class="tag risk">有</span></td><td>黑下巴加重反馈 31%</td><td><b>高</b></td></tr>
+        <tr><td><b>复购</b></td><td>已有优势能否支持长期留存？</td><td><span class="tag good">可提升</span></td><td>软便改善反馈优于同类</td><td>中</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="grid grid-2">
+    <div>
+      <div class="section-title"><h3>值得放大的增长杠杆</h3></div>
+      <div class="card">
+        <div class="idea-card"><h4>软便改善，是当前最强产品证据</h4><p>相关正向反馈高于同价格带平均水平。与其继续强调“添加益生元”，更适合把结果转成“便便更稳定 / 换粮更友好”的用户语言。</p><span class="tag good">可直接转卖点</span></div>
+      </div>
+    </div>
+    <div>
+      <div class="section-title"><h3>最需要修复的增长阻力</h3></div>
+      <div class="card">
+        <div class="idea-card"><h4>黑下巴正在拖累口碑与复购</h4><p>建议把负向案例按油脂水平、工艺、猫咪体质和使用周期拆分，判断问题集中在哪类用户和哪个产品环节。</p><span class="tag risk">优先验证</span></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="section-title"><h3>下一步增长动作</h3><span>只给 3 个优先动作，避免报告停留在分析层</span></div>
+  <div class="grid grid-3">
+    <div class="card"><div class="metric-label">动作 01｜重新定义人群</div><b>从“泛肠胃猫”收窄到“换粮敏感 / 软便高频猫”</b><div class="metric-sub">让产品与用户场景更匹配。</div></div>
+    <div class="card"><div class="metric-label">动作 02｜重做核心卖点</div><b>从“益生元”改成“软便改善 / 便便稳定”</b><div class="metric-sub">把原料语言转成用户结果。</div></div>
+    <div class="card"><div class="metric-label">动作 03｜修复负向体验</div><b>专项排查黑下巴与油脂 / 工艺关联</b><div class="metric-sub">降低口碑阻力，提高复购空间。</div></div>
+  </div>
+  </div>
+</section>
+
+
+<section class="page" id="portrait">
+  <div id="productPortraitDashboard"><div class="card"><div class="empty-state">正在加载全网产品画像…</div></div></div>
+</section>
+
+
+
+
+  </main>
+</div>
+
+<script>
+  const enterpriseSession = {
+    getCompany() { try { return JSON.parse(localStorage.getItem('cx_company') || 'null'); } catch (_) { return null; } },
+    getCompanyId() { return localStorage.getItem('cx_company_id') || this.getCompany()?.id || null; },
+    saveCompany(company) { localStorage.setItem('cx_company', JSON.stringify(company)); if (company?.id) localStorage.setItem('cx_company_id', company.id); },
+    clear() { localStorage.removeItem('cx_company'); localStorage.removeItem('cx_company_id'); localStorage.removeItem('cx_pending_order'); }
+  };
+  const portalUrl = (page) => `/enterprise-portal.html#${page}`;
+  const openPurchasePage = () => {
+    const companyId = enterpriseSession.getCompanyId();
+    const params = companyId ? `?company_id=${encodeURIComponent(companyId)}` : '';
+    window.open(`/enterprise-portal.html${params}#purchase`, '_blank', 'noopener');
+  };
+  const redirectToPortal = (page = 'login') => window.location.replace(portalUrl(page));
+  const cachedCompany = enterpriseSession.getCompany();
+  if (!enterpriseSession.getCompanyId() || !cachedCompany) redirectToPortal('login');
+
+  const accountTrigger = document.getElementById('accountTrigger');
+  const accountDropdown = document.getElementById('accountDropdown');
+  accountTrigger?.addEventListener('click', () => {
+    accountDropdown.hidden = !accountDropdown.hidden;
+    accountTrigger.setAttribute('aria-expanded', String(!accountDropdown.hidden));
+  });
+  document.addEventListener('click', (event) => {
+    if (!event.target.closest('.account-menu') && accountDropdown) accountDropdown.hidden = true;
+  });
+  document.getElementById('accountPurchase')?.addEventListener('click', openPurchasePage);
+  document.getElementById('accountLogout')?.addEventListener('click', () => {
+    enterpriseSession.clear();
+    redirectToPortal('login');
+  });
+
+  function renderEnterpriseAccount(company, remainingDays) {
+    const status = company.account_status || company.status;
+    const name = company.company_name || company.name || '企业用户';
+    document.getElementById('accountCompany').textContent = name;
+    document.getElementById('accountAvatar').textContent = name.slice(0, 1);
+    const alert = document.getElementById('subscriptionAlert');
+    const parsedDays = Number(remainingDays);
+    const showCountdown = Number.isFinite(parsedDays) && parsedDays < 7;
+    const countdown = showCountdown ? `｜剩余 ${parsedDays} 天` : '';
+    if (status === 'trial_active') {
+      alert.className = `subscription-alert${showCountdown ? ' danger' : ''}`;
+      alert.textContent = `⚠ 企业体验版${countdown}`;
+    } else {
+      alert.className = 'subscription-alert paid';
+      alert.textContent = `✓ 企业正式版${countdown}`;
+    }
+  }
+
+  async function verifyEnterpriseAccess() {
+    const companyId = enterpriseSession.getCompanyId();
+    if (!companyId) return redirectToPortal('login');
+    try {
+      const response = await fetch(`/api/account/subscription-status?company_id=${encodeURIComponent(companyId)}`, { cache: 'no-store' });
+      const data = await response.json();
+      if (!response.ok || !data.ok) throw new Error(data.message || '登录状态验证失败');
+      const company = data.company || {};
+      enterpriseSession.saveCompany(company);
+      if (!data.can_access) {
+        const status = company.account_status || company.status;
+        return redirectToPortal(status === 'trial_pending' ? 'product' : status === 'disabled' ? 'login' : 'expired');
+      }
+      renderEnterpriseAccount(company, data.remaining_days);
+    } catch (_) {
+      enterpriseSession.clear();
+      redirectToPortal('login');
+    }
+  }
+  verifyEnterpriseAccess();
+
+  const titles = {
+    'demand-inventory':'用户需求盘点',
+    opportunity:'增长机会洞察',
+    symptoms:'用户需求洞察',
+    competitor:'竞品增长拆解',
+    ingredients:'产品机会地图',
+    diagnosis:'SKU 风险预测',
+    portrait:'全网产品画像'
+  };
+  document.querySelectorAll('.nav button').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.nav button').forEach(x => x.classList.remove('active'));
+      document.querySelectorAll('.page').forEach(x => x.classList.remove('active'));
+      btn.classList.add('active');
+      const p = btn.dataset.page;
+      document.getElementById(p).classList.add('active');
+      document.getElementById('topTitle').textContent = titles[p];
+      window.scrollTo({top:0, behavior:'smooth'});
+    });
+  });
+
+  const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, char => ({
+    '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+  })[char]);
+  const formatNumber = value => Number(value || 0).toLocaleString('zh-CN');
+  const renderBars = (items, color = 'var(--cx-green)') => {
+    if (!items?.length) return '<div class="empty-state">暂无数据</div>';
+    const max = Math.max(...items.map(item => item.count), 1);
+    return `<div class="dashboard-bars">${items.map(item => `
+      <div class="dashboard-bar">
+        <b>${escapeHtml(item.name)}</b>
+        <div class="dashboard-track"><div class="dashboard-fill" style="width:${item.count * 100 / max}%;background:${color}"></div></div>
+        <span>${formatNumber(item.count)} · ${item.share}%</span>
+      </div>`).join('')}</div>`;
+  };
+  const renderMatrix = (title, columns, rows) => {
+    if (!rows?.length) return `<div class="matrix-card"><h4>${title}</h4><div class="empty-state">暂无数据</div></div>`;
+    const max = Math.max(...rows.flatMap(row => row.values), 1);
+    const heat = value => value / max > .55 ? 'heat-high' : value / max > .2 ? 'heat-mid' : 'heat-low';
+    return `<div class="matrix-card"><h4>${title}</h4><table><thead><tr><th></th>${columns.map(x => `<th>${escapeHtml(x)}</th>`).join('')}</tr></thead>
+      <tbody>${rows.map(row => `<tr><td><b>${escapeHtml(row.name)}</b></td>${row.values.map(value => `<td class="${heat(value)}" title="${formatNumber(value)} 条">${value / max > .55 ? '高' : value / max > .2 ? '中' : '低'}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`;
+  };
+
+  const palette = ['#0da35a','#2376e5','#f59a23','#8351d5','#e75252','#738091'];
+  const renderBubbleChart = (items, label = '健康问题') => {
+    if (!items?.length) return '<div class="empty-state">暂无需求数据</div>';
+    const shown = items.slice(0, 8), counts=shown.map(x=>x.count), min=Math.min(...counts), max=Math.max(...counts), logMin=Math.log1p(min), logRange=Math.max(Math.log1p(max)-logMin,.01);
+    const growths=shown.map(x=>x.growth), validGrowth=growths.filter(x=>x!=null), hasGrowth=validGrowth.length>0, minG=hasGrowth?Math.min(...validGrowth):0, maxG=hasGrowth?Math.max(...validGrowth):0, rangeG=Math.max(maxG-minG,1);
+    const fmtGrowth=v=>v==null?'新增':(v>=0?'+'+v+'%':v+'%');
+    const placed=[];
+    const points=shown.map((item,i)=>{let x=10+(Math.log1p(item.count)-logMin)/logRange*80;let y=item.growth==null?88:12+((item.growth-minG)/rangeG)*76;const size=44+Math.sqrt(item.count/max)*30;for(let n=0;n<12;n++){const hit=placed.some(p=>Math.hypot(x-p.x,y-p.y)<11);if(!hit)break;y=Math.min(88,Math.max(12,y+(n%2?1:-1)*(7+Math.floor(n/2)*3)));}placed.push({x,y});return {...item,x,y,size,index:i};});
+    return `<div class="bubble-chart"><span class="bubble-axis y">近12个月同比</span><span class="bubble-axis x">需求规模（对数刻度）</span>
+      <span class="bubble-tick x" style="left:10%">${formatNumber(min)}</span><span class="bubble-tick x" style="left:90%">${formatNumber(max)}</span><span class="bubble-tick y" style="bottom:12%">${hasGrowth?fmtGrowth(minG):'—'}</span><span class="bubble-tick y" style="bottom:88%">${hasGrowth?fmtGrowth(maxG):'—'}</span>
+      ${points.map(item=>`<button class="need-bubble" data-bubble-index="${item.index}" style="left:${item.x}%;bottom:${item.y}%;width:${item.size}px;height:${item.size}px" title="点击查看 ${escapeHtml(item.name)} 详情"><b>${escapeHtml(item.name)}</b><span>${formatNumber(item.count)}</span><span>${fmtGrowth(item.growth)}</span></button>`).join('')}</div><div class="bubble-detail" id="bubbleDetail"><b>${escapeHtml(label)}</b>：横轴为需求规模（采用对数刻度避免头部标签挤压其他气泡），纵轴为近12个月同比增长率（对比上12个月同期数据）。点击气泡查看详情。</div>`;
+  };
+  const factorRows = items => `<div>${items.slice(0,4).map((x,i)=>`<div class="factor-row"><b style="color:${palette[i]}"><i class="factor-icon">${i+1}</i>${escapeHtml(x.name)}</b><div class="factor-track"><div class="factor-fill" style="width:${x.share}%;background:${palette[i]}"></div></div><span>${x.share}%</span></div>`).join('')}</div>`;
+  const renderSankey = data => {
+    const left=data.decisions.factors.slice(0,4), right=data.decisions.results.slice(0,4), flows=data.decisions.flows||[];
+    const lx=112, rx=394, h=275, leftY=i=>(i+.5)*h/left.length, rightY=i=>(i+.5)*h/right.length;
+    const max=Math.max(...flows.map(x=>x.count),1);
+    const paths=[]; left.forEach((a,i)=>right.forEach((b,j)=>{const f=flows.find(x=>x.from===a.name&&x.to===b.name);if(f)paths.push(`<path class="flow-path" d="M ${lx} ${leftY(i)} C 230 ${leftY(i)},275 ${rightY(j)},${rx} ${rightY(j)}" stroke="${palette[i]}" stroke-width="${Math.max(2,18*f.count/max)}"><title>${escapeHtml(a.name)} → ${escapeHtml(b.name)}：${formatNumber(f.count)}</title></path>`)}));
+    return `<div class="sankey"><svg viewBox="0 0 500 ${h}" preserveAspectRatio="none">${paths.join('')}</svg><div class="sankey-col left">${left.map((x,i)=>`<div class="sankey-node" style="color:${palette[i]}">${escapeHtml(x.name)}<small>${x.share}%</small></div>`).join('')}</div><div class="sankey-col right">${right.map((x,i)=>`<div class="sankey-node" style="color:${palette[(i+1)%palette.length]}">${escapeHtml(x.name)}<small>${x.share}%</small></div>`).join('')}</div></div>`;
+  };
+  const renderMigration = data => {
+    const paths=data.switches.paths.slice(0,8), max=Math.max(...paths.map(x=>x.count),1);
+    const pathReasons=data.switches.path_reasons||[];
+    const fromBrands=[...new Set(paths.map(x=>x.from))];
+    const toBrands=[...new Set(paths.map(x=>x.to))];
+    const H=275,pad=25;
+    const lg=fromBrands.length>1?(H-2*pad)/(fromBrands.length-1):0;
+    const rg=toBrands.length>1?(H-2*pad)/(toBrands.length-1):0;
+    const fromY=Object.fromEntries(fromBrands.map((b,i)=>[b,pad+i*lg]));
+    const toY=Object.fromEntries(toBrands.map((b,i)=>[b,pad+i*rg]));
+    return `<div class="migration-grid">
+      <div class="migration-flow"><svg viewBox="0 0 500 ${H}" preserveAspectRatio="none">${paths.map((p,i)=>{const y1=fromY[p.from],y2=toY[p.to];return `<path class="flow-path" d="M 25 ${y1} C 155 ${y1},345 ${y2},475 ${y2}" stroke="${palette[i%palette.length]}" stroke-width="${3+10*p.count/max}"><title>${escapeHtml(p.from)} → ${escapeHtml(p.to)}：${formatNumber(p.count)}</title></path>`}).join('')}</svg><div class="migration-center"><b>品牌迁移</b><br><span>${formatNumber(data.switches.complete_paths)} 条完整路径</span></div>${fromBrands.map(b=>`<span class="migration-brand" style="left:3px;top:${fromY[b]-10}px">${escapeHtml(b)}</span>`).join('')}${toBrands.map(b=>`<span class="migration-brand" style="right:3px;top:${toY[b]-10}px">${escapeHtml(b)}</span>`).join('')}</div>
+      <div class="migration-table"><h4>换粮原因 × 品牌路径</h4>${pathReasons.map(pr=>`<div class="path-reason-row"><span class="path-label">${escapeHtml(pr.from)} → ${escapeHtml(pr.to)}</span><div class="path-reason-badges">${pr.reasons.map((r,i)=>`<span class="reason-badge${i>0?' dim':''}">${escapeHtml(r.name)} <span class="share">${r.share}%</span></span>`).join('')}</div></div>`).join('')}</div></div>`;
+  };
+
+  function renderDemandDashboard(data) {
+    const root = document.getElementById('demandDashboard');
+    const factors = data.decisions.factors;
+    const results = data.decisions.results;
+    const paths = data.switches.paths;
+    root.innerHTML = `
+      <section class="prototype-section"><div class="prototype-head"><div><h3>01 功能需求地图</h3><p>看清用户需求结构与高频交叉场景，为产品研发提供线索</p></div><div class="chart-tabs" id="needMapTabs"><button class="chart-tab active" data-set="health">健康问题</button><button class="chart-tab" data-set="stage">生命阶段</button><button class="chart-tab" data-set="breed">品种</button></div></div><div id="needBubbleChart">${renderBubbleChart(data.needs.bubble_sets.health,'健康问题')}</div><div class="matrix-grid">${renderMatrix('生命阶段 × 健康问题',data.needs.matrix_columns,data.needs.stage_matrix)}${renderMatrix('品种 × 健康问题',data.needs.matrix_columns,data.needs.breed_matrix)}${renderMatrix('品种 × 生命阶段',data.needs.breed_stage_columns,data.needs.breed_stage_matrix)}</div></section>
+      <section class="prototype-section"><div class="prototype-head"><div><h3>02 用户选择洞察</h3><p>理解用户在比较产品时看重什么，以及这些依据最终如何影响选择结果</p></div><span class="tag">近 ${formatNumber(data.counts.decision)} 条选择评论</span></div><div class="decision-grid"><div class="decision-card"><h4>用户选择依据</h4>${factorRows(factors)}<div class="insight" style="margin-top:12px"><b>解读：</b>${escapeHtml(factors[0]?.name||'核心因素')}是当前用户比较时最核心的关注，占 ${factors[0]?.share||0}%。</div></div><div class="decision-card"><h4>选择依据 → 选择结果　流向分布</h4>${renderSankey(data)}<div class="insight"><b>说明：</b>流线宽度来自真实 Decision 标签的交叉计数。</div></div></div></section>
+      <section class="prototype-section"><div class="prototype-head"><div><h3>03 用户迁移路径</h3><p>看清用户在品牌之间如何流动，以及驱动换粮的核心原因</p></div><div class="chart-tabs"><button class="chart-tab active">阵营迁移</button><button class="chart-tab">品牌流向</button><button class="chart-tab">SKU 流向</button></div></div>${paths.length?renderMigration(data):'<div class="empty-state">暂无完整品牌迁移路径</div>'}<div class="reason-layout"><div><h4>用户为什么换</h4>${factorRows(data.switches.reasons)}</div><div class="reason-insight"><b>💡 洞察</b>${escapeHtml(data.switches.reasons[0]?.name||'健康适配')}占比最高，是驱动用户换粮的核心因素；完整品牌路径率为 ${data.switches.complete_path_rate}%。</div></div></section>
+      <div class="insight"><b>数据说明：</b>本页直接聚合 catfood_need_comment_labels、catfood_decision_comment_labels 和 catfood_switch_comment_labels。更新时间：${escapeHtml(data.updated_at || '暂无')}。</div>`;
+    const dateNode = document.querySelector('.topbar .user span');
+    if (dateNode && data.updated_at) dateNode.textContent = `数据更新：${String(data.updated_at).slice(0, 10)}`;
+    const bubbleLabels={health:'健康问题',stage:'生命阶段',breed:'品种'};
+    const bindBubbles=items=>document.querySelectorAll('.need-bubble').forEach(node=>node.addEventListener('click',()=>{document.querySelectorAll('.need-bubble').forEach(x=>x.classList.remove('active'));node.classList.add('active');const item=items[Number(node.dataset.bubbleIndex)];document.getElementById('bubbleDetail').innerHTML=`<b>${escapeHtml(item.name)}</b>：相关评论 ${formatNumber(item.count)} 条，占当前维度 ${item.share}%；近12个月同比增长率 ${item.growth==null?'（新增，无基期数据）':(item.growth>=0?'+'+item.growth+'%':item.growth+'%')}。`;}));
+    bindBubbles(data.needs.bubble_sets.health);
+    document.querySelectorAll('#needMapTabs .chart-tab').forEach(tab=>tab.addEventListener('click',()=>{document.querySelectorAll('#needMapTabs .chart-tab').forEach(x=>x.classList.remove('active'));tab.classList.add('active');const key=tab.dataset.set,items=data.needs.bubble_sets[key];document.getElementById('needBubbleChart').innerHTML=renderBubbleChart(items,bubbleLabels[key]);bindBubbles(items);}));
+  }
+
+  async function loadDemandDashboard() {
+    const root = document.getElementById('demandDashboard');
+    root.innerHTML = '<div class="empty-state">正在加载真实标签数据…</div>';
+    try {
+      const response = await fetch('/api/brand-growth-engine/demand-dashboard', {cache:'no-store'});
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || '请求失败');
+      renderDemandDashboard(data);
+    } catch (error) {
+      root.innerHTML = `<div class="dashboard-error">用户需求盘点加载失败：${escapeHtml(error.message)}</div>`;
+    }
+  }
+  document.getElementById('demandRefresh')?.addEventListener('click', loadDemandDashboard);
+  loadDemandDashboard();
+
+  const formatRate = (value, digits = 1) => value == null ? '—' : `${(Number(value) * 100).toFixed(digits)}%`;
+  const formatYoy = value => {
+    if (value == null) return '<span class="trend-flat">新增 / 无基期</span>';
+    const number = Number(value);
+    const cls = number > 0 ? 'trend-up' : number < 0 ? 'trend-down' : 'trend-flat';
+    const arrow = number > 0 ? '↑' : number < 0 ? '↓' : '→';
+    return `<span class="${cls}">${number > 0 ? '+' : ''}${number.toFixed(1)}% ${arrow}</span>`;
+  };
+  const renderMeter = value => {
+    const percent = Math.max(0, Math.min(100, Number(value || 0) * 100));
+    return `<span class="mini-meter"><b>${percent.toFixed(1)}%</b><span class="mini-track"><i class="mini-fill" style="width:${percent}%"></i></span></span>`;
+  };
+  function renderCrossAnalysis(data) {
+    const root = document.getElementById('crossAnalysis');
+    const crossRows = data.cross_top10 || [];
+    const diseaseRows = data.disease_overview || [];
+    root.innerHTML = `
+      <section class="card cross-card">
+        <div class="cross-card-head"><div><h3>交叉功能需求 TOP10 供需概览</h3><p>以年龄段 / 品种 × 病症构建交叉需求，按近 12 个月需求信号排名</p></div><div class="metric-note"><b>指标说明</b><br>产品覆盖率：${escapeHtml(data.definitions?.coverage || '')}<br>改善率：${escapeHtml(data.definitions?.improvement || '')}</div></div>
+        <div class="cross-table-wrap"><table class="cross-table"><thead>
+          <tr><th rowspan="2">排名</th><th rowspan="2">交叉功能需求</th><th colspan="2" class="group-demand">需求端（用户要什么）</th><th colspan="2" class="group-supply">供给端（市场有没有承接）</th></tr>
+          <tr><th>需求信号量<br><small>近 12 个月</small></th><th>需求变化<br><small>同比</small></th><th>产品覆盖率<br><small>样本覆盖</small></th><th>改善率<br><small>明确改善占比</small></th></tr></thead>
+          <tbody>${crossRows.length ? crossRows.map(row => `<tr><td><span class="rank-dot ${Number(row.cross_rank) <= 3 ? 'top' : ''}">${row.cross_rank}</span></td><td><span class="cross-name">${escapeHtml(row.cross_demand)}</span><span class="sample-muted">${row.category_type === 'breed' ? '品种' : '年龄段'}</span></td><td><b>${formatNumber(row.recent_12m_count)}</b></td><td>${formatYoy(row.yoy_change_pct)}</td><td>${renderMeter(row.product_coverage_rate)}<span class="sample-muted">${formatNumber(row.product_coverage_count)} / ${formatNumber(row.product_total_count)} 个产品</span></td><td>${renderMeter(row.improvement_rate)}<span class="sample-muted">n=${formatNumber(row.improvement_sample)}</span></td></tr>`).join('') : '<tr><td colspan="6"><div class="empty-state">暂无交叉需求数据</div></td></tr>'}</tbody></table></div>
+        <div class="cross-footnote">注：${escapeHtml(data.definitions?.scope || '')}。同比无上年基期时显示“新增 / 无基期”。</div>
+      </section>
+      <section class="card cross-card">
+        <div class="cross-card-head"><div><h3>病症改善与产品覆盖总览</h3><p>远程 cat_disease_clues 结果表现 × 本地标准产品库覆盖</p></div><span class="tag good">数据截止 ${escapeHtml(data.updated_at || '—')}</span></div>
+        <div class="cross-table-wrap"><table class="disease-table"><thead><tr><th>病症</th><th>改善率</th><th>有效样本</th><th>产品覆盖</th><th>品牌匹配</th><th>病症线索</th></tr></thead><tbody>
+          ${diseaseRows.length ? diseaseRows.map(row => `<tr><td><span class="cross-name">${escapeHtml(row.cross_demand)}</span></td><td>${renderMeter(row.improvement_rate)}</td><td><b>${formatNumber(row.improvement_sample)}</b><span class="sample-muted">不确定 ${formatNumber(row.uncertain_sample)}</span></td><td><b>${formatNumber(row.product_coverage_count)} / ${formatNumber(row.product_total_count)}</b><span class="sample-muted">${formatRate(row.product_coverage_rate)}</span></td><td><b>${formatNumber(row.matched_brand_count)} / ${formatNumber(row.mentioned_brand_count)}</b></td><td>${formatNumber(row.disease_clue_count)}</td></tr>`).join('') : '<tr><td colspan="6"><div class="empty-state">暂无病症数据</div></td></tr>'}
+        </tbody></table></div>
+      </section>`;
+  }
+  async function loadCrossAnalysis() {
+    const root = document.getElementById('crossAnalysis');
+    try {
+      const response = await fetch('/api/brand-growth-engine/cross-analysis', {cache:'no-store'});
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || '请求失败');
+      renderCrossAnalysis(data);
+    } catch (error) {
+      root.innerHTML = `<div class="dashboard-error">交叉需求分析加载失败：${escapeHtml(error.message)}</div>`;
+    }
+  }
+  loadCrossAnalysis();
+
+  function renderDiseaseRepresentatives(data) {
+    const root = document.getElementById('diseaseRepresentativeDashboard');
+    const summary = data.summary || {};
+    const products = data.products || [];
+    const ingredients = data.ingredients || [];
+    const ingredientGroups = data.ingredient_groups || [];
+    const options = (data.symptoms || []).map(item => `<option value="${escapeHtml(item.secondary_symptom)}" ${item.secondary_symptom === data.selected_symptom ? 'selected' : ''}>${escapeHtml(item.secondary_symptom)} · ${formatNumber(item.product_count)} 个候选产品</option>`).join('');
+    root.innerHTML = `
+      <div class="card disease-toolbar"><div><span class="kicker">当前研究病症</span><label><select id="representativeSymptomSelect">${options}</select></label></div><div class="metric-note"><b>证据口径</b><br>${escapeHtml(data.definitions?.product || '')}</div></div>
+      <div class="disease-summary">
+        <div class="card"><div class="metric-label">关联标准品牌</div><div class="metric-value">${formatNumber(summary.brand_count)}</div><div class="metric-sub">${escapeHtml(data.selected_symptom)} 相关品牌</div></div>
+        <div class="card"><div class="metric-label">候选代表产品</div><div class="metric-value">${formatNumber(summary.product_count)}</div><div class="metric-sub">具有当前有效配方</div></div>
+        <div class="card"><div class="metric-label">当前标准配方</div><div class="metric-value">${formatNumber(summary.formula_count)}</div><div class="metric-sub">去重 formula_id</div></div>
+        <div class="card"><div class="metric-label">标准原料</div><div class="metric-value">${formatNumber(summary.ingredient_count)}</div><div class="metric-sub">catfood_formula_ingredient_item</div></div>
+      </div>
+      <div class="representative-layout">
+        <section class="card cross-card"><div class="cross-card-head"><div><h3>${escapeHtml(data.selected_symptom)}·代表产品</h3><p>综合品牌病症线索量与 Wilson 改善率下界排名</p></div><span class="tag">品牌证据代理</span></div><div class="product-list">
+          ${products.length ? products.map(row => `<div class="representative-product"><span class="rank-dot ${Number(row.product_rank) <= 3 ? 'top' : ''}">${row.product_rank}</span><div class="product-copy"><b>${escapeHtml(row.brand_name)} · ${escapeHtml(row.product_name)}</b><small>${escapeHtml(row.life_stage || '全阶段')} · ${escapeHtml(row.ingredients || '暂无原料')}</small></div><div class="evidence-stat"><span>品牌线索</span><b>${formatNumber(row.disease_clue_count)}</b></div><div class="evidence-stat"><span>品牌改善率</span><b>${formatRate(row.improvement_rate)}</b><small>n=${formatNumber(row.improvement_sample)}</small></div></div>`).join('') : '<div class="empty-state">暂无候选产品</div>'}
+        </div></section>
+        <section class="card cross-card"><div class="cross-card-head"><div><h3>${escapeHtml(data.selected_symptom)}·代表原料</h3><p>按原材料主要营养角色分类，每类展示代表性最高的前 8 项</p></div><span class="tag good">${formatNumber(ingredientGroups.length)} 类营养角色</span></div><div class="nutrition-role-groups">
+          ${(() => {
+            const roleOrder = ['蛋白质','碳水','纤维素','脂肪','益生元','矿物质','草本植物'];
+            const sorted = [...ingredientGroups].sort((a,b) => {
+              const ia = roleOrder.findIndex(k => a.role && a.role.includes(k));
+              const ib = roleOrder.findIndex(k => b.role && b.role.includes(k));
+              return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib);
+            }).map(group => ({
+              ...group,
+              ingredients: group.ingredients.filter(row => Number(row.supporting_brand_count) > 2)
+            })).filter(group => group.ingredients.length > 0);
+            return sorted.length ? sorted.map(group => `<section class="nutrition-role-group"><div class="nutrition-role-head"><b>${escapeHtml(group.role)}</b><span>共 ${formatNumber(group.ingredient_count)} 种原料 · 最高覆盖 ${formatNumber(group.max_brand_coverage)} 个品牌</span></div><div class="nutrition-role-items">${group.ingredients.map(row => `<div class="nutrition-role-item"><b>#${row.ingredient_rank} ${escapeHtml(row.standard_name)}</b><small>覆盖 ${formatNumber(row.supporting_brand_count)} 品牌 / ${formatNumber(row.supporting_product_count)} 产品<br>线索 ${formatNumber(row.supporting_clue_count)} · 配料位次 ${Number(row.average_position || 0).toFixed(1)}</small></div>`).join('')}</div></section>`).join('') : '<div class="empty-state">暂无营养角色分类</div>';
+          })()}
+        </div></section>
+      </div>
+      <div class="scope-warning"><b>解读边界：</b>${escapeHtml(data.definitions?.ingredient || '')}产品的改善率来自所属品牌在该病症下的聚合证据，不是该 SKU 独立效果。</div>`;
+    document.getElementById('representativeSymptomSelect')?.addEventListener('change', event => loadDiseaseRepresentatives(event.target.value));
+  }
+  async function loadDiseaseRepresentatives(symptom = '') {
+    const root = document.getElementById('diseaseRepresentativeDashboard');
+    root.innerHTML = '<div class="card"><div class="empty-state">正在加载病症代表产品与原料…</div></div>';
+    try {
+      const query = symptom ? `?symptom=${encodeURIComponent(symptom)}` : '';
+      const response = await fetch(`/api/brand-growth-engine/disease-representatives${query}`, {cache:'no-store'});
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || '请求失败');
+      renderDiseaseRepresentatives(data);
+    } catch (error) {
+      root.innerHTML = `<div class="dashboard-error">病症代表产品/原料加载失败：${escapeHtml(error.message)}</div>`;
+    }
+  }
+  const eiRate = value => value == null ? '—' : `${Number(value).toFixed(1)}%`;
+  function renderExperienceInsight(data) {
+    const root=document.getElementById('experienceInsightDashboard'), main=data.main_need||{}, pains=data.pain_points||[];
+    const options=(data.symptoms||[]).map(row=>`<option value="${escapeHtml(row.symptom)}" ${row.symptom===data.selected_symptom?'selected':''}>${escapeHtml(row.symptom)} · ${formatNumber(row.comment_count)} 条</option>`).join('');
+    const trendLabel=main.yoy_change_pct==null?'基期不足':`${main.yoy_change_pct>=0?'+':''}${Number(main.yoy_change_pct).toFixed(1)}%`;
+    root.innerHTML=`<div class="ei-dashboard">
+      <div class="ei-section-title"><b>01</b><h3>主需求</h3><label class="ei-select"><select id="eiSymptomSelect">${options}</select></label></div>
+      <section class="ei-main"><div class="ei-icon">◒</div><div class="ei-need"><h2>${escapeHtml(data.selected_symptom)}</h2><small>${escapeHtml(main.category||'用户体验问题')} · ${formatNumber(main.comment_count)} 条主需求评论</small></div><div class="ei-metric"><span>需求强度</span><b>${escapeHtml(main.demand_level)}</b></div><div class="ei-metric"><span>${(main.yoy_years||[]).join(' → ')||'历史'}趋势</span><b>${trendLabel} ↗</b></div><div class="ei-metric"><span>改善信号率</span><b>${eiRate(main.improvement_rate)}</b></div><div class="ei-metric"><span>细粒度证据覆盖</span><b>${eiRate(main.detail_coverage_rate)}</b></div><div class="ei-main-note">${escapeHtml(data.selected_symptom)}是当前 Experience 评论中的高频主需求；改善信号样本 n=${formatNumber(main.improvement_sample)}，趋势仅使用可解析完整日期的自然年评论。</div></section>
+      <div class="ei-section-title"><b>02</b><h3>主需求之外，加重且未被满足的痛点</h3></div>
+      <section class="ei-table-panel"><table class="ei-table"><thead><tr><th>排名</th><th>痛点</th><th>共现率</th><th>主要发生阶段</th><th>当前改善率</th><th>未解决样本</th></tr></thead><tbody>${pains.length?pains.map(row=>`<tr><td><span class="ei-no">${row.rank}</span></td><td><b>${escapeHtml(row.name)}</b></td><td>${eiRate(row.cooccurrence_rate)}</td><td>${escapeHtml(row.top_onset)}</td><td>${eiRate(row.improvement_rate)}</td><td class="ei-red">${formatNumber(row.unresolved_count)}</td></tr>`).join(''):'<tr><td colspan="6">暂无次病症共现数据</td></tr>'}</tbody></table></section>
+      <div class="ei-section-title"><b>03</b><h3>用户场景</h3></div><section class="ei-scenes">${(data.scenes||[]).map((row,i)=>`<article class="ei-scene"><div class="ei-scene-head"><span class="ei-scene-icon">${['▣','◒','◉'][i]||'◉'}</span><div><h4>${escapeHtml(row.title)}</h4><span class="tag">${escapeHtml(row.tag)}</span></div></div><p>${escapeHtml(row.description)}<br>关联评论 ${formatNumber(row.count)} 条。</p></article>`).join('')}</section>
+      <div class="ei-section-title"><b>04</b><h3>机会定义</h3></div><section class="ei-opportunities">${(data.opportunities||[]).map(row=>`<article class="ei-opportunity"><span class="code">${escapeHtml(row.code)}</span><h4>${escapeHtml(row.title)}</h4><dl><dt>类型</dt><dd><span class="tag good">${escapeHtml(row.type)}</span></dd><dt>目标人群</dt><dd>${escapeHtml(row.audience)}</dd><dt>核心问题</dt><dd>${escapeHtml(row.problem)}</dd><dt>建议</dt><dd>${escapeHtml(row.proposal)}</dd></dl></article>`).join('')}</section>
+      <div class="ei-footnote"><b>指标口径：</b>${escapeHtml(data.definitions?.scope)} 共现率：${escapeHtml(data.definitions?.cooccurrence)}；改善率：${escapeHtml(data.definitions?.improvement)}；覆盖率：${escapeHtml(data.definitions?.coverage)}</div>
+    </div>`;
+    document.getElementById('eiSymptomSelect')?.addEventListener('change',event=>loadExperienceInsight(event.target.value));
+  }
+  async function loadExperienceInsight(symptom='软便/拉稀') {
+    const root=document.getElementById('experienceInsightDashboard');
+    root.innerHTML='<div class="card"><div class="empty-state">正在从 Experience 标签生成用户洞察…</div></div>';
+    try { const response=await fetch(`/api/brand-growth-engine/experience-insight?symptom=${encodeURIComponent(symptom)}`,{cache:'no-store'}); const data=await response.json(); if(!response.ok)throw new Error(data.error||'请求失败'); renderExperienceInsight(data); }
+    catch(error){root.innerHTML=`<div class="dashboard-error">Experience 用户洞察加载失败：${escapeHtml(error.message)}</div>`;}
+  }
+  loadExperienceInsight();
+
+  const diseaseApiName = name => ({'拒食/不爱吃':'不爱吃','便臭':'拉屎臭','便秘':'便秘/干硬便','瘙痒/皮肤敏感':'瘙痒/过敏'}[name] || name);
+  const goRate = value => { const p=Math.max(0,Math.min(100,Number(value||0)*100)); return `<span class="go-rate"><b>${p.toFixed(1)}%</b><span class="go-rate-track"><i class="go-rate-fill" style="width:${p}%"></i></span></span>`; };
+  const opportunityLabel = row => {
+    const yoy=Number(row.yoy_change_pct||0), coverage=Number(row.product_coverage_rate||0), improvement=Number(row.improvement_rate||0);
+    if (coverage < .35 && improvement < .45) return ['高潜机会','high'];
+    if (yoy >= 50) return ['高增长','growth'];
+    if (improvement >= .55) return ['成熟需求','chance'];
+    return ['机会','watch'];
+  };
+  function renderGrowthOpportunity(crossData, representativeData) {
+    const root=document.getElementById('growthOpportunityDashboard');
+    const diseaseRows=(crossData.disease_overview||[]).slice(0,9);
+    const crossRows=(crossData.cross_top10||[]).slice(0,8);
+    const selected=representativeData.selected_symptom;
+    const selectedDisease=diseaseRows.find(row=>diseaseApiName(row.cross_demand)===selected)||diseaseRows[0]||{};
+    const relatedCross=crossRows.find(row=>row.cross_demand.includes(selectedDisease.cross_demand||selected))||crossRows[0]||{};
+    const previous=Number(relatedCross.prev_12m_count||0), current=Number(relatedCross.recent_12m_count||0), barMax=Math.max(previous,current,1);
+    const candidateGroups=(representativeData.candidate_ingredient_groups||[]), products=(representativeData.products||[]).slice(0,4);
+    const yoy=relatedCross.yoy_change_pct==null?null:Number(relatedCross.yoy_change_pct);
+    const explanation=`${escapeHtml(selected)}的代表交叉需求“${escapeHtml(relatedCross.cross_demand||'暂无')}”近12个月信号量为 ${formatNumber(current)}${yoy==null?'，暂无可比基期':`，同比 ${yoy>=0?'+':''}${yoy.toFixed(1)}%`}。当前产品覆盖率 ${formatRate(selectedDisease.product_coverage_rate)}，品牌病症改善率 ${formatRate(selectedDisease.improvement_rate)}，候选产品来自改善品牌，代表原料取自候选产品配方。`;
+    root.innerHTML=`
+      <section class="go-panel"><div class="go-head"><div><h3>病症改善与产品覆盖总览</h3><p>远程 cat_disease_clues 结果表现 × 本地标准品牌与产品覆盖</p></div><span class="go-date">数据截止 ${escapeHtml(crossData.updated_at||'—')}</span></div><div class="go-table-wrap"><table class="go-table"><thead><tr><th>病症</th><th>改善率</th><th>有效样本</th><th>产品覆盖</th><th>品牌匹配</th><th>病症线索</th></tr></thead><tbody>${diseaseRows.map(row=>`<tr data-go-symptom="${escapeHtml(diseaseApiName(row.cross_demand))}" class="${diseaseApiName(row.cross_demand)===selected?'selected':''}"><td><b>${escapeHtml(row.cross_demand)}</b></td><td>${goRate(row.improvement_rate)}</td><td><b>${formatNumber(row.improvement_sample)}</b><span class="go-sub">不确定 ${formatNumber(row.uncertain_sample)}</span></td><td><b>${formatNumber(row.product_coverage_count)} / ${formatNumber(row.product_total_count)}</b><span class="go-sub">${formatRate(row.product_coverage_rate)}</span></td><td><b>${formatNumber(row.matched_brand_count)} / ${formatNumber(row.mentioned_brand_count)}</b></td><td>${formatNumber(row.disease_clue_count)}</td></tr>`).join('')}</tbody></table></div></section>
+      <section class="go-panel"><div class="go-head"><div><h3>交叉需求机会榜</h3><p>用户需求信号 × 市场承接 × 品牌病症改善表现</p></div></div><div class="go-table-wrap"><table class="go-table go-cross-table"><thead><tr><th>排名</th><th>交叉需求</th><th>近12月需求</th><th>同比</th><th>产品覆盖率</th><th>改善率</th><th>机会等级</th></tr></thead><tbody>${crossRows.map(row=>{const label=opportunityLabel(row);return `<tr><td><span class="rank-dot ${row.cross_rank<=3?'top':''}">${row.cross_rank}</span></td><td><b>${escapeHtml(row.cross_demand)}</b></td><td>${formatNumber(row.recent_12m_count)}</td><td>${formatYoy(row.yoy_change_pct)}</td><td>${goRate(row.product_coverage_rate)}</td><td>${goRate(row.improvement_rate)}</td><td><span class="go-opportunity-tag ${label[1]}">${label[0]}</span></td></tr>`}).join('')}</tbody></table></div></section>
+      <section class="go-panel go-detail"><div class="go-detail-head"><h3>${escapeHtml(selected)}·病症机会洞察</h3><select id="goSymptomSelect" class="go-select">${(representativeData.symptoms||[]).map(item=>`<option value="${escapeHtml(item.secondary_symptom)}" ${item.secondary_symptom===selected?'selected':''}>${escapeHtml(item.secondary_symptom)}</option>`).join('')}</select></div><div class="go-detail-grid">
+        <div class="go-insight-card"><h4>近12个月交叉需求对比</h4><div class="go-compare-chart"><div class="go-compare-col"><b>${formatNumber(previous)}</b><div class="go-compare-bar" style="height:${Math.max(8,previous/barMax*105)}px"></div><span>上年同期</span></div><div class="go-compare-col"><b>${formatNumber(current)}</b><div class="go-compare-bar current" style="height:${Math.max(8,current/barMax*105)}px"></div><span>近12个月</span></div></div><div class="go-growth-note"><b>增长解读：</b>${explanation}</div></div>
+        <div class="go-insight-card"><h4>需求承接候选产品</h4>${products.map((row,i)=>`<div class="go-product"><span class="rank-dot">${i+1}</span><div><b>${escapeHtml(row.brand_name)}·${escapeHtml(row.product_name)}</b><small>n=${formatNumber(row.improvement_sample)}</small></div><span class="go-product-rate">改善 ${formatRate(row.improvement_rate)}</span></div>`).join('')}</div>
+      </div></section>
+      <section class="go-panel go-material-panel"><div class="go-material-head"><div><h3>${escapeHtml(selected)}·代表原料</h3><p>来自需求承接候选产品的配方原料，按营养角色分组</p></div><span class="go-role-count">${(() => {
+            const roleOrder = ['蛋白质','碳水','纤维素','脂肪','益生元','矿物质','草本植物'];
+            const sorted = [...candidateGroups].sort((a,b) => {
+              const ia = roleOrder.findIndex(k => a.role && a.role.includes(k));
+              const ib = roleOrder.findIndex(k => b.role && b.role.includes(k));
+              return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib);
+            }).map(group => ({
+              ...group,
+              ingredients: group.ingredients.filter(row => Number(row.supporting_brand_count) > 1)
+            })).filter(group => group.ingredients.length > 0);
+            return formatNumber(sorted.length);
+          })()} 类营养角色</span></div><div class="go-material-groups">${(() => {
+            const roleOrder = ['蛋白质','碳水','纤维素','脂肪','益生元','矿物质','草本植物'];
+            const sorted = [...candidateGroups].sort((a,b) => {
+              const ia = roleOrder.findIndex(k => a.role && a.role.includes(k));
+              const ib = roleOrder.findIndex(k => b.role && b.role.includes(k));
+              return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib);
+            }).map(group => ({
+              ...group,
+              ingredients: group.ingredients.filter(row => Number(row.supporting_brand_count) > 1)
+            })).filter(group => group.ingredients.length > 0);
+            return sorted.map((group,gi)=>`<section class="go-material-group"><div class="go-material-group-head"><b>${escapeHtml(group.role)}</b><span>共 ${formatNumber(group.ingredient_count)} 种原料 · 最高覆盖 ${formatNumber(group.max_brand_coverage)} 个品牌</span></div><div class="go-material-grid">${group.ingredients.map((row,ri)=>`<article class="go-material-item"><b>#${gi*8+ri+1} ${escapeHtml(row.standard_name)}</b><p>覆盖 ${formatNumber(row.supporting_brand_count)} 品牌 / ${formatNumber(row.supporting_product_count)} 产品<br>线索 ${formatNumber(row.supporting_clue_count)} · 配料位次 ${Number(row.average_position||0).toFixed(1)}</p></article>`).join('')}</div></section>`).join('');
+          })()}</div></section>
+      <section class="go-explanation"><div class="go-bulb">◉</div><div><h3>机会解释</h3><p>${explanation}<br><b>注：</b>改善率为病症×品牌聚合证据，候选产品与原料为共现代表性，不做因果功效声明。</p></div></section>`;
+    root.querySelectorAll('[data-go-symptom]').forEach(row=>row.addEventListener('click',()=>loadGrowthOpportunity(row.dataset.goSymptom)));
+    document.getElementById('goSymptomSelect')?.addEventListener('change',event=>loadGrowthOpportunity(event.target.value));
+  }
+  async function loadGrowthOpportunity(symptom='软便/拉稀') {
+    const root=document.getElementById('growthOpportunityDashboard');
+    root.innerHTML='<div class="card"><div class="empty-state">正在加载增长机会洞察…</div></div>';
+    try {
+      const [crossResponse,representativeResponse]=await Promise.all([fetch('/api/brand-growth-engine/cross-analysis',{cache:'no-store'}),fetch(`/api/brand-growth-engine/disease-representatives?symptom=${encodeURIComponent(symptom)}`,{cache:'no-store'})]);
+      const [crossData,representativeData]=await Promise.all([crossResponse.json(),representativeResponse.json()]);
+      if(!crossResponse.ok)throw new Error(crossData.error||'交叉分析请求失败');if(!representativeResponse.ok)throw new Error(representativeData.error||'病症代表数据请求失败');
+      renderGrowthOpportunity(crossData,representativeData);
+    } catch(error) { root.innerHTML=`<div class="dashboard-error">增长机会洞察加载失败：${escapeHtml(error.message)}</div>`; }
+  }
+  loadGrowthOpportunity();
+
+  const cbPercent = value => value == null ? '—' : `${(Number(value) * 100).toFixed(0)}%`;
+  const cbText = value => escapeHtml(value == null || value === '' ? '—' : String(value));
+  const cbTagList = values => (values || []).length ? values.map(value => `<span class="tag good">${cbText(value)}</span>`).join('') : '<span class="tag">暂无明确标签</span>';
+  const cbStructList = labels => (labels || []).length ? labels.slice(0,3).map(lb => `<span class="tag">${cbText(lb.level2 || lb)}</span>`).join('') : '<span class="tag">—</span>';
+  const cbStructText = labels => (labels || []).length ? labels.slice(0,3).map(lb => cbText(lb.level2 || lb)).join(' / ') : '—';
+  const cbDiffTags = (adv, weak) => { const all = [...(adv||[]).map(t=>({t,c:'#e3f2fd'})),...(weak||[]).map(t=>({t,c:'#fce4ec'}))]; return all.length ? all.slice(0,4).map(x=>`<span class="tag" style="background:${x.c};font-size:10px;padding:2px 8px;border-radius:99px">${cbText(x.t)}</span>`).join('') : '<span class="tag">—</span>'; };
+  function renderCompetitorBreakdown(data, options) {
+    const root = document.getElementById('competitorBreakdownApp');
+    const target = data.target || {}, pool = data.competitor_pool || [], evidence = data.evidence || {};
+    const allCards = [{...target, isTarget:true}, ...pool];
+    const optionHtml = (options || []).map(row => {
+      const fid = row.formula_id || '';
+      const clueExtra = row.brand_clue_count != null
+        ? ` [${row.brand_clue_count}改善${row.brand_worsen_cnt ? '/' + row.brand_worsen_cnt + '加重' : ''}]`
+        : '';
+      return `<option value="${fid}" ${String(fid) === String(target.formula_id) ? 'selected' : ''}>${cbText(row.brand || '未知品牌')} · ${cbText(row.product_name || row.sku_id)}${clueExtra}</option>`;
+    }).join('');
+    const moduleSim = evidence.module_similarity || [];
+    const factors = data.benchmark_factors || {modules:[]};
+    const fMods = factors.modules || [];
+    root.innerHTML = `<div class="cb-shell">
+      <header class="cb-titlebar"><div><h2>竞品增长拆解</h2><div class="cb-filters">
+        <label class="cb-control"><span>病症</span><select id="cbSymptom"><option>软便/拉稀</option><option>黑下巴</option><option>呕吐</option><option>拒食/不爱吃</option><option>掉毛</option><option>便秘</option></select></label>
+        <label class="cb-control"><span>目标 SKU</span><select id="cbTarget">${optionHtml}</select></label>
+        <button class="btn primary" id="cbRecall" style="margin-left:8px;align-self:flex-end">召 回</button>
+      </div></div><span class="cb-updated">分析编号：${cbText(data.analysis_id)}</span></header>
+      <section class="cb-panel"><div class="cb-panel-head"><div><h3>01 当前竞品池 · 基于配方画像的结构相似度召回</h3><p>${cbText(data.symptom)}作为解释背景；候选产品由 formula_profile 结构标签+市场百分位召回</p></div><button class="btn" id="cbRefresh">重新分析</button></div>
+        <div class="cb-pool"><table class="cb-pool-table"><thead><tr><th></th>${allCards.map(row => { const name = cbText(row.brand || '目标') + ' · ' + cbText(row.product_name || row.sku_id); return `<th class="${row.isTarget?'target':''}" title="${name.replace(/"/g,'&quot;')}">${row.isTarget?'<span style="display:inline-block;width:16px;height:16px;border:2px solid #1976d2;border-radius:50%;color:#1976d2;font-size:9px;line-height:12px;text-align:center;margin-right:3px">●</span>':''}${name}</th>`; }).join('')}</tr></thead><tbody>
+<tr><td>相似度</td>${allCards.map(row => row.isTarget?'<td class="sim-val target">—</td>':`<td class="sim-val">${cbPercent(row.overall_similarity)}</td>`).join('')}</tr>
+<tr><td>共同配方骨架</td>${allCards.map(row => `<td class="struct-text">${cbStructText(row.structure_labels)}</td>`).join('')}</tr>
+<tr><td>差异重点模块</td>${allCards.map(row => `<td><div class="diff-tags">${cbDiffTags(row.advantage_tags, row.weakness_tags)}</div></td>`).join('')}</tr>
+</tbody></table></div>
+      </section>
+      <section class="cb-panel"><div class="cb-panel-head"><div><h3>02 证据层：为什么这些配方结构接近</h3><p>以结构标签、模块百分位组成证据链</p></div></div><div class="cb-evidence">
+        <article class="cb-evidence-card" style="grid-column:span 2"><div class="cb-eyebrow">配方骨架</div><h4>${cbText(evidence.formula_skeleton?.title || '配方骨架')}</h4>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:12px">
+          ${(evidence.formula_skeleton?.modules||[]).map(m => {
+            const seedStr = (m.seed_tags||[]).join(' + ') || '—';
+            const candStr = (m.cand_tags||[]).join(' + ') || '—';
+            return `<div style="padding:8px;background:#e8f5e9;border-radius:4px;border-left:3px solid #4caf50">
+              <b style="color:#1976d2">${cbText(m.module)}</b>
+              <div style="margin-top:4px;font-size:12px"><span style="color:#1976d2">标杆:</span> ${cbText(seedStr)}</div>
+              <div style="font-size:12px"><span style="color:#ff9800">候选:</span> ${cbText(candStr)}</div>
+              <div style="margin-top:2px;font-size:11px;color:#4caf50">✓ 结构一致</div>
+            </div>`;
+          }).join('')}
+          </div>
+        </article>
+        <article class="cb-evidence-card"><div class="cb-eyebrow">营养分值对比</div><h4>原料添加量水平接近</h4>
+          <div class="cb-list">${moduleSim.length ? moduleSim.map((row,i) => {
+            const seedW = row.seed_pct || 0;
+            const candW = row.cand_pct || 0;
+            const levelColor = seedW >= 75 ? '#2e7d32' : seedW >= 50 ? '#558b2f' : seedW >= 25 ? '#ff8f00' : '#c62828';
+            return `<div style="margin-bottom:12px">
+              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+                <b style="font-size:13px">${cbText(row.name)}</b>
+                <span style="font-size:11px;color:${levelColor};background:${levelColor}15;padding:2px 6px;border-radius:3px">${cbText(row.level)}</span>
+              </div>
+              <div style="position:relative;height:20px;background:#f5f5f5;border-radius:4px;overflow:hidden">
+                <div style="position:absolute;left:0;top:0;height:10px;background:#1976d2;width:${seedW}%;transition:width .3s" title="标杆 ${seedW}%"></div>
+                <div style="position:absolute;left:0;top:10px;height:10px;background:#ff9800;width:${candW}%;transition:width .3s" title="候选 ${candW}%"></div>
+              </div>
+              <div style="display:flex;justify-content:space-between;font-size:11px;color:#666;margin-top:2px">
+                <span><span style="color:#1976d2">■</span> 标杆 ${seedW}%</span>
+                <span><span style="color:#ff9800">■</span> 候选 ${candW}%</span>
+                <span>差 ${row.diff?.toFixed(0)||0}%</span>
+              </div>
+            </div>`;
+          }).join('') : '<div class="empty-state">暂无分项相似度</div>'}</div>
+        </article>
+
+      </div></section>
+      <section class="cb-panel"><div class="cb-panel-head"><div><h3>03 标杆配方因子拆解</h3><p>基于差异度综合评估，Top3 为差异最大的模块</p></div></div><div class="cb-factor-tabs" id="cbFactorTabs"><button class="cb-factor-tab active" data-mod="all">全部模块</button>${fMods.map(m=>`<button class="cb-factor-tab" data-mod="${cbText(m.name)}">${cbText(m.display_name)}${m.rank<=3?`<span class="cb-tab-rank">Top${m.rank}</span>`:''}</button>`).join('')}</div>${fMods.length?fMods.map(m=>{const prods=m.products||[];return `<div class="cb-factor-module" data-mod="${cbText(m.name)}"><div class="cb-factor-head"><span class="cb-factor-badge">差异度 Top${m.rank}</span><h4>${cbText(m.display_name)}模块</h4><span style="font-size:11px;color:var(--cx-muted);margin-left:auto">${m.polarity_note?cbText(m.polarity_note)+' · ':''}差距 ${cbText(m.diff_gap)}</span></div><div class="cb-factor-body"><div class="cb-factor-chart"><div class="cb-chart-title">${cbText(m.score_label) || '差异度 (市场分位)'}</div>${prods.map(p=>{const isWorst = m.polarity==='negative' && Number(p.score)===0; const barStyle = isWorst ? 'width:3px;background:#c62828' : `width:${Math.min(Number(p.score)||0,100)}%`; return `<div class="cb-bar-row ${p.is_target?'target':''}"><span class="cb-bar-label" title="${cbText(p.label)}">${cbText(p.brand||p.label)}</span><div class="cb-bar-track"><div class="cb-bar-fill" style="${barStyle}"></div></div><span class="cb-bar-score">${isWorst?'最差（负担最高）':cbText(p.score)}</span></div>`}).join('')}</div><div class="cb-factor-table-wrap"><table class="cb-factor-table"><thead><tr><th>对比项</th>${prods.map(p=>`<th class="${p.is_target?'target':''}">${cbText(p.brand||p.label)}</th>`).join('')}</tr></thead><tbody><tr><td>原料</td>${prods.map(p=>`<td>${cbText(p.rows?.['原料'])}</td>`).join('')}</tr><tr><td>配方二级</td>${prods.map(p=>`<td>${cbText(p.rows?.['配方二级'])}</td>`).join('')}</tr><tr><td>工艺一级</td>${prods.map(p=>`<td>${cbText(p.rows?.['工艺一级'])}</td>`).join('')}</tr><tr><td>工艺二级</td>${prods.map(p=>`<td>${cbText(p.rows?.['工艺二级'])}</td>`).join('')}</tr></tbody></table></div></div><div class="cb-factor-conclusion">${cbText(m.conclusion)}</div></div>`}).join(''):'<div class="empty-state">暂无因子拆解数据</div>'}<div class="cb-note"><b>口径说明：</b>${cbText(data.scope_note)}</div></section>
+    </div>`;
+    document.getElementById('cbSymptom').value = data.symptom || '软便/拉稀';
+    document.getElementById('cbRecall')?.addEventListener('click', loadCompetitorBreakdown);
+    document.getElementById('cbSymptom')?.addEventListener('change', () => { competitorOptions = []; loadCompetitorBreakdown(); });
+    document.getElementById('cbFactorTabs')?.addEventListener('click', e => {
+      const tab = e.target.closest('.cb-factor-tab');
+      if (!tab) return;
+      const mod = tab.dataset.mod;
+      document.querySelectorAll('#cbFactorTabs .cb-factor-tab').forEach(t => t.classList.toggle('active', t === tab));
+      document.querySelectorAll('.cb-factor-module').forEach(m => {
+        m.classList.toggle('hidden', mod !== 'all' && m.dataset.mod !== mod);
+      });
+    });
+  }
+  let competitorOptions = [];
+  let lastSymptom = '';
+  async function loadCompetitorBreakdown() {
+    const root = document.getElementById('competitorBreakdownApp');
+    const existingTarget = document.getElementById('cbTarget')?.value || '';
+    const symptom = document.getElementById('cbSymptom')?.value || '软便/拉稀';
+    root.innerHTML = '<div class="card"><div class="empty-state">正在加载配方画像召回…</div></div>';
+    try {
+      // 病症变化时重新加载选项
+      if (symptom !== lastSymptom || !competitorOptions.length) {
+        const optionsResponse = await fetch(`/api/business/competitor-breakdown/options?symptom=${encodeURIComponent(symptom)}&limit=50`, {cache:'no-store'});
+        const optionsData = await optionsResponse.json();
+        if (!optionsResponse.ok) throw new Error(optionsData.error || '目标产品列表加载失败');
+        competitorOptions = optionsData.items || [];
+        lastSymptom = symptom;
+      }
+      const targetFormulaId = existingTarget || competitorOptions[0]?.formula_id || '';
+      const response = await fetch('/api/business/competitor-breakdown/analyze', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({target_formula_id:targetFormulaId,symptom,top_n:4})});
+      const data = await response.json();
+      if (!response.ok || !data.ok) throw new Error(data.error || '竞品分析失败');
+      renderCompetitorBreakdown(data, competitorOptions);
+    } catch(error) { root.innerHTML = `<div class="cb-error">竞品增长拆解加载失败：${cbText(error.message)}<br><small>请确认 catfood_formula_profile 表可用。</small></div>`; }
+  }
+  loadCompetitorBreakdown();
+
+  const srRate=value=>`${(Number(value||0)*100).toFixed(0)}%`;
+  const srRateClass=value=>Number(value)>=.65?'sr-rate-high':Number(value)>=.3?'sr-rate-mid':'';
+  function renderSkuRisk(data, options) {
+    const root=document.getElementById('skuRiskDashboard'), target=data.target||{}, cards=data.recall_cards||[], names=data.risk_names||[];
+    const optionHtml=(options||[]).map(row=>`<option value="${escapeHtml(row.sku_id)}" ${row.sku_id===target.sku_id?'selected':''}>${escapeHtml(row.brand||'未知品牌')} · ${escapeHtml(row.product_name||row.sku_id)}</option>`).join('');
+    root.innerHTML=`<div class="sr-dashboard">
+      <header class="sr-title"><h2>SKU 相似产品风险汇总</h2><p>选择目标 SKU，召回结构相似产品，并汇总相似产品质量问题信号</p></header>
+      <section><div class="sr-step"><b>01</b><h3>上传 / 选择 SKU</h3></div><div class="sr-panel sr-upload"><div class="sr-drop"><div><i>↥</i><b>上传 SKU 配方 / 选择产品</b><small>从本地 SKU 库（catfood_formula_profile）选择</small></div></div><div class="sr-target"><div class="sr-product-icon">SKU</div><div><h4>目标 SKU：${escapeHtml(target.brand)} · ${escapeHtml(target.product_name)}</h4><select id="srTarget">${optionHtml}</select><p>${(target.factory_business_tags||[]).slice(0,3).map(tag=>`<span class="tag good">${escapeHtml(tag)}</span>`).join('')}</p><small>蛋白 ${Number(target.crude_protein||0).toFixed(1)}%　脂肪 ${Number(target.crude_fat||0).toFixed(1)}%　纤维 ${Number(target.crude_fiber||0).toFixed(1)}%</small></div></div><div class="sr-actions"><button class="btn primary" id="srStart">开始召回</button><button class="btn" id="srReset">重新选择</button></div></div></section>
+      <section><div class="sr-step"><b>02</b><h3>相似产品召回结果</h3></div><div class="sr-recalls">${cards.map(row=>`<article class="sr-recall"><div class="sr-product-icon">${escapeHtml((row.brand||'S').slice(0,2))}</div><div><h4>${escapeHtml(row.brand)}｜${escapeHtml(row.product_name)}</h4><div class="sr-recall-metrics"><span>营养相似<b>${srRate(row.nutrition_similarity)}</b></span><span>综合相似<b>${srRate(row.overall_similarity)}</b></span></div><p>共同标签：${(row.shared_tags||[]).length?row.shared_tags.map(escapeHtml).join(' / '):'结构相似'}</p><p class="down">差异：${escapeHtml(row.difference)}</p></div></article>`).join('')}<article class="sr-more"><div><span>＋</span><strong>更多召回结果</strong><small>其余 ${formatNumber(data.remaining_count)} 个相似 SKU</small></div></article></div></section>
+      <section><div class="sr-step"><b>03</b><h3>二级病症发生概率</h3></div><div class="sr-panel sr-table-wrap"><table class="sr-table"><thead><tr><th>类型</th><th>SKU</th><th>品牌产品</th>${names.map(name=>`<th>${escapeHtml(name)}</th>`).join('')}</tr></thead><tbody>${(data.risk_matrix||[]).map(row=>`<tr><td>${escapeHtml(row.type)}</td><td>${escapeHtml(row.sku_id)}</td><td>${escapeHtml(row.brand)} · ${escapeHtml(row.product_name)}</td>${names.map(name=>`<td class="${srRateClass(row.risks?.[name])}">${srRate(row.risks?.[name])}</td>`).join('')}</tr>`).join('')}</tbody></table></div></section>
+      <section><div class="sr-step"><b>04</b><h3>问题信号汇总</h3></div><div class="sr-warning">⚠ 以下风险来自相似产品风险信号汇总，不代表目标 SKU 已发生真实问题</div><div class="sr-panel sr-table-wrap"><table class="sr-table"><thead><tr><th>问题</th><th>相似产品加权概率</th><th>市场基准</th><th>风险等级</th><th>说明</th></tr></thead><tbody>${(data.problem_summary||[]).map(row=>{const cls=row.risk_level==='高风险'?'high':row.risk_level==='低'?'low':'mid';return `<tr><td><b>${escapeHtml(row.problem)}</b></td><td class="${srRateClass(row.weighted_rate)}">${srRate(row.weighted_rate)}</td><td>${srRate(row.market_baseline)}</td><td><span class="sr-risk-level ${cls}">${escapeHtml(row.risk_level)}</span></td><td>${escapeHtml(row.description)}</td></tr>`}).join('')}</tbody></table><div class="sr-scope"><b>口径说明：</b>${escapeHtml(data.scope_note)} 分析编号：${escapeHtml(data.analysis_id)}</div></div></section>
+    </div>`;
+    document.getElementById('srStart')?.addEventListener('click',loadSkuRisk);
+    document.getElementById('srTarget')?.addEventListener('change',loadSkuRisk);
+    document.getElementById('srReset')?.addEventListener('click',()=>{document.getElementById('srTarget').selectedIndex=0;loadSkuRisk();});
+  }
+  let skuRiskOptions=[];
+  async function loadSkuRisk(){
+    const root=document.getElementById('skuRiskDashboard'), selected=document.getElementById('srTarget')?.value||'';
+    root.innerHTML='<div class="card"><div class="empty-state">正在运行相似召回与问题聚类…</div></div>';
+    try{
+      if(!skuRiskOptions.length){const optionResponse=await fetch('/api/business/competitor-breakdown/options?limit=180',{cache:'no-store'});const optionData=await optionResponse.json();if(!optionResponse.ok)throw new Error(optionData.error||'SKU列表加载失败');skuRiskOptions=optionData.items||[];}
+      const targetSkuId=selected||skuRiskOptions[0]?.sku_id||'';
+      const response=await fetch('/api/business/sku-risk-summary',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({target_sku_id:targetSkuId,top_n:7,min_similarity:.45,recall_mode:'nutrition_structure'})});const data=await response.json();if(!response.ok||!data.ok)throw new Error(data.error||'风险分析失败');renderSkuRisk(data,skuRiskOptions);
+    }catch(error){root.innerHTML=`<div class="dashboard-error">SKU 风险汇总加载失败：${escapeHtml(error.message)}</div>`;}
+  }
+  loadSkuRisk();
+
+  const ppColors=['#49b982','#ff835a','#7599cf','#e875b7','#8f72d7','#e0aa4a'];
+  function ppGradient(items){let cursor=0;return `conic-gradient(${(items||[]).map((row,i)=>{const start=cursor;cursor+=Number(row.share||0);return `${ppColors[i%ppColors.length]} ${start}% ${cursor}%`}).join(',')||'#edf2ef 0 100%'})`;}
+  function renderProductPortrait(data){
+    const root=document.getElementById('productPortraitDashboard'), summary=data.summary||{}, distributions=data.distributions||{}, products=data.products||[], brands=data.brands||[], capabilities=data.capabilities||[];
+    const brandType=document.getElementById('ppBrandType')?.value||'';
+    const brandRows=brands.slice(0,10), maxCount=Math.max(...(distributions.profiles||[]).map(row=>row.count),1);
+    root.innerHTML=`<div class="pp-dashboard"><header class="pp-title"><h2>全网产品画像</h2><p>从市场主画像、品牌产品画像与品牌优势/短板三个维度，查看当前筛选产品的整体画像特征。</p></header>
+      <section class="pp-panel"><div class="pp-head"><span>01</span><h3>市场产品画像</h3><div class="pp-filters"><select id="ppBrandType"><option value="">品牌类型：全部</option>${(data.filters?.brand_types||[]).map(x=>`<option value="${escapeHtml(x)}" ${x===brandType?'selected':''}>品牌类型：${escapeHtml(x)}</option>`).join('')}</select></div></div><div class="pp-market">
+        <div class="pp-chart-box"><h4>主画像分布</h4><small>基于配方结构标签分类</small><div class="pp-donut-area"><div class="pp-donut" style="background:${ppGradient(distributions.types)}"><div class="pp-donut-center"><span>总计</span><b>${formatNumber(summary.product_count)}</b><small>个产品</small></div></div><div class="pp-legend">${(distributions.types||[]).map((row,i)=>`<span><i style="background:${ppColors[i%ppColors.length]}"></i>${escapeHtml(row.name)} <b>${row.share}%</b></span>`).join('')}</div></div></div>
+        <div class="pp-chart-box"><h4>模块优势分布 Top 8</h4><div class="pp-bars">${(distributions.profiles||[]).map((row,i)=>`<div class="pp-bar"><span>${escapeHtml(row.name)}</span><div class="pp-track"><div class="pp-fill" style="width:${row.count*100/maxCount}%;background:${ppColors[i%ppColors.length]}"></div></div><b>${formatNumber(row.count)}（${row.share}%）</b></div>`).join('')}</div></div>
+      </div></section>
+      <section class="pp-panel"><div class="pp-head"><span>02</span><h3>品牌画像</h3></div><div class="pp-metrics"><div class="pp-metric"><span>覆盖品牌数</span><b>${formatNumber(summary.brand_count)}</b></div><div class="pp-metric"><span>画像产品数</span><b>${formatNumber(summary.profiled_count)}</b></div><div class="pp-metric"><span>主画像 Top1</span><b>${escapeHtml(summary.top_profile)}</b></div></div><div class="pp-table-wrap"><table class="pp-table"><thead><tr><th>品牌</th><th>产品数</th><th>主画像类型</th><th>核心结构标签</th><th>综合分位</th><th>品牌优势模块</th><th>品牌短板模块</th></tr></thead><tbody>${brandRows.map(row=>{
+      const composite=row.composite_percentile||0;
+      return `<tr><td><b>${escapeHtml(row.brand)}</b></td><td>${row.product_count}</td><td>${escapeHtml(row.main_portrait)}</td><td>${(row.core_structures||[]).map(s=>escapeHtml(s)).join('、')}</td><td><div class="pp-mini-bar" title="${composite}%"><div style="width:${composite}%"></div></div><small>${composite}%</small></td><td style="color:#0a7">${(row.advantages||[]).join('、')}</td><td style="color:#d44">${(row.weaknesses||[]).join('、')}</td></tr>`;
+    }).join('')}</tbody></table></div><div class="pp-pager"><span>共 ${formatNumber(brands.length)} 个品牌</span><div class="pp-pages"><button>‹</button><button class="active">1</button><button>2</button><button>3</button><button>…</button><button>›</button></div><span>10 个/页</span></div></section>
+      <div class="pp-scope">${escapeHtml(data.scope_note)}</div></div>`;
+    document.getElementById('ppBrandType')?.addEventListener('change',loadProductPortrait);
+  }
+  async function loadProductPortrait(){
+    const root=document.getElementById('productPortraitDashboard'),brandType=document.getElementById('ppBrandType')?.value||'',hasPortrait=document.getElementById('ppHasPortrait')?.value||'';
+    root.innerHTML='<div class="card"><div class="empty-state">正在加载全网产品画像…</div></div>';
+    try{const params=new URLSearchParams();if(brandType)params.set('brand_type',brandType);if(hasPortrait)params.set('has_portrait',hasPortrait);const response=await fetch(`/api/business/product-portrait?${params}`,{cache:'no-store'});const data=await response.json();if(!response.ok||!data.ok)throw new Error(data.error||'全网产品画像加载失败');renderProductPortrait(data);}catch(error){root.innerHTML=`<div class="dashboard-error">全网产品画像加载失败：${escapeHtml(error.message)}</div>`;}
+  }
+  loadProductPortrait();
+</script>
+</body>
+</html>

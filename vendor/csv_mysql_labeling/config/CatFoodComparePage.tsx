@@ -253,6 +253,7 @@ const products: Product[] = [
 
 const scoreDimensions = ["蛋白质量", "蛋白压力", "碳水负担", "脂肪负担", "纤维缓冲", "菌群支持", "皮肤保护"];
 const ORIJEN_PRODUCT_IMAGE = "/products/orijen-wild-reserve-kitten.png";
+const PRODUCT_CAROUSEL_PAGE_SIZE = 5;
 
 function productImageUrl(product: Product): string | null {
   const identity = `${product.brand} ${product.name}`.toLowerCase();
@@ -602,10 +603,27 @@ function ProductCarousel(props: {
   onSelect: (product: Product) => void;
   loading: boolean;
   error: string;
+  canPrev: boolean;
+  canNext: boolean;
+  page: number;
+  totalPages: number;
+  totalCount: number;
+  onPrev: () => void;
+  onNext: () => void;
 }) {
+  const showPager = !props.loading && !props.error && props.totalCount > PRODUCT_CAROUSEL_PAGE_SIZE;
   return (
     <section className="relative rounded-2xl border border-[#E5E9F5] bg-white px-10 py-4 shadow-[0_8px_24px_rgba(30,41,59,0.04)]">
-      <button type="button" className="absolute left-4 top-1/2 flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full border border-[#E5E9F5] bg-white text-[#4B4BFF] shadow-sm">‹</button>
+      <button
+        type="button"
+        onClick={props.onPrev}
+        disabled={!props.canPrev}
+        aria-label="上一页产品"
+        title="上一页产品"
+        className="absolute left-4 top-1/2 flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full border border-[#E5E9F5] bg-white text-[#4B4BFF] shadow-sm transition hover:border-[#B9B4FF] hover:bg-[#F7F6FF] disabled:cursor-not-allowed disabled:text-[#B4BCD0] disabled:hover:border-[#E5E9F5] disabled:hover:bg-white"
+      >
+        ‹
+      </button>
       <div className="scrollbar-none flex gap-5 overflow-x-auto px-6">
         {props.loading && <div className="py-20 text-[14px] font-normal text-[#7A8499]">正在加载产品库...</div>}
         {props.error && <div className="py-20 text-[14px] font-medium text-[#FF4D4F]">{props.error}</div>}
@@ -613,7 +631,21 @@ function ProductCarousel(props: {
           <ProductCatalogCard key={product.brand + product.name} product={product} onSelect={props.onSelect} />
         ))}
       </div>
-      <button type="button" className="absolute right-4 top-1/2 flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full border border-[#E5E9F5] bg-white text-[#4B4BFF] shadow-sm">›</button>
+      {showPager && (
+        <div className="pointer-events-none absolute bottom-2 left-1/2 -translate-x-1/2 rounded-full bg-white/90 px-3 py-1 text-[11px] font-semibold text-[#7A8499] shadow-sm">
+          {props.page + 1} / {props.totalPages}
+        </div>
+      )}
+      <button
+        type="button"
+        onClick={props.onNext}
+        disabled={!props.canNext}
+        aria-label="下一页产品"
+        title="下一页产品"
+        className="absolute right-4 top-1/2 flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full border border-[#E5E9F5] bg-white text-[#4B4BFF] shadow-sm transition hover:border-[#B9B4FF] hover:bg-[#F7F6FF] disabled:cursor-not-allowed disabled:text-[#B4BCD0] disabled:hover:border-[#E5E9F5] disabled:hover:bg-white"
+      >
+        ›
+      </button>
     </section>
   );
 }
@@ -689,14 +721,14 @@ function SelectedCompareBar(props: {
 type AddProductFormState = {
   brandName: string;
   productName: string;
-  image: File | null;
+  images: File[];
 };
 
 function AddProductModal(props: {
   open: boolean;
   onClose: () => void;
 }) {
-  const [form, setForm] = useState<AddProductFormState>({ brandName: "", productName: "", image: null });
+  const [form, setForm] = useState<AddProductFormState>({ brandName: "", productName: "", images: [] });
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
@@ -712,7 +744,7 @@ function AddProductModal(props: {
 
   function resetAndClose() {
     if (submitting) return;
-    setForm({ brandName: "", productName: "", image: null });
+    setForm({ brandName: "", productName: "", images: [] });
     setError("");
     setSuccess("");
     props.onClose();
@@ -742,16 +774,16 @@ function AddProductModal(props: {
       setError("请填写产品名。");
       return;
     }
-    if (!form.image) {
-      setError("请上传清晰的猫粮包装或配料表图片。");
+    if (!form.images.length) {
+      setError("请上传包含配料表和营养成分保证值的产品图片。");
       return;
     }
-    if (!form.image.type.startsWith("image/")) {
+    if (form.images.some((image) => !image.type.startsWith("image/"))) {
       setError("仅支持 JPG、PNG、WEBP 等图片格式。");
       return;
     }
-    if (form.image.size > 10 * 1024 * 1024) {
-      setError("图片大小不能超过 10MB。");
+    if (form.images.some((image) => image.size > 10 * 1024 * 1024)) {
+      setError("每张图片大小不能超过 10MB。");
       return;
     }
 
@@ -776,8 +808,8 @@ function AddProductModal(props: {
       const uploadBody = new FormData();
       uploadBody.append("brand_name", brandName);
       uploadBody.append("product_name", productName);
-      uploadBody.append("image", form.image);
-      const uploadResponse = await fetch(`/api/cat-food/tasks/${taskId}/images`, {
+      form.images.forEach((image) => uploadBody.append("images", image));
+      const uploadResponse = await fetch(`/api/cat-food/tasks/${taskId}/image-batch`, {
         method: "POST",
         body: uploadBody,
       });
@@ -805,7 +837,7 @@ function AddProductModal(props: {
         <div className="flex items-start justify-between gap-4 border-b border-[#EDF0F7] px-6 py-5">
           <div>
             <h2 id="add-product-title" className="text-[20px] font-bold text-[#172033]">添加产品</h2>
-            <p className="mt-1 text-[12px] leading-5 text-[#7A8499]">提交产品名称和包装或配料表图片，我们会先完成资料解析，再生成可用于对比的营养指标。</p>
+            <p className="mt-1 text-[12px] leading-5 text-[#7A8499]">提交品牌、产品名称，以及包含配料表和营养成分保证值的图片；内容分布在不同包装面时可上传多张。</p>
           </div>
           <button type="button" onClick={resetAndClose} disabled={submitting} aria-label="关闭" className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[#F3F5FA] text-[20px] text-[#657087] hover:bg-[#E9EDF5] disabled:cursor-not-allowed">×</button>
         </div>
@@ -838,23 +870,72 @@ function AddProductModal(props: {
 
           <label className="block space-y-2">
             <span className="text-[13px] font-semibold text-[#253047]">产品图片 <i className="not-italic text-[#FF4D4F]">*</i></span>
-            <span className={`flex min-h-[132px] cursor-pointer flex-col items-center justify-center rounded-xl border border-dashed px-5 py-5 text-center transition ${form.image ? "border-[#867EFF] bg-[#F7F6FF]" : "border-[#C9D1DF] bg-[#FAFBFD] hover:border-[#867EFF] hover:bg-[#F8F7FF]"} ${submitting || success ? "pointer-events-none opacity-70" : ""}`}>
+            <span className={`flex min-h-[132px] cursor-pointer flex-col items-center justify-center rounded-xl border border-dashed px-5 py-5 text-center transition ${form.images.length ? "border-[#867EFF] bg-[#F7F6FF]" : "border-[#C9D1DF] bg-[#FAFBFD] hover:border-[#867EFF] hover:bg-[#F8F7FF]"} ${submitting || success ? "pointer-events-none opacity-70" : ""}`}>
               <input
                 type="file"
+                multiple
                 accept="image/jpeg,image/png,image/webp"
                 className="sr-only"
                 disabled={submitting || Boolean(success)}
-                onChange={(event) => setForm((value) => ({ ...value, image: event.target.files?.[0] || null }))}
+                onChange={(event) => {
+                  const selected = Array.from(event.target.files || []);
+                  setForm((value) => {
+                    const merged = [...value.images];
+                    selected.forEach((image) => {
+                      const key = `${image.name}:${image.size}:${image.lastModified}`;
+                      const exists = merged.some((item) => `${item.name}:${item.size}:${item.lastModified}` === key);
+                      if (!exists && merged.length < 3) merged.push(image);
+                    });
+                    return { ...value, images: merged };
+                  });
+                  if (form.images.length + selected.length > 3) setError("一次最多上传 3 张图片。");
+                  else setError("");
+                  event.target.value = "";
+                }}
               />
               <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#EEEAFE] text-[22px] text-[#5145FF]">＋</span>
-              <span className="mt-3 text-[13px] font-semibold text-[#35415A]">{form.image ? form.image.name : "点击上传包装正面或配料表图片"}</span>
-              <span className="mt-1 text-[11px] text-[#8A94A8]">{form.image ? `${(form.image.size / 1024 / 1024).toFixed(2)} MB` : "支持 JPG、PNG、WEBP，单张不超过 10MB"}</span>
+              <span className="mt-3 text-[13px] font-semibold text-[#35415A]">{form.images.length ? `已选择 ${form.images.length} 张：${form.images.map((image) => image.name).join("、")}` : "点击上传配料表和营养成分保证值图片"}</span>
+              <span className="mt-1 text-[11px] text-[#8A94A8]">支持 1～3 张 JPG、PNG、WEBP，单张不超过 10MB</span>
             </span>
           </label>
 
+          {form.images.length > 0 && (
+            <div className="grid gap-2 sm:grid-cols-3">
+              {form.images.map((image, index) => (
+                <div key={`${image.name}:${image.size}:${image.lastModified}`} className="flex min-w-0 items-center gap-2 rounded-lg border border-[#E1E6F0] bg-white px-3 py-2">
+                  <span className="min-w-0 flex-1 truncate text-[11px] text-[#59657A]" title={image.name}>{index + 1}. {image.name}</span>
+                  <button
+                    type="button"
+                    disabled={submitting || Boolean(success)}
+                    onClick={() => setForm((value) => ({ ...value, images: value.images.filter((_, itemIndex) => itemIndex !== index) }))}
+                    className="shrink-0 text-[16px] font-bold text-[#A0A8BA] hover:text-[#FF4D4F] disabled:cursor-not-allowed"
+                    aria-label={`删除 ${image.name}`}
+                  >×</button>
+                </div>
+              ))}
+            </div>
+          )}
+
           <div className="rounded-xl bg-[#F4F7FC] px-4 py-3 text-[12px] leading-5 text-[#657087]">
-            图片越清晰，品牌、产品名、保证值及配料表识别越准确。新产品必须完成评分审核后才能参与两款粮对比。
+            必须同时包含完整配料表和营养成分保证值；若两者在不同包装面，请分别拍摄并一起上传。新产品完成审核后才能参与对比。
           </div>
+
+          <a
+            href="/products/cat-food-upload-example.png"
+            target="_blank"
+            rel="noreferrer"
+            className="flex items-center gap-4 rounded-xl border border-[#E1E6F0] bg-white p-3 transition hover:border-[#867EFF] hover:bg-[#FAF9FF]"
+          >
+            <img
+              src="/products/cat-food-upload-example.png"
+              alt="配料表和营养成分保证值合格图片示例"
+              className="h-24 w-20 shrink-0 rounded-lg border border-[#E1E6F0] object-cover object-top"
+            />
+            <span className="min-w-0">
+              <strong className="block text-[13px] text-[#253047]">合格图片示例</strong>
+              <span className="mt-1 block text-[12px] leading-5 text-[#7A8499]">红框中的“原料组成”和“产品分析保证值”需清晰可读；不在同一张图时请分别上传。点击查看大图。</span>
+            </span>
+          </a>
 
           {error && <div className="rounded-xl border border-[#FFD4D6] bg-[#FFF1F2] px-4 py-3 text-[12px] font-medium text-[#D93B3E]">{error}</div>}
           {success && <div className="rounded-xl border border-[#CDEAC8] bg-[#F1FAEF] px-4 py-3 text-[12px] font-medium leading-5 text-[#34822C]">{success}</div>}
@@ -975,10 +1056,11 @@ function originalRoleIngredients(evidence?: MaterialRoleEvidence): Record<string
       ? Object.keys(features as Record<string, unknown>)
       : [];
     const hasFeature = (prefix: string) => featureKeys.some((key) => key.startsWith(prefix));
+    const hasExplicitFatSource = featureKeys.includes("fat.fat_sources");
     if (Boolean(item.is_protein) || role.includes("蛋白")) add("protein", original);
     if (role.includes("碳水") || family.includes("淀粉") || hasFeature("starch.")) add("starch", original);
-    if (role.includes("脂肪") || family.includes("油脂") || hasFeature("fat.")) add("fat", original);
-    if (role.includes("纤维") || family.includes("纤维") || hasFeature("fiber.")) add("fiber", original);
+    if (role.includes("脂肪") || family.includes("油脂") || hasExplicitFatSource) add("fat", original);
+    if (role.includes("纤维") || role.includes("草本功能") || family.includes("纤维") || hasFeature("fiber.")) add("fiber", original);
     if (role.includes("抗氧化") || role.includes("微量") || role.includes("皮肤") || hasFeature("antioxidant.")) add("protection", original);
   }
   return roles;
@@ -1580,6 +1662,7 @@ function CatFoodComparePage() {
   const [productQuery, setProductQuery] = useState("");
   const [priceFilter, setPriceFilter] = useState("全部");
   const [originFilter, setOriginFilter] = useState("全部");
+  const [carouselPage, setCarouselPage] = useState(0);
   const [task, setTask] = useState<CatFoodTask | null>(null);
   const [compareResult, setCompareResult] = useState<CompareResult | null>(null);
   const [compareLoading, setCompareLoading] = useState(false);
@@ -1643,13 +1726,28 @@ function CatFoodComparePage() {
         if (priceFilter !== "全部" && option.price_bucket !== priceFilter) return false;
         if (originFilter !== "全部" && option.origin_type !== originFilter) return false;
         return true;
-      })
-      .slice(0, 5);
+      });
   }, [brandQuery, originFilter, priceFilter, productOptions, productQuery]);
 
-  const carouselProducts = filteredOptions.length
-    ? filteredOptions.map((option, index) => optionToProduct(option, index, productOptionValue(option) === currentFood || productOptionValue(option) === targetFood))
+  const carouselTotalPages = Math.max(1, Math.ceil(filteredOptions.length / PRODUCT_CAROUSEL_PAGE_SIZE));
+  const safeCarouselPage = Math.min(carouselPage, carouselTotalPages - 1);
+  const pagedOptions = filteredOptions.slice(
+    safeCarouselPage * PRODUCT_CAROUSEL_PAGE_SIZE,
+    safeCarouselPage * PRODUCT_CAROUSEL_PAGE_SIZE + PRODUCT_CAROUSEL_PAGE_SIZE,
+  );
+  const carouselProducts = pagedOptions.length
+    ? pagedOptions.map((option, index) => optionToProduct(option, safeCarouselPage * PRODUCT_CAROUSEL_PAGE_SIZE + index, productOptionValue(option) === currentFood || productOptionValue(option) === targetFood))
     : products;
+
+  useEffect(() => {
+    setCarouselPage(0);
+  }, [brandQuery, originFilter, priceFilter, productQuery]);
+
+  useEffect(() => {
+    if (carouselPage >= carouselTotalPages) {
+      setCarouselPage(carouselTotalPages - 1);
+    }
+  }, [carouselPage, carouselTotalPages]);
 
   function taskPayload() {
     return {
@@ -1820,7 +1918,19 @@ function CatFoodComparePage() {
               onPriceFilterChange={setPriceFilter}
               onOriginFilterChange={setOriginFilter}
             />
-            <ProductCarousel products={carouselProducts} onSelect={handleSelectProduct} loading={productsLoading} error={productsError} />
+            <ProductCarousel
+              products={carouselProducts}
+              onSelect={handleSelectProduct}
+              loading={productsLoading}
+              error={productsError}
+              canPrev={filteredOptions.length > 0 && safeCarouselPage > 0}
+              canNext={filteredOptions.length > 0 && safeCarouselPage < carouselTotalPages - 1}
+              page={safeCarouselPage}
+              totalPages={carouselTotalPages}
+              totalCount={filteredOptions.length}
+              onPrev={() => setCarouselPage((page) => Math.max(0, page - 1))}
+              onNext={() => setCarouselPage((page) => Math.min(carouselTotalPages - 1, page + 1))}
+            />
             <SelectedCompareBar
               selectedCount={selectedCount}
               selectedProducts={selectedProducts}

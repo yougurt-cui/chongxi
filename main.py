@@ -12,7 +12,9 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from typing import Any
 
-from flask import Flask, Response, jsonify, redirect, request, send_from_directory
+from PIL import Image, ImageOps
+
+from flask import Flask, Response, jsonify, redirect, request, send_file, send_from_directory
 from werkzeug.utils import secure_filename
 import yaml
 
@@ -33,6 +35,7 @@ try:
     from .api.process_signal_api import process_signal_api
     from .api.taobao_sku_api import taobao_sku_api
     from .api.miniprogram_api import miniprogram_api
+    from .api.enterprise_api import enterprise_api
 except ImportError:
     from api.consumer_api import consumer_api
     from api.business_api import business_api
@@ -46,6 +49,7 @@ except ImportError:
     from api.process_signal_api import process_signal_api
     from api.taobao_sku_api import taobao_sku_api
     from api.miniprogram_api import miniprogram_api
+    from api.enterprise_api import enterprise_api
 
 from services import cat_food_task_service as task_store
 
@@ -81,6 +85,10 @@ def _build_uploaded_image_filename(product_name: str, original_filename: str) ->
     return f"{product_slug}_{timestamp}{suffix}"
 
 
+def _cat_food_upload_date_dir() -> Path:
+    return Path(datetime.now().strftime("%Y%m%d"))
+
+
 def _safe_filename_stem(value: str, *, max_length: int = 80) -> str:
     stem = str(value or "").strip()
     if not stem:
@@ -99,6 +107,31 @@ def _dedupe_storage_path(path: Path) -> Path:
         if not candidate.exists():
             return candidate
     raise RuntimeError(f"无法生成唯一上传文件名：{path.name}")
+
+
+def _build_ocr_evidence_image(image_paths: list[Path], output_path: Path) -> None:
+    """Combine one product's evidence photos into one OCR input without losing originals."""
+    opened: list[Image.Image] = []
+    try:
+        for path in image_paths:
+            image = ImageOps.exif_transpose(Image.open(path)).convert("RGB")
+            if image.width > 1800:
+                height = max(1, round(image.height * 1800 / image.width))
+                image = image.resize((1800, height), Image.Resampling.LANCZOS)
+            opened.append(image)
+        canvas_width = max(image.width for image in opened)
+        gap = 24
+        canvas_height = sum(image.height for image in opened) + gap * (len(opened) - 1)
+        canvas = Image.new("RGB", (canvas_width, canvas_height), "white")
+        top = 0
+        for image in opened:
+            left = (canvas_width - image.width) // 2
+            canvas.paste(image, (left, top))
+            top += image.height + gap
+        canvas.save(output_path, "JPEG", quality=94, optimize=True)
+    finally:
+        for image in opened:
+            image.close()
 
 
 def _load_catfood_brand_options() -> list[str]:
@@ -1886,6 +1919,7 @@ def create_app() -> Flask:
     flask_app.register_blueprint(process_signal_api)
     flask_app.register_blueprint(taobao_sku_api)
     flask_app.register_blueprint(miniprogram_api)
+    flask_app.register_blueprint(enterprise_api)
 
     @flask_app.get("/health")
     def health() -> tuple[dict, int]:
@@ -1933,6 +1967,46 @@ def create_app() -> Flask:
     def formula_clue_analysis_html():
         return send_from_directory(WEB_DIR, "formula-clue-analysis.html")
 
+    @flask_app.get("/brand-growth-engine.html")
+    def brand_growth_engine_html():
+        return send_from_directory(WEB_DIR, "brand-growth-engine.html")
+
+    @flask_app.get("/enterprise-portal.html")
+    def enterprise_portal_html():
+        return send_from_directory(WEB_DIR, "enterprise-portal.html")
+
+    @flask_app.get("/api/brand-growth-engine/demand-dashboard")
+    def brand_growth_engine_demand_dashboard():
+        try:
+            from services.brand_growth_engine_service import build_demand_dashboard
+            return jsonify(build_demand_dashboard())
+        except Exception as exc:
+            return _json_error(f"用户需求盘点加载失败：{exc}", 500)
+
+    @flask_app.get("/api/brand-growth-engine/cross-analysis")
+    def brand_growth_engine_cross_analysis():
+        try:
+            from services.brand_growth_engine_service import build_cross_demand_analysis
+            return jsonify(build_cross_demand_analysis())
+        except Exception as exc:
+            return _json_error(f"交叉需求分析加载失败：{exc}", 500)
+
+    @flask_app.get("/api/brand-growth-engine/disease-representatives")
+    def brand_growth_engine_disease_representatives():
+        try:
+            from services.brand_growth_engine_service import build_disease_representatives
+            return jsonify(build_disease_representatives(request.args.get("symptom")))
+        except Exception as exc:
+            return _json_error(f"病症代表产品/原料加载失败：{exc}", 500)
+
+    @flask_app.get("/api/brand-growth-engine/experience-insight")
+    def brand_growth_engine_experience_insight():
+        try:
+            from services.brand_growth_engine_service import build_experience_demand_insight
+            return jsonify(build_experience_demand_insight(request.args.get("symptom")))
+        except Exception as exc:
+            return _json_error(f"Experience 用户洞察加载失败：{exc}", 500)
+
     @flask_app.get("/business/workbench.html")
     def business_workbench_html():
         host = request.host.split(":", 1)[0]
@@ -1974,6 +2048,23 @@ def create_app() -> Flask:
             return _json_error("任务不存在。", 404)
         return jsonify({"task": task})
 
+    @flask_app.get("/api/cat-food/images/<image_id>/content")
+    def get_cat_food_image_content(image_id: str):
+        image = task_store.get_image(image_id)
+        if not image:
+            return _json_error("图片不存在。", 404)
+        storage_path = Path(str(image.get("storage_path") or "")).resolve()
+        upload_root = task_store.UPLOAD_DIR.resolve()
+        if upload_root not in storage_path.parents or not storage_path.is_file():
+            return _json_error("图片文件不存在。", 404)
+        return send_file(
+            storage_path,
+            mimetype=image.get("content_type") or "application/octet-stream",
+            download_name=image.get("original_filename") or storage_path.name,
+            conditional=True,
+            max_age=300,
+        )
+
     @flask_app.post("/api/cat-food/tasks/<task_id>/images")
     def upload_cat_food_task_image(task_id: str):
         task = task_store.get_task(task_id)
@@ -1995,7 +2086,7 @@ def create_app() -> Flask:
         if not product_name:
             return _json_error("请填写产品名。")
         filename = _build_uploaded_image_filename(product_name, image_file.filename)
-        image_dir = task_store.UPLOAD_DIR / task_id
+        image_dir = task_store.UPLOAD_DIR / _cat_food_upload_date_dir()
         image_dir.mkdir(parents=True, exist_ok=True)
         storage_path = _dedupe_storage_path(image_dir / filename)
         image_file.save(storage_path)
@@ -2042,6 +2133,83 @@ def create_app() -> Flask:
             "image": image,
             "orchestrator_task": orchestrator_task,
         }), 202
+
+    @flask_app.post("/api/cat-food/tasks/<task_id>/image-batch")
+    def upload_cat_food_task_image_batch(task_id: str):
+        task = task_store.get_task(task_id)
+        if not task:
+            return _json_error("任务不存在。", 404)
+        image_files = [item for item in request.files.getlist("images") if item and item.filename]
+        if not 1 <= len(image_files) <= 3:
+            return _json_error("请上传 1～3 张产品图片。")
+        if request.content_length and request.content_length > 32 * 1024 * 1024:
+            return _json_error("全部图片总大小不能超过 30MB。", 413)
+        brand_name = str(request.form.get("brand_name") or "").strip()
+        product_name = str(request.form.get("product_name") or "").strip()
+        if not brand_name:
+            return _json_error("请填写品牌名。")
+        if not product_name:
+            return _json_error("请填写产品名。")
+        for image_file in image_files:
+            if image_file.content_type and not image_file.content_type.startswith("image/"):
+                return _json_error("请上传 jpg、png、webp 等图片格式。")
+
+        image_dir = task_store.UPLOAD_DIR / _cat_food_upload_date_dir()
+        image_dir.mkdir(parents=True, exist_ok=True)
+        images = []
+        storage_paths: list[Path] = []
+        try:
+            for image_file in image_files:
+                filename = _build_uploaded_image_filename(product_name, image_file.filename)
+                storage_path = _dedupe_storage_path(image_dir / filename)
+                image_file.save(storage_path)
+                if storage_path.stat().st_size > 10 * 1024 * 1024:
+                    raise ValueError(f"图片 {image_file.filename} 超过 10MB。")
+                with Image.open(storage_path) as checked:
+                    checked.verify()
+                storage_paths.append(storage_path)
+                images.append(task_store.add_uploaded_image(
+                    task_id,
+                    product_name=product_name,
+                    original_filename=image_file.filename,
+                    storage_path=storage_path,
+                    content_type=image_file.content_type or "image/jpeg",
+                    file_size=storage_path.stat().st_size,
+                ))
+
+            evidence_path = _dedupe_storage_path(
+                image_dir / f"{_safe_filename_stem(product_name)}_OCR_{datetime.now():%m%d%H%M%S}.jpg"
+            )
+            _build_ocr_evidence_image(storage_paths, evidence_path)
+            image_ids = [image["id"] for image in images]
+            payload = {
+                "cat_food_task_id": task_id,
+                "image_id": image_ids[0],
+                "image_ids": image_ids,
+                "image_count": len(images),
+                "brand_name": brand_name,
+                "product_name": product_name,
+                "image_path": str(evidence_path),
+                "original_filename": "、".join(image["original_filename"] for image in images),
+                "content_type": "image/jpeg",
+                "file_size": evidence_path.stat().st_size,
+                "sha256": task_store.file_sha256(evidence_path),
+            }
+            orchestrator_task = create_orchestrator_task("catfood_image_analysis", payload)
+            orchestrator_task = apply_orchestrator_node_result(
+                orchestrator_task["id"], "upload_check", call_status="success", output=payload,
+            )
+            for image in images:
+                _cat_food_task_executor.submit(_parse_uploaded_image_task, task_id, image["id"])
+            return jsonify({
+                "task": task_store.get_task(task_id),
+                "images": images,
+                "orchestrator_task": orchestrator_task,
+            }), 202
+        except Exception as exc:
+            for storage_path in storage_paths:
+                storage_path.unlink(missing_ok=True)
+            return _json_error(f"图片处理失败：{exc}", 400)
 
     @flask_app.post("/api/cat-food/tasks/<task_id>/compare")
     def start_cat_food_compare_task(task_id: str):
@@ -2311,6 +2479,13 @@ def create_app() -> Flask:
         return send_from_directory(WEB_DIR, "index.html")
 
     _start_consumer_apps()
+
+    # 企业试用与付费系统 — 初始化数据库表
+    try:
+        from services.enterprise_service import ensure_tables
+        ensure_tables()
+    except Exception:
+        pass
 
     return flask_app
 

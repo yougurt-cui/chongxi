@@ -486,6 +486,15 @@
       border: 1px solid var(--line);
       margin-top: 6px;
     }
+    .node-image-preview {
+      display: block;
+      max-width: min(820px, 82vw);
+      max-height: 72vh;
+      margin: 0 auto;
+      object-fit: contain;
+      border-radius: 8px;
+      background: var(--panel-soft);
+    }
 
     .section[hidden] { display: none; }
     textarea { min-height: 172px; resize: vertical; line-height: 1.55; }
@@ -566,11 +575,12 @@
 
     <section class="tabs" aria-label="人工确认菜单">
       <button id="nodeTab" class="tab active" type="button" data-tab="node">node节点调度</button>
-      <button id="identityTab" class="tab" type="button" data-tab="identity">brand身份认证</button>
+      <button id="identityTab" class="tab" type="button" data-tab="identity">身份认证</button>
       <button id="diseaseTab" class="tab" type="button" data-tab="disease">病症数据确认</button>
       <button id="contentReviewTab" class="tab" type="button" data-tab="content">内容审核</button>
       <button id="reportReviewTab" class="tab" type="button" data-tab="report">举报审核</button>
       <button id="ideaTab" class="tab" type="button" data-tab="idea">创意管理</button>
+      <button id="enterpriseAdminTab" class="tab" type="button" data-tab="enterprise-admin">企业后台</button>
     </section>
 
     <div id="toast" class="toast"></div>
@@ -610,6 +620,7 @@
       <section class="tabs" aria-label="身份认证类型">
         <button id="brandIdentityTab" class="tab active" type="button">品牌身份</button>
         <button id="productIdentityTab" class="tab" type="button">产品身份</button>
+        <button id="formulaIdentityTab" class="tab" type="button">配方身份</button>
         <button id="ingredientIdentityTab" class="tab" type="button">原材料身份</button>
       </section>
 
@@ -729,6 +740,35 @@
             </table>
           </div>
           <div id="productIdentityEmpty" class="empty" style="display:none;">暂无产品候选。</div>
+        </section>
+      </div>
+
+      <div id="formulaIdentityPanel" hidden>
+        <section class="toolbar">
+          <div>
+            <div class="title">待确认配方冲突</div>
+            <div id="formulaIdentitySummary" class="muted">等待加载...</div>
+          </div>
+          <button id="formulaIdentityRefresh" class="button secondary" type="button">刷新配方冲突</button>
+        </section>
+        <section class="card">
+          <div class="table-wrap">
+            <table style="min-width:1350px;">
+              <thead>
+                <tr>
+                  <th>来源</th>
+                  <th>标准产品</th>
+                  <th>OCR 产品</th>
+                  <th>当前原料</th>
+                  <th>冲突候选</th>
+                  <th>确认方式</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody id="formulaIdentityRows"></tbody>
+            </table>
+          </div>
+          <div id="formulaIdentityEmpty" class="empty" style="display:none;">暂无配方冲突。</div>
         </section>
       </div>
 
@@ -946,6 +986,28 @@
       <div id="ideaEmpty" class="empty" style="display:none;">暂无创意内容，点击"新增创意"开始吧。</div>
     </section>
 
+    <section id="enterpriseAdminSection" class="section" hidden>
+      <section class="toolbar">
+        <div>
+          <div class="title">企业开通与订阅管理</div>
+          <div id="enterpriseAdminSummary" class="muted">企业、邀请码、订单与对公付款统一管理</div>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+          <button id="enterpriseAdminPrimary" class="button" type="button" hidden>生成邀请码</button>
+          <button id="enterpriseAdminRefresh" class="button secondary" type="button">刷新</button>
+        </div>
+      </section>
+      <section class="tabs" aria-label="企业后台菜单">
+        <button class="tab active" type="button" data-enterprise-view="companies">企业管理</button>
+        <button class="tab" type="button" data-enterprise-view="invitations">邀请码管理</button>
+        <button class="tab" type="button" data-enterprise-view="orders">订单管理</button>
+        <button class="tab" type="button" data-enterprise-view="corporate">对公确认</button>
+      </section>
+      <section class="card">
+        <div id="enterpriseAdminContent" class="table-wrap"><div class="empty">请选择管理功能。</div></div>
+      </section>
+    </section>
+
     <!-- Idea edit / create dialog -->
     <dialog id="ideaDialog">
       <form method="dialog" class="modal">
@@ -1027,6 +1089,19 @@
       </form>
     </dialog>
 
+    <dialog id="imageDialog">
+      <form method="dialog" class="modal">
+        <div class="modal-head">
+          <div>
+            <div class="title">用户上传图片</div>
+            <div id="imageDialogMeta" class="muted" style="margin-top:6px;"></div>
+          </div>
+          <button class="small-button secondary" value="cancel" type="submit">关闭</button>
+        </div>
+        <img id="nodeImagePreview" class="node-image-preview" alt="用户上传的图片" />
+      </form>
+    </dialog>
+
     <dialog id="diseaseBrandStatsDialog">
       <form method="dialog" class="modal">
         <div class="modal-head">
@@ -1066,6 +1141,9 @@
     const outputDialog = document.getElementById("outputDialog");
     const outputDialogMeta = document.getElementById("outputDialogMeta");
     const outputJsonEl = document.getElementById("outputJson");
+    const imageDialog = document.getElementById("imageDialog");
+    const imageDialogMeta = document.getElementById("imageDialogMeta");
+    const nodeImagePreview = document.getElementById("nodeImagePreview");
     const nodeTab = document.getElementById("nodeTab");
     const identityTab = document.getElementById("identityTab");
     const diseaseTab = document.getElementById("diseaseTab");
@@ -1082,6 +1160,7 @@
     const identityRefreshBtn = document.getElementById("identityRefresh");
     const brandIdentityTab = document.getElementById("brandIdentityTab");
     const productIdentityTab = document.getElementById("productIdentityTab");
+    const formulaIdentityTab = document.getElementById("formulaIdentityTab");
     const ingredientIdentityTab = document.getElementById("ingredientIdentityTab");
     const brandIdentityPanel = document.getElementById("brandIdentityPanel");
     const brandCandidateRows = document.getElementById("brandCandidateRows");
@@ -1089,6 +1168,11 @@
     const brandCandidateSummary = document.getElementById("brandCandidateSummary");
     const brandCandidateRefresh = document.getElementById("brandCandidateRefresh");
     const productIdentityPanel = document.getElementById("productIdentityPanel");
+    const formulaIdentityPanel = document.getElementById("formulaIdentityPanel");
+    const formulaIdentityRowsEl = document.getElementById("formulaIdentityRows");
+    const formulaIdentityEmptyEl = document.getElementById("formulaIdentityEmpty");
+    const formulaIdentitySummaryEl = document.getElementById("formulaIdentitySummary");
+    const formulaIdentityRefreshBtn = document.getElementById("formulaIdentityRefresh");
     const ingredientIdentityPanel = document.getElementById("ingredientIdentityPanel");
     const ingredientIdentityRowsEl = document.getElementById("ingredientIdentityRows");
     const ingredientIdentityEmptyEl = document.getElementById("ingredientIdentityEmpty");
@@ -1145,6 +1229,12 @@
     const reportReviewApplyFilter = document.getElementById("reportReviewApplyFilter");
     const ideaTab = document.getElementById("ideaTab");
     const ideaSection = document.getElementById("ideaSection");
+    const enterpriseAdminTab = document.getElementById("enterpriseAdminTab");
+    const enterpriseAdminSection = document.getElementById("enterpriseAdminSection");
+    const enterpriseAdminContent = document.getElementById("enterpriseAdminContent");
+    const enterpriseAdminSummary = document.getElementById("enterpriseAdminSummary");
+    const enterpriseAdminRefresh = document.getElementById("enterpriseAdminRefresh");
+    const enterpriseAdminPrimary = document.getElementById("enterpriseAdminPrimary");
     const ideaSummaryEl = document.getElementById("ideaSummary");
     const ideaRefreshBtn = document.getElementById("ideaRefresh");
     const ideaCreateBtn = document.getElementById("ideaCreate");
@@ -1168,6 +1258,7 @@
     let ideaCategories = [];
     let activeOcrItem = null;
     let activeTab = "node";
+    let activeEnterpriseView = "companies";
     let activeIdentityTab = "brand";
     let focusedProductReview = null;
     const diseasePageSize = 100;
@@ -1184,11 +1275,21 @@
       }, 2600);
     }
 
-    async function api(path, options = {}) {
-      const response = await fetch(path, options);
+    async function api(path, options = {}, retried = false) {
+      const headers = new Headers(options.headers || {});
+      const adminToken = window.sessionStorage.getItem("chongxi_admin_token") || "";
+      if (adminToken) headers.set("X-Admin-Token", adminToken);
+      const response = await fetch(path, { ...options, headers });
       const data = await response.json();
+      if (response.status === 401 && !retried) {
+        const supplied = window.prompt("请输入管理员令牌：", "");
+        if (supplied && supplied.trim()) {
+          window.sessionStorage.setItem("chongxi_admin_token", supplied.trim());
+          return api(path, options, true);
+        }
+      }
       if (!response.ok || data.ok === false) {
-        throw new Error(data.error || "请求失败");
+        throw new Error(data.error || data.message || "请求失败");
       }
       return data;
     }
@@ -1216,10 +1317,13 @@
       return (output && (output.ocr_text || output.text)) || "";
     }
 
-    function payloadSummary(payload) {
+    function payloadSummary(payload, formulaId) {
       const parts = [];
+      if (formulaId) parts.push(`formula_id：${formulaId}`);
+      if (payload.brand_name) parts.push(`品牌：${payload.brand_name}`);
       if (payload.product_name) parts.push(`产品：${payload.product_name}`);
       if (payload.original_filename) parts.push(`图片：${payload.original_filename}`);
+      if (payload.image_count > 1) parts.push(`共${payload.image_count}张`);
       if (payload.image_id) parts.push(`图片ID：${String(payload.image_id).slice(0, 8)}`);
       if (payload.cat_food_task_id) parts.push(`来源任务：${String(payload.cat_food_task_id).slice(0, 8)}`);
       return parts.length ? parts.join("｜") : "-";
@@ -1247,11 +1351,12 @@
           </td>
           <td><span class="status-badge">${item.node_status === "failed" ? "执行失败" : item.node_status}</span></td>
           <td class="reason-cell">${item.node_error_message || "需要人工确认"}</td>
-          <td class="payload-cell">${payloadSummary(item.task_payload)}</td>
+          <td class="payload-cell">${payloadSummary(item.task_payload, item.formula_id)}</td>
           <td class="muted">${item.node_updated_at}</td>
           <td>
             <div class="row-actions">
               <button class="small-button secondary" data-action="output" type="button">查看输出</button>
+              ${item.task_payload && item.task_payload.image_id ? '<button class="small-button secondary" data-action="image" type="button">查看图片</button>' : ""}
               ${item.node_code === "product_standardize" && reviewCandidateId ? '<button class="small-button" data-action="product-review" type="button">审核产品候选</button>' : ""}
               ${item.node_code === "ocr_formula" && item.node_status !== "failed" ? '<button class="small-button" data-action="ocr" type="button">OCR 修改</button>' : ""}
               <button class="small-button secondary" data-action="reextract" type="button">重新抽取</button>
@@ -1265,6 +1370,28 @@
           outputJsonEl.textContent = safeJson(item.output);
           outputDialog.showModal();
         });
+
+        const imageButton = row.querySelector('[data-action="image"]');
+        if (imageButton) {
+          imageButton.addEventListener("click", () => {
+            const payload = item.task_payload || {};
+            const imageIds = Array.isArray(payload.image_ids) && payload.image_ids.length
+              ? payload.image_ids
+              : [payload.image_id];
+            let imageIndex = 0;
+            const showImage = () => {
+              nodeImagePreview.src = `/api/cat-food/images/${encodeURIComponent(imageIds[imageIndex])}/content`;
+              imageDialogMeta.textContent = `${payload.original_filename || "用户图片"}｜第 ${imageIndex + 1}/${imageIds.length} 张｜点击图片查看下一张`;
+            };
+            nodeImagePreview.onclick = () => {
+              imageIndex = (imageIndex + 1) % imageIds.length;
+              showImage();
+            };
+            nodeImagePreview.onerror = () => showToast("图片加载失败或文件不存在", "error");
+            showImage();
+            imageDialog.showModal();
+          });
+        }
 
         row.querySelector('[data-action="cancel"]').addEventListener("click", async () => {
           if (!window.confirm("确认作废整个编排任务？")) return;
@@ -1296,7 +1423,7 @@
               taskId: item.task_id,
               nodeCode: item.node_code,
             };
-            productStatusFilter.value = "";
+            productStatusFilter.value = "needs_manual_review,pending";
             productQualityFilter.value = "";
             productBrandFilter.value = "";
             switchTab("identity");
@@ -1312,7 +1439,16 @@
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ reason: "人工确认页面触发重新抽取" }),
             });
-            showToast("节点已重置为重新抽取");
+            const dispatchResult = await api("/api/orchestrator/dispatch-call-sync", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                limit: 1,
+                task_id: item.task_id,
+                node_codes: [item.node_code],
+              }),
+            });
+            showToast(dispatchResult.scanned ? "当前节点 API 已重新执行" : "节点已重置，当前节点暂不可执行");
           });
         });
 
@@ -1596,6 +1732,7 @@
             }
             if (completedTaskIds.length) {
               focusedProductReview = null;
+              productStatusFilter.value = "needs_manual_review,pending";
               showToast(`重复配方已复用，${completedTaskIds.length} 个任务已直接完结`);
             } else if (resumedTaskIds.length || reviewContext) {
               focusedProductReview = null;
@@ -1810,6 +1947,12 @@
       return `${labels[safety.status] || safety.status}｜${safety.check_type || "-"}${safety.trace_id ? `｜${safety.trace_id}` : ""}`;
     }
 
+    function ensureContentDeleted(result) {
+      if (result?.item?.status !== "deleted") {
+        throw new Error("后端未确认删除，请刷新后重试");
+      }
+    }
+
     function renderContentReviewItems(items) {
       contentReviewSummaryEl.textContent = `${items.length} 条内容`;
       contentReviewRowsEl.innerHTML = "";
@@ -1878,11 +2021,12 @@
         row.querySelector('[data-action="delete-content"]').addEventListener("click", async () => {
           if (!window.confirm(`确认删除这条${item.type === "post" ? "瞬间" : "评论"}？`)) return;
           await runAction(async () => {
-            await api(`/api/pipeline/miniprogram-content/${item.type}/${item.id}/review`, {
+            const result = await api(`/api/pipeline/miniprogram-content/${item.type}/${item.id}/review`, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ action: "delete" }),
             });
+            ensureContentDeleted(result);
             showToast("内容已删除");
           });
         });
@@ -2112,6 +2256,124 @@
         `<option value="${escapeHtml(item.standard_name)}">${escapeHtml(item.standard_ingredient_id)}</option>`).join("");
     }
 
+    function formulaCandidateLabel(candidate) {
+      const formulaId = candidate.formula_id || "-";
+      const version = candidate.formula_version || "-";
+      const similarity = candidate.similarity ?? candidate.ingredient_evidence?.score ?? "-";
+      const nutrition = candidate.nutrition_evidence
+        ? `${candidate.nutrition_evidence.matched_count || 0}/${candidate.nutrition_evidence.comparable_count || 0}`
+        : "-";
+      return `formula ${formulaId}｜v${version}｜原料 ${similarity}｜营养 ${nutrition}`;
+    }
+
+    function renderFormulaIdentityItems(items) {
+      formulaIdentitySummaryEl.textContent = `待确认 ${items.length} 条`;
+      formulaIdentityRowsEl.innerHTML = "";
+      formulaIdentityEmptyEl.style.display = items.length ? "none" : "block";
+      items.forEach((item) => {
+        const row = document.createElement("tr");
+        const existingFormulas = item.existing_formulas || [];
+        const candidateOptions = existingFormulas.map((formula, index) =>
+          `<option value="${escapeHtml(formula.formula_id)}" ${index === 0 ? "selected" : ""}>formula ${escapeHtml(formula.formula_id)}｜v${escapeHtml(formula.formula_version)}｜${escapeHtml(compactText(formula.raw_ingredient_example, 42))}</option>`
+        ).join("");
+        const topCandidate = (item.formula_candidates || [])[0];
+        row.innerHTML = `
+          <td>
+            <div class="task-id">source_id: ${escapeHtml(item.source_id)}</div>
+            <div class="muted" style="margin-top:4px;">task: ${escapeHtml(item.task_id || "-")}</div>
+          </td>
+          <td>
+            <div><strong>${escapeHtml(item.standard_brand_name || "-")}</strong></div>
+            <div class="muted" style="margin-top:4px;">${escapeHtml(item.display_name || item.standard_product_name || "-")}</div>
+            <div class="task-id" style="margin-top:4px;">product_id: ${escapeHtml(item.product_id || "-")}</div>
+          </td>
+          <td>
+            <div>${escapeHtml(item.raw_product_name || "-")}</div>
+            <div class="muted" style="margin-top:4px;">${escapeHtml(item.raw_brand_name || "-")}</div>
+          </td>
+          <td class="payload-cell">${escapeHtml(compactText(item.raw_ingredient_composition, 180))}</td>
+          <td class="payload-cell">
+            ${topCandidate ? escapeHtml(formulaCandidateLabel(topCandidate)) : "无候选"}
+            <button class="small-button secondary" data-action="formula-output" type="button" style="margin-top:8px;">详情</button>
+          </td>
+          <td>
+            <select class="cell-input" data-field="formula_action">
+              <option value="create_new">创建新配方版本</option>
+              <option value="reuse">复用已有配方</option>
+            </select>
+            <select class="cell-input" data-field="formula_id" style="margin-top:8px;" ${existingFormulas.length ? "" : "disabled"}>
+              <option value="">选择已有 formula</option>
+              ${candidateOptions}
+            </select>
+          </td>
+          <td>
+            <div class="row-actions">
+              <button class="small-button" data-action="resolve-formula" type="button">确认配方</button>
+            </div>
+          </td>
+        `;
+
+        row.querySelector('[data-action="formula-output"]').addEventListener("click", () => {
+          outputDialogMeta.textContent = `source_id ${item.source_id}｜formula conflict`;
+          outputJsonEl.textContent = safeJson(item);
+          outputDialog.showModal();
+        });
+
+        row.querySelector('[data-action="resolve-formula"]').addEventListener("click", async () => {
+          const action = row.querySelector('[data-field="formula_action"]').value;
+          const formulaId = row.querySelector('[data-field="formula_id"]').value;
+          if (action === "reuse" && !formulaId) {
+            showToast("复用已有配方时必须选择 formula", "error");
+            return;
+          }
+          const label = action === "reuse" ? `复用 formula ${formulaId}` : "创建新配方版本";
+          if (!window.confirm(`确认 ${label}？`)) return;
+          await runAction(async () => {
+            const result = await api("/api/catfood/standardization/formula/resolve", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                source_id: item.source_id,
+                action,
+                formula_id: action === "reuse" ? Number(formulaId) : null,
+                reviewer: "pipeline-review-page",
+                review_note: "pipeline-review 配方身份确认",
+              }),
+            });
+            for (const taskId of result.resumed_task_ids || []) {
+              await api("/api/orchestrator/dispatch-call-sync", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  limit: 1,
+                  task_id: taskId,
+                  node_codes: ["formula_input_build"],
+                }),
+              });
+            }
+            showToast(`配方已确认：formula_id=${result.formula_id}`);
+          });
+        });
+
+        formulaIdentityRowsEl.appendChild(row);
+      });
+    }
+
+    async function loadFormulaIdentityItems() {
+      formulaIdentityRefreshBtn.disabled = true;
+      try {
+        const data = await api("/api/catfood/standardization/formula-conflicts?limit=200");
+        renderFormulaIdentityItems(data.items || []);
+      } catch (error) {
+        formulaIdentitySummaryEl.textContent = "加载失败";
+        formulaIdentityRowsEl.innerHTML = "";
+        formulaIdentityEmptyEl.style.display = "block";
+        formulaIdentityEmptyEl.textContent = error instanceof Error ? error.message : "加载失败";
+      } finally {
+        formulaIdentityRefreshBtn.disabled = false;
+      }
+    }
+
     function renderIngredientIdentityItems(items) {
       ingredientIdentitySummaryEl.textContent = `待确认 ${items.length} 条`;
       ingredientIdentityRowsEl.innerHTML = "";
@@ -2126,7 +2388,7 @@
           <td><select class="cell-input" data-field="source_type">${options(ingredientMetaOptions.sources, "选择来源类型")}</select></td>
           <td><select class="cell-input" data-field="animal_source">${options(ingredientMetaOptions.animals, "无/选择动物来源")}</select></td>
           <td><select class="cell-input" data-field="primary_nutrition_role">${options(ingredientMetaOptions.roles, "选择营养角色")}</select></td>
-          <td><div class="row-actions"><button class="small-button" data-action="alias" type="button">添加原料别名</button><button class="small-button secondary" data-action="create" type="button">添加标准原料</button></div></td>`;
+          <td><div class="row-actions"><button class="small-button" data-action="alias" type="button">添加原料别名</button><button class="small-button secondary" data-action="create" type="button">添加标准原料</button><button class="small-button danger" data-action="noise" type="button">噪声</button></div></td>`;
         const standardNameInput = row.querySelector('[data-field="standard_name"]');
         const metadataFields = ["ingredient_family", "source_type", "animal_source", "primary_nutrition_role"];
         const syncStandardMetadata = () => {
@@ -2140,13 +2402,14 @@
         standardNameInput.addEventListener("input", syncStandardMetadata);
         standardNameInput.addEventListener("change", syncStandardMetadata);
         syncStandardMetadata();
-        ["alias", "create"].forEach((action) => row.querySelector(`[data-action="${action}"]`).addEventListener("click", async () => {
+        ["alias", "create", "noise"].forEach((action) => row.querySelector(`[data-action="${action}"]`).addEventListener("click", async () => {
           const standardName = row.querySelector('[data-field="standard_name"]').value.trim();
           const standard = standardIngredients.find((entry) => entry.standard_name === standardName);
-          if (!standardName || (action === "alias" && !standard)) {
+          if (action !== "noise" && (!standardName || (action === "alias" && !standard))) {
             showToast(action === "alias" ? "请选择已有标准原料" : "标准原料名不能为空", "error"); return;
           }
-          if (!window.confirm(`${action === "alias" ? "把该名称添加为原料别名" : "创建标准原料"}：${standardName}？`)) return;
+          const actionLabel = action === "alias" ? `把该名称添加为原料别名：${standardName}` : action === "create" ? `创建标准原料：${standardName}` : `把“${item.raw_name}”加入噪声池并从原材料中剔除`;
+          if (!window.confirm(`${actionLabel}？`)) return;
           await runAction(async () => {
             const result = await api(`/api/catfood/standardization/ingredient-reviews/${item.item_id}/resolve`, {
               method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify({
@@ -2154,11 +2417,13 @@
                 ingredient_family: row.querySelector('[data-field="ingredient_family"]').value.trim(),
                 source_type: row.querySelector('[data-field="source_type"]').value,
                 animal_source: row.querySelector('[data-field="animal_source"]').value.trim(),
-                primary_nutrition_role: row.querySelector('[data-field="primary_nutrition_role"]').value.trim(), reviewer: "pipeline-review-page"
+                primary_nutrition_role: row.querySelector('[data-field="primary_nutrition_role"]').value.trim(),
+                context: item.context || "", review_reason: action === "noise" ? "OCR误识别/非原材料" : "",
+                reviewer: "pipeline-review-page"
               })
             });
             for (const taskId of result.resumed_task_ids || []) await api("/api/orchestrator/dispatch-call-sync", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({limit:1,task_id:taskId,node_codes:["ingredient_extract"]})});
-            showToast("原料身份已确认，Profile 正在重新生成");
+            showToast(action === "noise" ? "已加入噪声池并从原材料中剔除" : "原料身份已确认，Profile 正在重新生成");
           });
         }));
         ingredientIdentityRowsEl.appendChild(row);
@@ -2180,13 +2445,17 @@
       activeIdentityTab = tab;
       brandIdentityTab.classList.toggle("active", tab === "brand");
       productIdentityTab.classList.toggle("active", tab === "product");
+      formulaIdentityTab.classList.toggle("active", tab === "formula");
       ingredientIdentityTab.classList.toggle("active", tab === "ingredient");
       brandIdentityPanel.hidden = tab !== "brand";
       productIdentityPanel.hidden = tab !== "product";
+      formulaIdentityPanel.hidden = tab !== "formula";
       ingredientIdentityPanel.hidden = tab !== "ingredient";
       if (tab === "product") {
         if (!standardBrandOptions.children.length) loadStandardBrandOptions();
         loadProductIdentityItems();
+      } else if (tab === "formula") {
+        loadFormulaIdentityItems();
       } else if (tab === "ingredient") {
         loadIngredientIdentityItems();
       } else if (!identityRowsEl.children.length) {
@@ -2593,6 +2862,81 @@
       }
     });
 
+    function enterpriseDate(value) {
+      if (!value) return "—";
+      const date = new Date(value);
+      return Number.isNaN(date.getTime()) ? escapeHtml(value) : date.toLocaleString("zh-CN", { hour12: false });
+    }
+
+    function enterpriseMoney(value) {
+      const amount = Number(value);
+      return Number.isFinite(amount) ? `¥${amount.toFixed(2)}` : "—";
+    }
+
+    function enterpriseTable(headers, rows) {
+      if (!rows.length) return '<div class="empty">暂无数据。</div>';
+      return `<table><thead><tr>${headers.map((item) => `<th>${item}</th>`).join("")}</tr></thead><tbody>${rows.join("")}</tbody></table>`;
+    }
+
+    async function loadEnterpriseAdmin() {
+      enterpriseAdminContent.innerHTML = '<div class="empty">正在加载...</div>';
+      enterpriseAdminPrimary.hidden = activeEnterpriseView !== "invitations";
+      try {
+        if (activeEnterpriseView === "companies") {
+          const data = await api("/api/admin/companies");
+          const items = data.companies || [];
+          enterpriseAdminSummary.textContent = `共 ${items.length} 家企业`;
+          enterpriseAdminContent.innerHTML = enterpriseTable(
+            ["企业名称", "联系人", "手机号", "状态", "体验到期", "正式版到期", "操作"],
+            items.map((item) => `<tr><td><strong>${escapeHtml(item.company_name || item.name || "—")}</strong></td><td>${escapeHtml(item.contact_name || "—")}</td><td>${escapeHtml(item.contact_phone || "—")}</td><td>${escapeHtml(item.status || "—")}</td><td>${enterpriseDate(item.trial_expired_at)}</td><td>${enterpriseDate(item.paid_expired_at)}</td><td><div class="row-actions"><button class="small-button" data-company-action="activate-trial" data-id="${escapeHtml(item.id)}">开通体验</button><button class="small-button secondary" data-company-action="extend-trial" data-id="${escapeHtml(item.id)}">延长体验</button><button class="small-button secondary" data-company-action="manual-activate" data-id="${escapeHtml(item.id)}">开通正式版</button><button class="small-button danger" data-company-action="disable" data-id="${escapeHtml(item.id)}">停用</button></div></td></tr>`)
+          );
+        } else if (activeEnterpriseView === "invitations") {
+          const data = await api("/api/invitations");
+          const items = data.codes || [];
+          enterpriseAdminSummary.textContent = `共 ${items.length} 个邀请码`;
+          enterpriseAdminContent.innerHTML = enterpriseTable(
+            ["邀请码", "状态", "绑定企业", "创建时间", "使用时间", "操作"],
+            items.map((item) => { const used = item.status === "used" || item.used || item.company_id || item.bound_company; return `<tr><td><strong>${escapeHtml(item.code || item.invitation_code || "—")}</strong></td><td>${escapeHtml(item.status || (used ? "used" : "available"))}</td><td>${escapeHtml(item.bound_company || item.company_name || item.company_id || "—")}</td><td>${enterpriseDate(item.created_at)}</td><td>${enterpriseDate(item.used_at || item.used_time)}</td><td>${!used && item.status !== "disabled" ? `<button class="small-button danger" data-invitation-disable="${escapeHtml(item.id)}">停用</button>` : "—"}</td></tr>`; })
+          );
+        } else if (activeEnterpriseView === "orders") {
+          const data = await api("/api/orders");
+          const items = data.orders || [];
+          enterpriseAdminSummary.textContent = `共 ${items.length} 笔订单`;
+          enterpriseAdminContent.innerHTML = enterpriseTable(
+            ["企业", "订单号", "金额", "支付方式", "状态", "创建时间", "支付时间"],
+            items.map((item) => `<tr><td><strong>${escapeHtml(item.company_name || item.company || "—")}</strong></td><td>${escapeHtml(item.order_no || "—")}</td><td>${enterpriseMoney(item.amount)}</td><td>${escapeHtml(item.payment_method || "—")}</td><td>${escapeHtml(item.status || "—")}</td><td>${enterpriseDate(item.created_at)}</td><td>${enterpriseDate(item.paid_at || item.payment_time)}</td></tr>`)
+          );
+        } else {
+          const data = await api("/api/admin/corporate-payments");
+          const items = data.payments || [];
+          enterpriseAdminSummary.textContent = `共 ${items.length} 条对公付款记录`;
+          enterpriseAdminContent.innerHTML = enterpriseTable(
+            ["付款企业", "订单号", "流水号", "凭证", "状态", "操作"],
+            items.map((item) => { const pending = !item.status || item.status === "pending" || item.status === "pending_confirm"; return `<tr><td><strong>${escapeHtml(item.payer_company || item.company_name || "—")}</strong></td><td>${escapeHtml(item.order_no || "—")}</td><td>${escapeHtml(item.transfer_no || "—")}</td><td>${item.proof_url ? `<a href="${escapeHtml(item.proof_url)}" target="_blank" rel="noopener">查看凭证</a>` : "未上传"}</td><td>${escapeHtml(item.status || "pending")}</td><td>${pending ? `<div class="row-actions"><button class="small-button" data-corporate-action="confirm" data-id="${escapeHtml(item.id)}">确认到账</button><button class="small-button danger" data-corporate-action="reject" data-id="${escapeHtml(item.id)}">驳回</button></div>` : "—"}</td></tr>`; })
+          );
+        }
+      } catch (error) {
+        enterpriseAdminContent.innerHTML = `<div class="empty">加载失败：${escapeHtml(error.message)}</div>`;
+      }
+    }
+
+    function switchEnterpriseView(view) {
+      activeEnterpriseView = view;
+      document.querySelectorAll("[data-enterprise-view]").forEach((button) => button.classList.toggle("active", button.dataset.enterpriseView === view));
+      loadEnterpriseAdmin();
+    }
+
+    async function postEnterpriseAction(path, body) {
+      const options = { method: "POST" };
+      if (body) {
+        options.headers = { "Content-Type": "application/json" };
+        options.body = JSON.stringify(body);
+      }
+      const result = await api(path, options);
+      showToast(result.message || "操作成功");
+      await loadEnterpriseAdmin();
+    }
+
     function switchTab(tab) {
       activeTab = tab;
       nodeTab.classList.toggle("active", tab === "node");
@@ -2601,15 +2945,19 @@
       contentReviewTab.classList.toggle("active", tab === "content");
       reportReviewTab.classList.toggle("active", tab === "report");
       ideaTab.classList.toggle("active", tab === "idea");
+      enterpriseAdminTab.classList.toggle("active", tab === "enterprise-admin");
       nodeSection.hidden = tab !== "node";
       identitySection.hidden = tab !== "identity";
       diseaseSection.hidden = tab !== "disease";
       contentReviewSection.hidden = tab !== "content";
       reportReviewSection.hidden = tab !== "report";
       ideaSection.hidden = tab !== "idea";
+      enterpriseAdminSection.hidden = tab !== "enterprise-admin";
       if (tab === "identity" && !identityRowsEl.children.length) {
         if (activeIdentityTab === "product") {
           loadProductIdentityItems();
+        } else if (activeIdentityTab === "formula") {
+          loadFormulaIdentityItems();
         } else if (activeIdentityTab === "ingredient") {
           loadIngredientIdentityItems();
         } else {
@@ -2633,6 +2981,7 @@
       if (tab === "idea" && !ideaCardContainer.children.length) {
         loadIdeaCategories().then(() => loadIdeas());
       }
+      if (tab === "enterprise-admin") loadEnterpriseAdmin();
     }
 
     submitOcrBtn.addEventListener("click", async () => {
@@ -2667,7 +3016,9 @@
     });
     brandIdentityTab.addEventListener("click", () => switchIdentityTab("brand"));
     productIdentityTab.addEventListener("click", () => switchIdentityTab("product"));
+    formulaIdentityTab.addEventListener("click", () => switchIdentityTab("formula"));
     ingredientIdentityTab.addEventListener("click", () => switchIdentityTab("ingredient"));
+    formulaIdentityRefreshBtn.addEventListener("click", loadFormulaIdentityItems);
     ingredientIdentityRefreshBtn.addEventListener("click", loadIngredientIdentityItems);
     ingredientFormulaFilter.addEventListener("keydown", (event) => { if (event.key === "Enter") loadIngredientIdentityItems(); });
     diseaseRefreshBtn.addEventListener("click", loadDiseaseItems);
@@ -2727,6 +3078,39 @@
     contentReviewTab.addEventListener("click", () => switchTab("content"));
     reportReviewTab.addEventListener("click", () => switchTab("report"));
     ideaTab.addEventListener("click", () => switchTab("idea"));
+    enterpriseAdminTab.addEventListener("click", () => switchTab("enterprise-admin"));
+    enterpriseAdminRefresh.addEventListener("click", loadEnterpriseAdmin);
+    document.querySelectorAll("[data-enterprise-view]").forEach((button) => button.addEventListener("click", () => switchEnterpriseView(button.dataset.enterpriseView)));
+    enterpriseAdminPrimary.addEventListener("click", async () => {
+      const count = Number.parseInt(prompt("请输入生成数量：", "5") || "", 10);
+      if (!count || count < 1) return;
+      const note = prompt("备注（可选）：", "") || "";
+      try { await postEnterpriseAction("/api/invitations/create", { count, note }); } catch (error) { showToast(error.message, "error"); }
+    });
+    enterpriseAdminContent.addEventListener("click", async (event) => {
+      const target = event.target.closest("button");
+      if (!target) return;
+      try {
+        if (target.dataset.companyAction) {
+          const action = target.dataset.companyAction;
+          let body;
+          if (action === "extend-trial") {
+            const days = Number.parseInt(prompt("请输入延长天数：", "7") || "", 10);
+            if (!days || days < 1) return;
+            body = { days };
+          } else if ((action === "disable" || action === "manual-activate") && !confirm("确认执行此操作？")) return;
+          await postEnterpriseAction(`/api/admin/companies/${encodeURIComponent(target.dataset.id)}/${action}`, body);
+        } else if (target.dataset.invitationDisable) {
+          if (!confirm("确认停用该邀请码？")) return;
+          await postEnterpriseAction(`/api/invitations/${encodeURIComponent(target.dataset.invitationDisable)}/disable`);
+        } else if (target.dataset.corporateAction) {
+          const action = target.dataset.corporateAction;
+          const note = prompt(action === "confirm" ? "确认到账备注（可选）：" : "请输入驳回原因：", action === "confirm" ? "已核实到账" : "");
+          if (note === null || (action === "reject" && !note.trim())) return;
+          await postEnterpriseAction(`/api/admin/corporate-payments/${encodeURIComponent(target.dataset.id)}/${action}`, { note });
+        }
+      } catch (error) { showToast(error.message, "error"); }
+    });
     loadItems();
   </script>
 </body>
