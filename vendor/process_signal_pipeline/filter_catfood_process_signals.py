@@ -91,17 +91,17 @@ SOURCE_SPECS = {
         time_col="comment_date",
         keyword_col="search_keyword",
     ),
-    "catfood_brand_health_candidates": SourceSpec(
-        table="catfood_brand_health_candidates",
+    "catfood_choice_comments_filtered_v2": SourceSpec(
+        table="catfood_choice_comments_filtered_v2",
         platform="catfood_candidates",
-        platform_col="platform",
-        id_col="raw_id",
+        platform_col="source_platform",
+        id_col="source_row_id",
         external_id_col="external_id",
-        title_col="title",
-        content_col="content",
-        like_col="",
-        time_col="event_date",
-        keyword_col="keyword",
+        title_col="source_title",
+        content_col="source_content",
+        like_col="source_like_count",
+        time_col="source_comment_time",
+        keyword_col="source_keyword",
     ),
 }
 
