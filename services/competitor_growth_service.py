@@ -191,7 +191,7 @@ def list_disease_target_options(symptom: str = "软便/拉稀", limit: int = 50)
                SUM(direct='改善') AS improve_cnt,
                SUM(direct='加重') AS worsen_cnt,
                COUNT(*) AS total_cnt
-        FROM csv_labeling._tmp_cat_disease_clues
+        FROM protein_feature_platform.cat_disease_clues
         WHERE (secondary_symptom = %s OR primary_symptom LIKE %s OR secondary_symptom LIKE %s)
         GROUP BY brand
         HAVING improve_cnt > worsen_cnt

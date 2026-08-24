@@ -434,7 +434,7 @@ def build_disease_representatives(selected_symptom: str | None = None) -> dict[s
     """病症需求洞察：需求承接候选产品与代表原料。
 
     候选产品逻辑与竞品增长下拉框保持一致：
-    1. 从 _tmp_cat_disease_clues 取改善品牌（改善>加重、改善>=5、总>=10）
+    1. 从正式 cat_disease_clues 取改善品牌（改善>加重、改善>=5、总>=10）
     2. 从 catfood_disease_representative_product 取这些品牌的代表产品
     3. 每个品牌只保留排名最高的 1 个产品
     4. 代表原料仅来自这些候选产品的配方原料
@@ -464,7 +464,7 @@ def build_disease_representatives(selected_symptom: str | None = None) -> dict[s
                        SUM(direct='改善') AS improve_cnt,
                        SUM(direct='加重') AS worsen_cnt,
                        COUNT(*) AS total_cnt
-                FROM _tmp_cat_disease_clues
+                FROM protein_feature_platform.cat_disease_clues
                 WHERE (secondary_symptom = %s OR primary_symptom LIKE %s OR secondary_symptom LIKE %s)
                 GROUP BY brand
                 HAVING improve_cnt > worsen_cnt
