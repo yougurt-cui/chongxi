@@ -45,6 +45,7 @@ button,input,select,textarea{font:inherit}
 .app.login-only #page-register{max-width:none;margin:0;padding:32px 46px 56px}
 .app.login-only #page-register .hero{margin-top:8px}
 .app.login-only #page-register .grid-2{grid-template-columns:1fr;max-width:760px}
+.app.login-only #page-trial-pending{max-width:none;margin:0;padding:32px 46px 56px}
 .app.login-only #page-expired.active{max-width:none;margin:0;padding:32px 46px 56px;display:flex;align-items:center;min-height:calc(100vh - 64px)}
 .app.login-only #page-expired .state-hero{max-width:720px;margin:0 auto}
 .app.login-only #page-purchase{max-width:none;margin:0;padding:32px 46px 56px}
@@ -978,7 +979,7 @@ function navigate(route, opts={}){
 
 function activateRoute(route, opts={}){
   currentRoute = route;
-  document.querySelector('.app')?.classList.toggle('login-only', route === 'login' || route === 'register' || route === 'expired' || route === 'purchase' || route === 'pay-online' || route === 'pay-success');
+  document.querySelector('.app')?.classList.toggle('login-only', route === 'login' || route === 'register' || route === 'trial-pending' || route === 'expired' || route === 'purchase' || route === 'pay-online' || route === 'pay-success');
   // pages
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
   const page = document.getElementById('page-' + route);
