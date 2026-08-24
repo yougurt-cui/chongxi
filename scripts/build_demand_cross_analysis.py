@@ -92,8 +92,8 @@ def local_connection():
 
 
 @contextmanager
-def remote_clues_connection():
-    """通过 SSH 隧道连接远程病症库，凭据优先从环境变量读取。"""
+def ssh_clues_connection():
+    """开发机模式：通过 SSH 隧道连接线上病症库。"""
     sock = socket.socket()
     sock.bind(("127.0.0.1", 0))
     local_port = sock.getsockname()[1]
@@ -140,6 +140,29 @@ def remote_clues_connection():
             process.wait(timeout=5)
         except subprocess.TimeoutExpired:
             process.kill()
+
+
+@contextmanager
+def direct_clues_connection():
+    """生产 API 模式：直接连接线上特征库，不建立 SSH 隧道。"""
+    cfg = dict(get_feature_mysql_config())
+    cfg["database"] = REMOTE_DB
+    conn = pymysql.connect(
+        **cfg,
+        cursorclass=pymysql.cursors.DictCursor,
+        connect_timeout=5,
+        read_timeout=120,
+    )
+    try:
+        yield conn
+    finally:
+        conn.close()
+
+
+def clues_connection(mode):
+    if mode == "direct":
+        return direct_clues_connection()
+    return ssh_clues_connection()
 
 
 def load_remote_disease_metrics(conn):
@@ -252,7 +275,7 @@ def load_comment_dates(conn, texts):
             batch = values[offset:offset + 5000]
             placeholders = ",".join(["%s"] * len(batch))
             cur.execute(
-                f"SELECT comment_text,STR_TO_DATE(NULLIF(SUBSTRING(TRIM(source_comment_time),1,10),''),'%Y-%m-%d') AS event_date "
+                f"SELECT comment_text,STR_TO_DATE(NULLIF(SUBSTRING(TRIM(source_comment_time),1,10),''),'%%Y-%%m-%%d') AS event_date "
                 f"FROM {quote_ident(BHC_TABLE)} "
                 f"WHERE comment_text IN ({placeholders}) "
                 f"AND source_comment_time IS NOT NULL AND TRIM(source_comment_time) <> ''",
@@ -413,13 +436,19 @@ def replace_rows(conn, rows):
 def parse_args():
     parser = argparse.ArgumentParser(description="按病症构建用户需求洞察表")
     parser.add_argument("--dry-run", action="store_true", help="只计算和打印，不写入数据库")
+    parser.add_argument(
+        "--clues-connection",
+        choices=("ssh", "direct"),
+        default="ssh",
+        help="病症线索库连接方式：开发机默认 ssh，生产 API 使用 direct",
+    )
     return parser.parse_args()
 
 
 def main():
     args = parse_args()
     print(f"[1/4] 读取远程 {REMOTE_DB}.{REMOTE_CLUES_TABLE} ...")
-    with remote_clues_connection() as remote_conn:
+    with clues_connection(args.clues_connection) as remote_conn:
         disease_stats = load_remote_disease_metrics(remote_conn)
     print(f"  病症数: {len(disease_stats)}, 线索数: {sum(x['clue_count'] for x in disease_stats.values())}")
 
