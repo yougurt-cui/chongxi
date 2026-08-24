@@ -36,6 +36,7 @@ try:
     from .api.taobao_sku_api import taobao_sku_api
     from .api.miniprogram_api import miniprogram_api
     from .api.enterprise_api import enterprise_api
+    from .api.market_profile_api import market_profile_api
 except ImportError:
     from api.consumer_api import consumer_api
     from api.business_api import business_api
@@ -50,6 +51,7 @@ except ImportError:
     from api.taobao_sku_api import taobao_sku_api
     from api.miniprogram_api import miniprogram_api
     from api.enterprise_api import enterprise_api
+    from api.market_profile_api import market_profile_api
 
 from services import cat_food_task_service as task_store
 
@@ -1920,6 +1922,7 @@ def create_app() -> Flask:
     flask_app.register_blueprint(taobao_sku_api)
     flask_app.register_blueprint(miniprogram_api)
     flask_app.register_blueprint(enterprise_api)
+    flask_app.register_blueprint(market_profile_api)
 
     @flask_app.get("/health")
     def health() -> tuple[dict, int]:
