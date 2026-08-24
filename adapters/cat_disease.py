@@ -64,11 +64,14 @@ SOURCE_TABLE = "raw_review_comment"
 # 输出的病症结构化结果表
 TARGET_TABLE = "review_symptom_event_result"
 
-# API 默认输入表：评论健康候选表
-DISEASE_SOURCE_TABLE = "catfood_brand_health_candidates"
+# API 默认输入表：评论筛选表（已从 catfood_brand_health_candidates 切换）
+DISEASE_SOURCE_TABLE = "catfood_choice_comments_filtered_v2"
 
 # API 默认输出表：人工审核前的病症结构化候选表
 DISEASE_REVIEW_TABLE = "cat_disease_clue_candidates"
+
+# 已处理追踪表：记录所有送过 LLM 的评论（不论是否有结果）
+PROCESSED_LOG_TABLE = "cat_disease_processed_log"
 
 GROUP_CONCAT_MAX_LEN = 1024 * 1024
 DEFAULT_MAX_COMMENT_CHARS = 500
@@ -1010,6 +1013,71 @@ def create_disease_review_table(engine, target_table: str = DISEASE_REVIEW_TABLE
                 conn.execute(text(f"ALTER TABLE `{target_table}` ADD KEY {index_name} ({columns_sql})"))
 
 
+def create_processed_log_table(engine) -> None:
+    """创建已处理追踪表，记录所有送过 LLM 的评论（不论是否有结果）。"""
+    sql = f"""
+    CREATE TABLE IF NOT EXISTS `{PROCESSED_LOG_TABLE}` (
+        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+        source_table VARCHAR(128) NOT NULL,
+        source_candidate_id BIGINT NOT NULL,
+        comment_hash CHAR(64) NOT NULL,
+        has_events TINYINT NOT NULL DEFAULT 0,
+        event_count INT NOT NULL DEFAULT 0,
+        model_name VARCHAR(100),
+        prompt_version VARCHAR(50),
+        processed_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        PRIMARY KEY (id),
+        UNIQUE KEY uq_processed_source (source_table, source_candidate_id),
+        KEY idx_processed_comment_hash (comment_hash)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    """
+    with engine.begin() as conn:
+        conn.execute(text(sql))
+
+
+def insert_processed_log(
+    engine,
+    records: List[Dict[str, Any]],
+) -> int:
+    """批量写入已处理追踪记录，幂等 upsert。"""
+    if not records:
+        return 0
+    sql = f"""
+    INSERT INTO `{PROCESSED_LOG_TABLE}` (
+        source_table,
+        source_candidate_id,
+        comment_hash,
+        has_events,
+        event_count,
+        model_name,
+        prompt_version,
+        processed_at
+    )
+    VALUES (
+        :source_table,
+        :source_candidate_id,
+        :comment_hash,
+        :has_events,
+        :event_count,
+        :model_name,
+        :prompt_version,
+        :processed_at
+    )
+    ON DUPLICATE KEY UPDATE
+        has_events = VALUES(has_events),
+        event_count = VALUES(event_count),
+        model_name = VALUES(model_name),
+        prompt_version = VALUES(prompt_version),
+        processed_at = VALUES(processed_at),
+        updated_at = CURRENT_TIMESTAMP
+    """
+    with engine.begin() as conn:
+        result = conn.execute(text(sql), records)
+    return int(result.rowcount or 0)
+
+
 def make_candidate_comment_hash(row: pd.Series) -> str:
     raw = f"{row.get('review_text', '')}"
     return hashlib.md5(raw.encode("utf-8")).hexdigest()
@@ -1047,23 +1115,25 @@ def load_disease_candidates(
             f"""
             NOT EXISTS (
                 SELECT 1
-                FROM `{target_table}` t
-                WHERE t.review_text = TRIM(c.comment_text)
+                FROM `{PROCESSED_LOG_TABLE}` p
+                WHERE p.comment_hash = MD5(TRIM(c.comment_text))
+                  AND p.source_table = :processed_source_table
             )
             """
         )
+        params["processed_source_table"] = source_table
 
     sql = f"""
     SELECT
         MIN(c.id) AS source_candidate_id,
-        GROUP_CONCAT(DISTINCT c.platform ORDER BY c.platform SEPARATOR ',') AS platform,
+        GROUP_CONCAT(DISTINCT c.source_platform ORDER BY c.source_platform SEPARATOR ',') AS platform,
         MIN(c.external_id) AS external_id,
-        GROUP_CONCAT(DISTINCT c.keyword ORDER BY c.keyword SEPARATOR ' | ') AS search_keyword,
+        GROUP_CONCAT(DISTINCT c.source_keyword ORDER BY c.source_keyword SEPARATOR ' | ') AS search_keyword,
         TRIM(c.comment_text) AS review_text,
-        MIN(c.event_date) AS review_date,
-        MIN(c.event_date) AS review_date_raw,
-        MIN(c.title) AS title,
-        MIN(c.content) AS content,
+        MIN(STR_TO_DATE(NULLIF(SUBSTRING(TRIM(c.source_comment_time), 1, 10), ''), '%Y-%m-%d')) AS review_date,
+        MIN(c.source_comment_time) AS review_date_raw,
+        MIN(c.source_title) AS title,
+        MIN(c.source_content) AS content,
         COUNT(*) AS source_candidate_count
     FROM `{source_table}` c
     WHERE {" AND ".join(filters)}
@@ -1170,6 +1240,7 @@ def structure_cat_disease_clues(
     engine = create_engine(_mysql_url(db_config), pool_pre_ping=True, future=True)
     try:
         create_disease_review_table(engine, target_table=target_table)
+        create_processed_log_table(engine)
         df = load_disease_candidates(
             engine,
             source_table=source_table,
@@ -1220,6 +1291,7 @@ def structure_cat_disease_clues(
         model_name = get_qwen_config()["model"]
 
         buffer_events: List[Dict[str, Any]] = []
+        buffer_processed_log: List[Dict[str, Any]] = []
         errors: List[Dict[str, Any]] = []
         processed_count = 0
         event_count = 0
@@ -1260,6 +1332,16 @@ def structure_cat_disease_clues(
                 review_date = normalize_review_date(review_date_raw)
 
             now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            buffer_processed_log.append({
+                "source_table": source_table,
+                "source_candidate_id": source_candidate_id,
+                "comment_hash": comment_hash,
+                "has_events": 1 if llm_events else 0,
+                "event_count": len(llm_events),
+                "model_name": model_name,
+                "prompt_version": PROMPT_VERSION,
+                "processed_at": now,
+            })
             for event in llm_events:
                 event_brand_name = resolve_event_brand_name(row, event)
                 buffer_events.append(
@@ -1297,12 +1379,15 @@ def structure_cat_disease_clues(
                     target_table=target_table,
                 )
                 buffer_events = []
+                insert_processed_log(engine, buffer_processed_log)
+                buffer_processed_log = []
 
         written_count += insert_disease_review_events(
             engine,
             buffer_events,
             target_table=target_table,
         )
+        insert_processed_log(engine, buffer_processed_log)
 
         return {
             "ok": len(errors) == 0,

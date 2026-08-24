@@ -82,7 +82,7 @@ def structure_consumer_disease_clues(payload: Dict[str, Any]) -> Dict[str, Any]:
     payload = dict(payload or {})
     return structure_cat_disease_clues(
         db=payload.get("db"),
-        source_table=payload.get("source_table") or "catfood_brand_health_candidates",
+        source_table=payload.get("source_table") or "catfood_choice_comments_filtered_v2",
         target_table=payload.get("target_table") or "cat_disease_clue_candidates",
         limit=payload.get("limit", 100),
         batch_size=int(payload.get("batch_size") or 20),

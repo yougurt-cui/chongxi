@@ -13,6 +13,7 @@ from flask import Blueprint, jsonify, request
 from sqlalchemy import create_engine, text
 
 import app_config
+from api.enterprise_api import admin_required
 from services.consumer_analysis_service import (
     calculate_material_scores,
     calculate_risk_scores,
@@ -204,7 +205,7 @@ def _normalize_disease_structure_payload(payload: dict) -> dict:
     payload["batch_size"] = batch_size
     payload["max_errors"] = max_errors
     payload["max_retries"] = max_retries
-    payload["source_table"] = payload.get("source_table") or "catfood_brand_health_candidates"
+    payload["source_table"] = payload.get("source_table") or "catfood_choice_comments_filtered_v2"
     payload["target_table"] = payload.get("target_table") or "cat_disease_clue_candidates"
 
     manual_range = payload.get("min_id") not in (None, "") or payload.get("max_id") not in (None, "")
@@ -667,6 +668,7 @@ def _serialize_disease_structure_job(job_id: str, job: dict) -> dict:
         "processed_rows": job.get("processed_rows", 0),
         "event_rows": job.get("event_rows", 0),
         "error_count": job.get("error_count", 0),
+        "inserted_or_updated_rows": job.get("inserted_or_updated_rows", 0),
         "result": job.get("result"),
         "error": job.get("error"),
     }
@@ -758,6 +760,7 @@ def _run_disease_structure_chunks(job_id: str, payload: dict) -> dict:
                 processed_rows=totals["processed_rows"],
                 event_rows=totals["event_rows"],
                 error_count=totals["error_count"],
+                inserted_or_updated_rows=totals["inserted_or_updated_rows"],
             )
 
             if totals["error_count"] > max_errors:
@@ -855,6 +858,75 @@ def consumer_disease_structure():
     _disease_structure_executor.submit(_run_disease_structure_job, job_id, payload)
     with _disease_structure_jobs_lock:
         return jsonify(_serialize_disease_structure_job(job_id, _disease_structure_jobs[job_id])), 202
+
+
+@consumer_api.post("/disease/init-cursor")
+@admin_required
+def consumer_disease_init_cursor():
+    """初始化游标到源表 MAX(id)，用于切换数据源后跳过历史数据。
+
+    同时创建 cat_disease_processed_log 追踪表。
+    调用后下次 /disease/structure 只会处理 id > cursor 的新增数据。
+    """
+    body = request.get_json(silent=True) or {}
+    source_table = body.get("source_table") or request.args.get("source_table") or "catfood_choice_comments_filtered_v2"
+    target_table = body.get("target_table") or request.args.get("target_table") or "cat_disease_clue_candidates"
+    engine = _get_engine(body.get("db"))
+    try:
+        _ensure_disease_cursor_table(engine)
+
+        # 创建已处理追踪表
+        from adapters.cat_disease import create_processed_log_table
+        create_processed_log_table(engine)
+
+        # 获取源表 MAX(id)
+        with engine.connect() as conn:
+            row = conn.execute(
+                text(f"SELECT MAX(id) AS max_id FROM `{source_table}`")
+            ).mappings().first()
+        max_id = int(row["max_id"]) if row and row["max_id"] else 0
+        if max_id == 0:
+            return jsonify({"ok": False, "error": f"source table {source_table} is empty or has no id column"}), 400
+
+        # 设置游标到 MAX(id)，下次从 MAX(id)+1 开始
+        _update_disease_cursor(engine, source_table, target_table, max_id, "init_cursor")
+        return jsonify({
+            "ok": True,
+            "source_table": source_table,
+            "target_table": target_table,
+            "cursor_set_to": max_id,
+            "message": f"Cursor initialized to {max_id}. Next run will only process rows with id > {max_id}.",
+        }), 200
+    finally:
+        engine.dispose()
+
+
+@consumer_api.get("/disease/cursor")
+@admin_required
+def consumer_disease_get_cursor():
+    """查看当前游标状态。"""
+    body = request.args
+    source_table = body.get("source_table") or "catfood_choice_comments_filtered_v2"
+    target_table = body.get("target_table") or "cat_disease_clue_candidates"
+    engine = _get_engine()
+    try:
+        _ensure_disease_cursor_table(engine)
+        cursor = _get_disease_cursor(engine, source_table, target_table)
+        with engine.connect() as conn:
+            row = conn.execute(
+                text(f"SELECT MAX(id) AS max_id FROM `{source_table}`")
+            ).mappings().first()
+        max_id = int(row["max_id"]) if row and row["max_id"] else 0
+        return jsonify({
+            "ok": True,
+            "source_table": source_table,
+            "target_table": target_table,
+            "last_source_id": cursor,
+            "source_max_id": max_id,
+            "pending_rows": max(0, max_id - cursor),
+        }), 200
+    finally:
+        engine.dispose()
 
 
 @consumer_api.get("/disease/reviews")
