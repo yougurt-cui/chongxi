@@ -13,6 +13,7 @@ import pymysql
 from openai import OpenAI
 
 from app_config import get_feature_mysql_config, get_mysql_config, get_qwen_config
+from services.taobao_sku_import_service import list_standardized_product_options
 
 
 TABLE_NAME = "miniprogram_food_change_intent"
@@ -176,7 +177,7 @@ def extract_food_change_intent(message: str, supplied_cat_status: dict[str, Any]
 
 def _candidate_score(brand: str, product: str, row: dict[str, Any]) -> float:
     wanted_brand, wanted_product = _compact(brand), _compact(product)
-    row_brand = _compact(row.get("standard_brand") or row.get("raw_brand"))
+    row_brand = _compact(row.get("brand") or row.get("standard_brand") or row.get("raw_brand"))
     row_product = _compact(row.get("product_name") or row.get("raw_title"))
     brand_score = SequenceMatcher(None, wanted_brand, row_brand).ratio() if wanted_brand else 0.0
     product_score = SequenceMatcher(None, wanted_product, row_product).ratio() if wanted_product else 0.0
@@ -194,22 +195,12 @@ def match_catalog_product(brand: str, product: str) -> dict[str, Any] | None:
     # when the user only supplied the brand name.
     if not product:
         return None
-    terms = [term for term in (brand, product) if term]
-    where = ["status = 'active'"]
-    params: list[Any] = []
-    likes = []
-    for term in terms:
-        likes.append("(standard_brand LIKE %s OR raw_brand LIKE %s OR product_name LIKE %s OR raw_title LIKE %s)")
-        params.extend([f"%{term}%"] * 4)
-    where.append("(" + " OR ".join(likes) + ")")
-    with _connect_feature() as conn:
-        with conn.cursor() as cursor:
-            cursor.execute(
-                "SELECT catalog_key, product_key, standard_brand, raw_brand, product_name, raw_title, score_source_id "
-                "FROM catfood_product_catalog WHERE " + " AND ".join(where) + " LIMIT 100",
-                params,
-            )
-            rows = list(cursor.fetchall() or [])
+    rows = list_standardized_product_options(
+        brand=brand,
+        q=product,
+        compare_available=True,
+        limit=100,
+    ).get("items", [])
     if not rows:
         return None
     scored = sorted((( _candidate_score(brand, product, row), row) for row in rows), key=lambda item: item[0], reverse=True)
@@ -219,10 +210,23 @@ def match_catalog_product(brand: str, product: str) -> dict[str, Any] | None:
         return None
     return {
         "catalog_key": row.get("catalog_key"), "product_key": row.get("product_key"),
-        "brand": row.get("standard_brand"), "product_name": row.get("product_name"),
+        "formula_id": row.get("formula_id"), "product_id": row.get("product_id"),
+        "brand": row.get("brand"), "product_name": row.get("product_name"),
         "score_source_id": row.get("score_source_id"),
         "score": score, "status": "matched" if score >= 0.8 else "possible_match",
     }
+
+
+def list_standard_product_candidates(brand: str, *, product: str = "", limit: int = 50) -> list[dict[str, Any]]:
+    if not _clean(brand):
+        return []
+    result = list_standardized_product_options(
+        brand=_clean(brand),
+        q=_clean(product),
+        compare_available=True,
+        limit=limit,
+    )
+    return list(result.get("items") or [])
 
 
 INGREDIENT_CATEGORIES = (
@@ -254,6 +258,23 @@ def _ingredient_category(item: dict[str, Any]) -> str | None:
 
 
 def _find_standard_formula(cursor, matched: dict[str, Any]) -> dict[str, Any] | None:
+    formula_id = matched.get("formula_id")
+    if formula_id is not None:
+        cursor.execute(
+            """
+            SELECT f.formula_id,p.product_id,b.standard_brand_name,p.standard_product_name,p.display_name,
+                   f.raw_ingredient_example,f.normalized_ingredient_composition
+            FROM catfood_standard_formula f
+            JOIN catfood_standard_product p ON p.product_id=f.product_id AND p.active=1
+            JOIN catfood_standard_brand b ON b.brand_id=p.brand_id AND b.active=1
+            WHERE f.formula_id=%s AND f.status='active' AND f.is_current=1
+            LIMIT 1
+            """,
+            (int(formula_id),),
+        )
+        row = cursor.fetchone()
+        if row:
+            return row
     source_id = matched.get("score_source_id")
     if source_id is not None:
         cursor.execute(
@@ -352,36 +373,7 @@ def list_catalog_products_by_brand(brand: str, *, query: str = "", limit: int = 
     if not brand:
         raise ValueError("brand 不能为空")
     limit = max(1, min(int(limit or 50), 100))
-    where = ["status='active'", "standard_brand=%s"]
-    params: list[Any] = [brand]
-    if query:
-        where.append("(product_name LIKE %s OR raw_title LIKE %s)")
-        params.extend([f"%{query}%", f"%{query}%"])
-    params.append(limit * 3)
-    with _connect_feature() as conn:
-        with conn.cursor() as cursor:
-            cursor.execute(
-                "SELECT catalog_key,product_key,standard_brand,product_name,raw_title,score_source_id,"
-                "compare_available,source FROM catfood_product_catalog WHERE " + " AND ".join(where) +
-                " ORDER BY compare_available DESC,FIELD(source,'merged','score_db','taobao'),id DESC LIMIT %s",
-                params,
-            )
-            rows = list(cursor.fetchall() or [])
-    items = []
-    seen = set()
-    for row in rows:
-        name_key = _compact(row.get("product_name"))
-        if not name_key or name_key in seen:
-            continue
-        seen.add(name_key)
-        items.append({
-            "catalog_key": row.get("catalog_key"), "product_key": row.get("product_key"),
-            "brand": row.get("standard_brand"), "product_name": row.get("product_name"),
-            "raw_title": row.get("raw_title"), "score_source_id": row.get("score_source_id"),
-            "compare_available": bool(row.get("compare_available")),
-        })
-        if len(items) >= limit:
-            break
+    items = list_standard_product_candidates(brand, product=query, limit=limit)
     return {"ok": True, "brand": brand, "count": len(items), "items": items}
 
 
@@ -389,14 +381,24 @@ def get_catalog_product_ingredients(payload: dict[str, Any]) -> dict[str, Any]:
     catalog_key = _clean(payload.get("catalog_key"), 128)
     if not catalog_key:
         raise ValueError("catalog_key 不能为空")
-    with _connect_feature() as conn:
-        with conn.cursor() as cursor:
-            cursor.execute(
-                "SELECT catalog_key,product_key,standard_brand AS brand,product_name,score_source_id "
-                "FROM catfood_product_catalog WHERE catalog_key=%s AND status='active' LIMIT 1",
-                (catalog_key,),
-            )
-            matched = cursor.fetchone()
+    matched = None
+    if catalog_key.startswith("formula:"):
+        try:
+            formula_id = int(catalog_key.split(":", 1)[1])
+        except (TypeError, ValueError):
+            formula_id = 0
+        if formula_id:
+            options = list_standardized_product_options(q="", compare_available=True, limit=500).get("items", [])
+            matched = next((item for item in options if int(item.get("formula_id") or 0) == formula_id), None)
+    else:
+        with _connect_feature() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "SELECT catalog_key,product_key,standard_brand AS brand,product_name,score_source_id "
+                    "FROM catfood_product_catalog WHERE catalog_key=%s AND status='active' LIMIT 1",
+                    (catalog_key,),
+                )
+                matched = cursor.fetchone()
     if not matched:
         raise ValueError("产品不存在或已停用")
     analysis = get_product_ingredient_analysis(matched)
@@ -435,6 +437,10 @@ def analyze_and_store(payload: dict[str, Any]) -> dict[str, Any]:
         matched = match_catalog_product(result["brand"], result["product_name"])
         target_food = result.get("target_food") or {}
         target_matched = match_catalog_product(target_food.get("brand", ""), target_food.get("product_name", ""))
+        current_candidates = list_standard_product_candidates(result["brand"], product=result["product_name"])
+        target_candidates = list_standard_product_candidates(
+            target_food.get("brand", ""), product=target_food.get("product_name", "")
+        )
         current_ingredients = get_product_ingredient_analysis(matched)
         target_ingredients = get_product_ingredient_analysis(target_matched)
         if matched:
@@ -463,6 +469,8 @@ def analyze_and_store(payload: dict[str, Any]) -> dict[str, Any]:
         return {
             "ok": True, "record_id": record_id, "intent": result,
             "product_match": matched, "target_product_match": target_matched,
+            "current_product_candidates": current_candidates,
+            "target_product_candidates": target_candidates,
             "ingredient_analysis": current_ingredients,
             "target_ingredient_analysis": target_ingredients,
             "match_status": match_status,

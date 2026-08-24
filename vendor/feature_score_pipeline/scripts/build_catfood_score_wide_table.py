@@ -174,6 +174,20 @@ def write_wide_incremental(engine, wide_df, score_types):
             index=False,
             dtype=score_types,
         )
+        if os.getenv("FORMULA_ID"):
+            conn.execute(
+                text(
+                    """
+                    DELETE output
+                    FROM {output} AS output
+                    JOIN {temp} AS latest
+                      ON (
+                        output.formula_id = latest.formula_id
+                        OR output.source_id = latest.source_id
+                      )
+                    """.format(output=quoted_output, temp=quoted_temp)
+                )
+            )
         conn.execute(
             text(
                 """

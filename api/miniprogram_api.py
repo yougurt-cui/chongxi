@@ -501,11 +501,15 @@ def food_change_intent():
 @miniprogram_api.get("/products")
 def products_by_brand():
     try:
-        return jsonify(list_catalog_products_by_brand(
+        response = jsonify(list_catalog_products_by_brand(
             request.args.get("brand", ""),
             query=request.args.get("q", ""),
             limit=int(request.args.get("limit") or 50),
-        )), 200
+        ))
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+        return response, 200
     except ValueError as exc:
         return jsonify({"ok": False, "error": str(exc)}), 400
     except Exception as exc:

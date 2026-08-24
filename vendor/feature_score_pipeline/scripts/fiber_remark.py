@@ -406,6 +406,14 @@ INGREDIENT_RULES: Dict[str, Dict] = {
         "fiber_functions": [],
         "prebiotic_functions": ["供菌", "SCFA支持", "促进有益菌增殖"],
     },
+    # 丝兰属于功能性肠道支持，不作为成形或骨架纤维计分。
+    "丝兰": {
+        "ingredient_category": "功能性肠道支持",
+        "fiber_solubility": None,
+        "fermentability": None,
+        "fiber_functions": ["功能性缓冲"],
+        "prebiotic_functions": [],
+    },
 }
 
 
@@ -427,6 +435,7 @@ NORMALIZATION_PATTERNS: List[Tuple[str, str]] = [
     (r"β-?葡聚糖", "β-葡聚糖"),
     (r"β葡聚糖", "β-葡聚糖"),
     (r"啤酒酵母粉", "啤酒酵母粉"),
+    (r"丝兰(?:提取物|粉)?", "丝兰"),
 
     # 常见简写/近义
     (r"车前子$", "车前子壳"),

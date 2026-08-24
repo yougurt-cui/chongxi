@@ -43,7 +43,8 @@ END_SECTION_LABELS = [
 ]
 INGREDIENT_TAIL_LABELS = [
     "添加剂组成", "添加剂", "营养添加剂", "保证成分", "营养成分分析值",
-    "产品成分分析保证值", "产品成分分析", "成分分析", "分析保证值", "营养保证",
+    "产品成分分析保证值", "产品成份分析保证值", "产品成分分析", "产品成份分析",
+    "成分分析", "成份分析", "分析保证值", "营养保证",
     "营养成分保证值分析", "营养成分保证值", "营养成分分析", "营养成分表", "营养指标",
     "进口登记证号", "进口产品复核检验报告编号", "检验报告编号",
     "贮存条件及方法", "贮存条件", "贮存方法", "贮存",
@@ -66,6 +67,8 @@ ANALYSIS_START_PATTERNS = [
     "成分分析",
     "产品成分分析",
     "产品成分分析保证值",
+    "产品成份分析",
+    "产品成份分析保证值",
     "营养成分分析",
     "营养成分保证值",
     "营养成分保证值分析",
@@ -78,7 +81,7 @@ ANALYSIS_METRIC_KEYWORDS = [
     "營養素", "营养素", "鈣", "钙", "磷", "鎂", "镁", "鈉", "钠",
 ]
 SUSPICIOUS_INGREDIENT_MARKERS = [
-    "分析保证值", "产品成分分析", "营养成分分析", "营养指标", "建议喂养指南",
+    "分析保证值", "产品成分分析", "产品成份分析", "营养成分分析", "营养指标", "建议喂养指南",
     "喂养指南", "数据来源", "卡路里含量", "添加剂组成",
 ]
 INGREDIENT_SECTION_HEADINGS = (
@@ -1428,6 +1431,19 @@ def parse_catfood_ingredient_ocr_json(
         return ParseSummary(scanned=0, upserted=0, source_table=source_table, target_table=target_table, batch_id=batch_id)
 
     brand_candidates = _build_image_name_brand_candidates(_load_known_brands(engine, target_table))
+    noise_names: set[str] = set()
+    try:
+        with engine.begin() as conn:
+            noise_names = {
+                str(row[0])
+                for row in conn.execute(text(
+                    "SELECT normalized_raw_name FROM catfood_ingredient_noise_pool WHERE active=1"
+                )).all()
+            }
+    except Exception:
+        # The pool is created by standardization initialization. OCR parsing remains
+        # backward compatible while older deployments are being migrated.
+        noise_names = set()
     parsed_payload = []
     for r in rows:
         parsed = parse_ocr_json_fields(str(r.get("ocr_json") or ""))
@@ -1437,6 +1453,17 @@ def parse_catfood_ingredient_ocr_json(
             current_product_name=parsed.get("product_name"),
             brand_candidates=brand_candidates,
         )
+        ingredient_composition = parsed.get("ingredient_composition")
+        if ingredient_composition and noise_names:
+            kept_tokens = []
+            for token in re.split(r"[、,，;；]", str(ingredient_composition)):
+                token = token.strip()
+                normalized_token = re.sub(
+                    r"[\s·•._\-—–/\\|,:：;；，。()（）\[\]【】'\"®™]+", "", token.lower()
+                )
+                if token and normalized_token not in noise_names:
+                    kept_tokens.append(token)
+            ingredient_composition = "、".join(kept_tokens) or None
         parsed_payload.append(
             {
                 "source_id": int(r["id"]),
@@ -1447,7 +1474,7 @@ def parse_catfood_ingredient_ocr_json(
                 "merged_source_ids": None,
                 "brand": brand,
                 "product_name": product_name,
-                "ingredient_composition": parsed.get("ingredient_composition"),
+                "ingredient_composition": ingredient_composition,
                 "phone": parsed.get("phone"),
                 "importer": parsed.get("importer"),
                 "ocr_text": parsed.get("ocr_text"),

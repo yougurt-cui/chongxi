@@ -11,7 +11,9 @@ from services.catfood_standardization_service import (
     list_standard_brands,
     list_standard_products,
     list_standard_ingredients,
+    list_formula_conflict_items,
     list_ingredient_review_items,
+    precheck_formula_identity,
     resolve_ingredient_review,
     review_brand_candidate,
     resolve_brand_mapping,
@@ -27,7 +29,11 @@ from services.formula_incremental_service import (
     materialize_formula_risks,
     materialize_formula_scores,
 )
-from services.orchestrator_service import resume_brand_tasks_for_source_ids, resume_ingredient_tasks_for_formula_ids
+from services.orchestrator_service import (
+    resume_brand_tasks_for_source_ids,
+    resume_formula_tasks_for_source_ids,
+    resume_ingredient_tasks_for_formula_ids,
+)
 
 
 catfood_standardization_api = Blueprint(
@@ -74,6 +80,14 @@ def standardization_brand_resolve():
 def standardization_formula():
     try:
         return jsonify(standardize_formula(request.get_json(silent=True) or {})), 200
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+
+
+@catfood_standardization_api.post("/formula/precheck")
+def standardization_formula_precheck():
+    try:
+        return jsonify(precheck_formula_identity(request.get_json(silent=True) or {})), 200
     except Exception as exc:
         return jsonify({"ok": False, "error": str(exc)}), 400
 
@@ -132,6 +146,14 @@ def standardization_ingredient_reviews():
         return jsonify({"ok": False, "error": str(exc)}), 400
 
 
+@catfood_standardization_api.get("/formula-conflicts")
+def standardization_formula_conflicts():
+    try:
+        return jsonify(list_formula_conflict_items(limit=int(request.args.get("limit") or 200))), 200
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+
+
 @catfood_standardization_api.get("/ingredients")
 def standardization_ingredients():
     try:
@@ -147,7 +169,7 @@ def standardization_products():
         brand_id = request.args.get("brand_id")
         return jsonify({"ok": True, "items": list_standard_products(
             brand_id=int(brand_id) if brand_id else None,
-            query=request.args.get("q") or "",
+            query=request.args.get("q") or request.args.get("query") or "",
             limit=int(request.args.get("limit") or 1000),
         )}), 200
     except Exception as exc:
@@ -189,7 +211,12 @@ def standardization_brand_candidate_review(candidate_id: int, action: str):
 @catfood_standardization_api.post("/formula/resolve")
 def standardization_formula_resolve():
     try:
-        return jsonify(resolve_formula_mapping(request.get_json(silent=True) or {})), 200
+        result = resolve_formula_mapping(request.get_json(silent=True) or {})
+        result["resumed_task_ids"] = resume_formula_tasks_for_source_ids(
+            [result["source_id"]],
+            result,
+        )
+        return jsonify(result), 200
     except Exception as exc:
         return jsonify({"ok": False, "error": str(exc)}), 400
 

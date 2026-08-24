@@ -164,6 +164,7 @@ FIBER_FUNCTION_RULES = {
     "增加粪便骨架": {"p_bulk": 1.0},
     "缓冲刺激": {"p_buffer": 1.0},
     "稀释刺激物": {"p_buffer": 0.8},
+    "功能性缓冲": {"p_buffer": 0.3},
     "温和供菌底物": {"q_feed": 0.4, "g": 0.2},
 }
 
@@ -217,12 +218,13 @@ STRUCTURAL_BULK_TAGS = {
     "鹰嘴豆纤维",
 }
 
-PORTRAIT_FUNCTION_SCORE_NAMES = ["吸水成形", "温和供菌底物", "缓冲刺激"]
+PORTRAIT_FUNCTION_SCORE_NAMES = ["吸水成形", "温和供菌底物", "缓冲刺激", "功能性缓冲"]
 
 FUNCTION_SCORE_TARGETS = {
     "吸水成形": ("p_form",),
     "温和供菌底物": ("q_feed",),
     "缓冲刺激": ("p_buffer",),
+    "功能性缓冲": ("p_buffer",),
 }
 
 
@@ -479,7 +481,7 @@ def calc_single_ingredient_function_scores(tag_detail: Dict[str, Any], weight: f
 
         rule = FIBER_FUNCTION_RULES.get(func) or {}
         direct_score = sum(float(rule.get(score_key, 0.0)) for score_key in FUNCTION_SCORE_TARGETS[func])
-        result[func] += direct_score * weight
+        result[func] = result.get(func, 0.0) + direct_score * weight
 
     return {key: round4(value) for key, value in result.items()}
 
