@@ -35,8 +35,11 @@ try:
     from .api.process_signal_api import process_signal_api
     from .api.taobao_sku_api import taobao_sku_api
     from .api.miniprogram_api import miniprogram_api
+    from .api.db_sync_api import db_sync_api
     from .api.enterprise_api import enterprise_api
+    from .api.formula_profile_api import formula_profile_api
     from .api.market_profile_api import market_profile_api
+    from .api.comment_clean_sync_api import comment_clean_sync_api
 except ImportError:
     from api.consumer_api import consumer_api
     from api.business_api import business_api
@@ -50,8 +53,11 @@ except ImportError:
     from api.process_signal_api import process_signal_api
     from api.taobao_sku_api import taobao_sku_api
     from api.miniprogram_api import miniprogram_api
+    from api.db_sync_api import db_sync_api
     from api.enterprise_api import enterprise_api
+    from api.formula_profile_api import formula_profile_api
     from api.market_profile_api import market_profile_api
+    from api.comment_clean_sync_api import comment_clean_sync_api
 
 from services import cat_food_task_service as task_store
 
@@ -1921,8 +1927,11 @@ def create_app() -> Flask:
     flask_app.register_blueprint(process_signal_api)
     flask_app.register_blueprint(taobao_sku_api)
     flask_app.register_blueprint(miniprogram_api)
+    flask_app.register_blueprint(db_sync_api)
     flask_app.register_blueprint(enterprise_api)
+    flask_app.register_blueprint(formula_profile_api)
     flask_app.register_blueprint(market_profile_api)
+    flask_app.register_blueprint(comment_clean_sync_api)
 
     @flask_app.get("/health")
     def health() -> tuple[dict, int]:
