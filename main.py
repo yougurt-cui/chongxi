@@ -42,6 +42,7 @@ try:
     from .api.comment_clean_sync_api import comment_clean_sync_api
     from .api.comment_mining_api import comment_mining_api
     from .api.demand_cross_analysis_api import demand_cross_analysis_api
+    from .api.disease_representative_api import disease_representative_api
 except ImportError:
     from api.consumer_api import consumer_api
     from api.business_api import business_api
@@ -62,6 +63,7 @@ except ImportError:
     from api.comment_clean_sync_api import comment_clean_sync_api
     from api.comment_mining_api import comment_mining_api
     from api.demand_cross_analysis_api import demand_cross_analysis_api
+    from api.disease_representative_api import disease_representative_api
 
 from services import cat_food_task_service as task_store
 
@@ -1938,6 +1940,7 @@ def create_app() -> Flask:
     flask_app.register_blueprint(comment_clean_sync_api)
     flask_app.register_blueprint(comment_mining_api)
     flask_app.register_blueprint(demand_cross_analysis_api)
+    flask_app.register_blueprint(disease_representative_api)
 
     @flask_app.get("/health")
     def health() -> tuple[dict, int]:

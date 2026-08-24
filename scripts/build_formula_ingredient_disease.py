@@ -59,7 +59,8 @@ def local_connection():
 
 
 @contextmanager
-def remote_connection():
+def ssh_clues_connection():
+    """开发机模式：通过 SSH 隧道连接线上病症库。"""
     sock = socket.socket()
     sock.bind(("127.0.0.1", 0))
     local_port = sock.getsockname()[1]
@@ -76,13 +77,13 @@ def remote_connection():
     conn = None
     try:
         feature_cfg = get_feature_mysql_config()
-        user = os.getenv("CAT_DISEASE_DB_USER", str(feature_cfg.get("user") or "root"))
-        password = os.getenv("CAT_DISEASE_DB_PASSWORD", str(feature_cfg.get("password") or ""))
+        db_user = os.getenv("CAT_DISEASE_DB_USER", str(feature_cfg.get("user") or "root"))
+        db_password = os.getenv("CAT_DISEASE_DB_PASSWORD", str(feature_cfg.get("password") or ""))
         for _ in range(50):
             try:
                 conn = pymysql.connect(
-                    host="127.0.0.1", port=local_port, user=user, password=password,
-                    database=REMOTE_DB, charset="utf8mb4",
+                    host="127.0.0.1", port=local_port, user=db_user,
+                    password=db_password, database=REMOTE_DB, charset="utf8mb4",
                     cursorclass=pymysql.cursors.DictCursor, connect_timeout=2,
                     read_timeout=120,
                 )
@@ -92,7 +93,10 @@ def remote_connection():
                     break
                 time.sleep(0.1)
         if conn is None:
-            raise RuntimeError("无法连接远程病症库")
+            raise RuntimeError(
+                "无法连接远程 cat_disease_clues，请检查 SSH key 及 "
+                "CAT_DISEASE_DB_USER/CAT_DISEASE_DB_PASSWORD"
+            )
         yield conn
     finally:
         if conn:
@@ -102,6 +106,29 @@ def remote_connection():
             process.wait(timeout=5)
         except subprocess.TimeoutExpired:
             process.kill()
+
+
+@contextmanager
+def direct_clues_connection():
+    """生产 API 模式：直接连接线上特征库，不建立 SSH 隧道。"""
+    cfg = dict(get_feature_mysql_config())
+    cfg["database"] = REMOTE_DB
+    conn = pymysql.connect(
+        **cfg,
+        cursorclass=pymysql.cursors.DictCursor,
+        connect_timeout=5,
+        read_timeout=120,
+    )
+    try:
+        yield conn
+    finally:
+        conn.close()
+
+
+def clues_connection(mode):
+    if mode == "direct":
+        return direct_clues_connection()
+    return ssh_clues_connection()
 
 
 def normalize_brand(value):
@@ -479,6 +506,12 @@ def write_outputs(conn, detail_rows, product_rows, ingredient_rows):
 def parse_args():
     parser = argparse.ArgumentParser(description="构建病症代表产品和代表原料")
     parser.add_argument("--dry-run", action="store_true", help="只计算预览，不写库")
+    parser.add_argument(
+        "--clues-connection",
+        choices=("ssh", "direct"),
+        default="ssh",
+        help="病症线索库连接方式：开发机默认 ssh，生产 API 使用 direct",
+    )
     return parser.parse_args()
 
 
@@ -489,7 +522,7 @@ def main():
         print("[1/4] 读取本地标准品牌与别名...")
         name_to_id, id_to_name = load_brand_master(local_conn)
         print("[2/4] 读取远程病症线索并标准化品牌...")
-        with remote_connection() as remote_conn:
+        with clues_connection(args.clues_connection) as remote_conn:
             disease_stats, unmatched = load_disease_brand_stats(
                 remote_conn, name_to_id, id_to_name
             )
