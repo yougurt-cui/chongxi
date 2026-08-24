@@ -1229,7 +1229,7 @@ PAGE_INIT.expired = function(){
 
 /* ---------- 6. 购买页 ---------- */
 let selectedPayMethod = 'online';
-PAGE_INIT.purchase = function(opts){
+PAGE_INIT.purchase = function(opts={}){
   const c = store.getCompany() || {};
   $('#purchaseCompany').value = c.company_name || c.name || '';
   // default method
