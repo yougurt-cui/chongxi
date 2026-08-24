@@ -69,6 +69,83 @@ def _formula_exists(formula_id: int) -> bool:
             return cursor.fetchone() is not None
 
 
+def _result_counts() -> dict[str, dict[str, int]]:
+    tables = (
+        "catfood_module_market_ranking",
+        "catfood_formula_structure_labels",
+        "catfood_formula_profile",
+    )
+    counts: dict[str, dict[str, int]] = {}
+    with _connect() as conn:
+        with conn.cursor() as cursor:
+            for table in tables:
+                cursor.execute(
+                    f"SELECT COUNT(*) AS rows_count, "
+                    f"COUNT(DISTINCT formula_id) AS formula_count FROM `{table}`"
+                )
+                row = cursor.fetchone() or {}
+                counts[table] = {
+                    "rows": int(row.get("rows_count") or 0),
+                    "formulas": int(row.get("formula_count") or 0),
+                }
+    return counts
+
+
+def _execute_steps() -> list[dict[str, Any]]:
+    steps: list[dict[str, Any]] = []
+    for step_key, script_name in STEPS:
+        proc = subprocess.run(
+            [sys.executable, str(BASE_DIR / "scripts" / script_name)],
+            cwd=str(BASE_DIR),
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=1200,
+        )
+        step = {
+            "key": step_key,
+            "status": "success" if proc.returncode == 0 else "failed",
+            "returncode": proc.returncode,
+            "log_tail": (proc.stdout or "").splitlines()[-40:],
+        }
+        steps.append(step)
+        if proc.returncode != 0:
+            error = RuntimeError(f"步骤 {step_key} 执行失败")
+            setattr(error, "steps", steps)
+            raise error
+    return steps
+
+
+def rebuild_market_profile_for_orchestrator(payload: dict[str, Any]) -> dict[str, Any]:
+    """Synchronously rebuild the full market tables for a pipeline task node."""
+    formula_id = int(payload.get("formula_id") or 0)
+    if not formula_id:
+        raise ValueError("缺少 formula_id")
+    if not _formula_exists(formula_id):
+        raise ValueError(f"formula_id={formula_id} 尚未进入 score_wide，请先完成前置评分")
+
+    lock_conn = _connect(autocommit=True)
+    try:
+        with lock_conn.cursor() as cursor:
+            cursor.execute("SELECT GET_LOCK(%s, 0) AS acquired", (LOCK_NAME,))
+            if int((cursor.fetchone() or {}).get("acquired") or 0) != 1:
+                raise RuntimeError("另一个全量配方画像构建正在运行")
+        steps = _execute_steps()
+        return {
+            "ok": True,
+            "formula_id": formula_id,
+            "scope": "full_market",
+            "steps": steps,
+            "counts": _result_counts(),
+        }
+    finally:
+        try:
+            with lock_conn.cursor() as cursor:
+                cursor.execute("SELECT RELEASE_LOCK(%s)", (LOCK_NAME,))
+        finally:
+            lock_conn.close()
+
+
 def _task_row(task_id: str) -> dict[str, Any] | None:
     ensure_task_table()
     with _connect() as conn:

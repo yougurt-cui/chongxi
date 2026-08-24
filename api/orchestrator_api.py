@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import json
+import os
 from urllib import request as url_request
 from urllib.error import HTTPError, URLError
 
 from flask import Blueprint, current_app, jsonify, request
+
+from api.enterprise_api import admin_required
 
 from services.orchestrator_service import (
     apply_manual_ocr_text,
@@ -32,9 +35,14 @@ def _call_api_sync(api: dict, payload: dict) -> dict:
     if not url:
         raise ValueError("API URL 为空")
 
+    headers = {"Content-Type": "application/json", "Accept": "application/json"}
+    admin_token = (os.getenv("MINIPROGRAM_ADMIN_TOKEN") or "").strip()
+    if admin_token and url.startswith("/api/data-pipeline/"):
+        headers["X-Admin-Token"] = admin_token
+
     if url.startswith("/"):
         with current_app.test_client() as client:
-            response = client.open(url, method=method, json=payload)
+            response = client.open(url, method=method, json=payload, headers=headers)
             text = response.get_data(as_text=True)
             try:
                 data = json.loads(text or "{}")
@@ -50,7 +58,7 @@ def _call_api_sync(api: dict, payload: dict) -> dict:
     req = url_request.Request(
         url,
         data=body,
-        headers={"Content-Type": "application/json", "Accept": "application/json"},
+        headers=headers,
         method=method,
     )
     try:
@@ -73,6 +81,7 @@ def _call_api_sync(api: dict, payload: dict) -> dict:
 
 
 @orchestrator_api.post("/tasks")
+@admin_required
 def orchestrator_create_task():
     payload = request.get_json(silent=True) or {}
     task_type = str(payload.get("task_type") or "").strip()
@@ -116,6 +125,7 @@ def orchestrator_reviews():
 
 
 @orchestrator_api.post("/tasks/<task_id>/run")
+@admin_required
 def orchestrator_run_task(task_id: str):
     payload = request.get_json(silent=True) or {}
     try:
@@ -126,6 +136,7 @@ def orchestrator_run_task(task_id: str):
 
 
 @orchestrator_api.post("/tasks/<task_id>/cancel")
+@admin_required
 def orchestrator_cancel_task(task_id: str):
     payload = request.get_json(silent=True) or {}
     try:
@@ -136,6 +147,7 @@ def orchestrator_cancel_task(task_id: str):
 
 
 @orchestrator_api.post("/tasks/<task_id>/ocr-text")
+@admin_required
 def orchestrator_apply_manual_ocr_text(task_id: str):
     payload = request.get_json(silent=True) or {}
     try:
@@ -150,6 +162,7 @@ def orchestrator_apply_manual_ocr_text(task_id: str):
 
 
 @orchestrator_api.post("/tasks/<task_id>/nodes/<node_code>/reextract")
+@admin_required
 def orchestrator_reextract_node(task_id: str, node_code: str):
     payload = request.get_json(silent=True) or {}
     try:
@@ -164,6 +177,7 @@ def orchestrator_reextract_node(task_id: str, node_code: str):
 
 
 @orchestrator_api.post("/tasks/<task_id>/nodes/<node_code>/result")
+@admin_required
 def orchestrator_apply_node_result(task_id: str, node_code: str):
     payload = request.get_json(silent=True) or {}
     try:
@@ -180,6 +194,7 @@ def orchestrator_apply_node_result(task_id: str, node_code: str):
 
 
 @orchestrator_api.post("/dispatch-scan")
+@admin_required
 def orchestrator_dispatch_scan():
     payload = request.get_json(silent=True) or {}
     try:
@@ -193,6 +208,7 @@ def orchestrator_dispatch_scan():
 
 
 @orchestrator_api.post("/dispatch-claim")
+@admin_required
 def orchestrator_dispatch_claim():
     payload = request.get_json(silent=True) or {}
     try:
@@ -214,6 +230,7 @@ def orchestrator_dispatch_claim():
 
 
 @orchestrator_api.post("/dispatch-call-sync")
+@admin_required
 def orchestrator_dispatch_call_sync():
     payload = request.get_json(silent=True) or {}
     try:

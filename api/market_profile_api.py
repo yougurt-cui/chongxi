@@ -2,13 +2,30 @@
 
 from __future__ import annotations
 
-from flask import Blueprint, jsonify
+from flask import Blueprint, jsonify, request
 
 from api.enterprise_api import admin_required
-from services.market_profile_rebuild_service import create_rebuild_task, get_rebuild_task
+from services.market_profile_rebuild_service import (
+    create_rebuild_task,
+    get_rebuild_task,
+    rebuild_market_profile_for_orchestrator,
+)
 
 
 market_profile_api = Blueprint("market_profile_api", __name__, url_prefix="/api/data-pipeline")
+
+
+@market_profile_api.post("/rebuild-market-profile-node")
+@admin_required
+def rebuild_market_profile_node():
+    try:
+        return jsonify(rebuild_market_profile_for_orchestrator(request.get_json(silent=True) or {})), 200
+    except ValueError as exc:
+        return jsonify({"ok": False, "message": str(exc)}), 409
+    except RuntimeError as exc:
+        return jsonify({"ok": False, "message": str(exc)}), 409
+    except Exception as exc:
+        return jsonify({"ok": False, "message": str(exc)}), 500
 
 
 @market_profile_api.post("/formulas/<int:formula_id>/rebuild-market-profile")

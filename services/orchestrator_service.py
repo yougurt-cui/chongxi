@@ -37,6 +37,11 @@ NODE_SKIPPED = "skipped"
 SUCCESS_CALL_STATUSES = {"success", "succeeded", "ok", "done"}
 FAILURE_CALL_STATUSES = {"failure", "failed", "fail", "error", "timeout", "cancelled", "canceled"}
 WAITING_CALL_STATUSES = {"waiting_result", "waiting", "pending", "running", "processing"}
+STANDARDIZATION_STATUS_FIELDS = {
+    "brand_standardize": "brand_status",
+    "product_standardize": "product_status",
+    "formula_standardize": "formula_status",
+}
 
 BASE_DIR = Path(__file__).resolve().parents[1]
 FIXED_UPLOAD_ROOT = get_cat_food_upload_root(BASE_DIR / "var" / "cat_food_uploads")
@@ -185,6 +190,14 @@ PIPELINE_DEFINITIONS: dict[str, tuple[NodeDefinition, ...]] = {
             node_name="产品标准化",
             callable_path="services.catfood_standardization_service.standardize_product",
             api=ApiRoute(method="POST", url="/api/catfood/standardization/product", timeout_seconds=60),
+            depends_on=("formula_precheck",),
+            priority=23,
+        ),
+        NodeDefinition(
+            node_code="formula_precheck",
+            node_name="配方预检",
+            callable_path="services.catfood_standardization_service.precheck_formula_identity",
+            api=ApiRoute(method="POST", url="/api/catfood/standardization/formula/precheck", timeout_seconds=60),
             depends_on=("brand_standardize",),
             priority=22,
         ),
@@ -194,7 +207,7 @@ PIPELINE_DEFINITIONS: dict[str, tuple[NodeDefinition, ...]] = {
             callable_path="services.catfood_standardization_service.standardize_formula",
             api=ApiRoute(method="POST", url="/api/catfood/standardization/formula", timeout_seconds=60),
             depends_on=("product_standardize",),
-            priority=23,
+            priority=24,
         ),
         NodeDefinition(
             node_code="formula_input_build",
@@ -206,7 +219,7 @@ PIPELINE_DEFINITIONS: dict[str, tuple[NodeDefinition, ...]] = {
                 timeout_seconds=60,
             ),
             depends_on=("formula_standardize",),
-            priority=24,
+            priority=25,
         ),
         NodeDefinition(
             node_code="ingredient_standardize",
@@ -223,6 +236,21 @@ PIPELINE_DEFINITIONS: dict[str, tuple[NodeDefinition, ...]] = {
             api=ApiRoute(method="POST", url="/api/catfood/standardization/formula-risk/materialize", timeout_seconds=600),
             depends_on=("ingredient_standardize",),
             priority=50,
+        ),
+        NodeDefinition(
+            node_code="market_profile_build",
+            node_name="全量配方画像构建",
+            callable_path=(
+                "services.market_profile_rebuild_service."
+                "rebuild_market_profile_for_orchestrator"
+            ),
+            api=ApiRoute(
+                method="POST",
+                url="/api/data-pipeline/rebuild-market-profile-node",
+                timeout_seconds=1200,
+            ),
+            depends_on=("formula_profile",),
+            priority=60,
         ),
     ),
     "catfood_ingredient_ingest": (
@@ -828,6 +856,71 @@ def _check_formula_profile(output: dict[str, Any]) -> CheckResult:
     return CheckResult(True, NODE_SUCCESS, "配方画像结果表检查通过", details)
 
 
+def _check_market_profile_build(output: dict[str, Any]) -> CheckResult:
+    formula_id = _get_output_value(output, "formula_id")
+    if not _is_non_empty(formula_id):
+        return CheckResult(False, NODE_FAILED, "全量配方画像构建缺少 formula_id")
+
+    try:
+        with _connect_feature() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "SELECT COUNT(*) AS n FROM catfood_module_market_ranking WHERE formula_id=%s",
+                    (int(formula_id),),
+                )
+                ranking_found = int((cursor.fetchone() or {}).get("n") or 0)
+                cursor.execute(
+                    "SELECT COUNT(*) AS n FROM catfood_formula_structure_labels WHERE formula_id=%s",
+                    (int(formula_id),),
+                )
+                structure_found = int((cursor.fetchone() or {}).get("n") or 0)
+                cursor.execute(
+                    """SELECT structure_labels, market_rankings
+                       FROM catfood_formula_profile WHERE formula_id=%s LIMIT 1""",
+                    (int(formula_id),),
+                )
+                profile = cursor.fetchone()
+                cursor.execute(
+                    """SELECT COUNT(*) AS n
+                       FROM catfood_protein_fat_fiber_score_wide w
+                       LEFT JOIN catfood_module_market_ranking r ON r.formula_id=w.formula_id
+                       WHERE w.formula_id IS NOT NULL AND r.formula_id IS NULL"""
+                )
+                wide_missing_ranking = int((cursor.fetchone() or {}).get("n") or 0)
+                cursor.execute(
+                    """SELECT COUNT(*) AS n
+                       FROM catfood_module_market_ranking r
+                       LEFT JOIN catfood_formula_profile p ON p.formula_id=r.formula_id
+                       WHERE p.formula_id IS NULL"""
+                )
+                ranking_missing_profile = int((cursor.fetchone() or {}).get("n") or 0)
+    except Exception as exc:
+        return CheckResult(False, NODE_FAILED, f"全量配方画像结果检查失败: {exc}")
+
+    details = {
+        "formula_id": int(formula_id),
+        "scope": "full_market",
+        "tables": {
+            "catfood_module_market_ranking": {"trigger_formula_rows": ranking_found},
+            "catfood_formula_structure_labels": {"trigger_formula_rows": structure_found},
+            "catfood_formula_profile": {"found": bool(profile)},
+        },
+        "wide_missing_ranking": wide_missing_ranking,
+        "ranking_missing_profile": ranking_missing_profile,
+    }
+    if not ranking_found:
+        return CheckResult(False, NODE_FAILED, "排名表缺少触发配方", details)
+    if not structure_found:
+        return CheckResult(False, NODE_FAILED, "结构标签表缺少触发配方", details)
+    if not profile:
+        return CheckResult(False, NODE_FAILED, "最终配方画像表缺少触发配方", details)
+    if not _is_non_empty(profile.get("structure_labels")) or not _is_non_empty(profile.get("market_rankings")):
+        return CheckResult(False, NODE_FAILED, "最终配方画像字段不完整", details)
+    if wide_missing_ranking or ranking_missing_profile:
+        return CheckResult(False, NODE_FAILED, "全市场画像表覆盖不完整", details)
+    return CheckResult(True, NODE_SUCCESS, "全量配方画像构建结果检查通过", details)
+
+
 def _formula_profile_product_key_candidates(
     product_key: Any,
     wide_row: dict[str, Any] | None,
@@ -1045,12 +1138,13 @@ def output_check(node_code: str, output: dict[str, Any], task_payload: dict[str,
         return _check_upload(output, task_payload)
     if node_code == "ocr_formula":
         return _check_ocr_formula(output)
+    if node_code == "formula_precheck":
+        status = str(output.get("precheck_status") or "").strip()
+        if status in {"matched", "clear", "conflict", "pending"}:
+            return CheckResult(True, NODE_SUCCESS, f"配方预检完成: {status}")
+        return CheckResult(False, NODE_FAILED, f"配方预检状态异常: {status or 'empty'}")
     if node_code in {"brand_standardize", "product_standardize", "formula_standardize"}:
-        status_field = {
-            "brand_standardize": "brand_status",
-            "product_standardize": "product_status",
-            "formula_standardize": "formula_status",
-        }[node_code]
+        status_field = STANDARDIZATION_STATUS_FIELDS[node_code]
         status = str(output.get(status_field) or "").strip()
         if status == "matched":
             return CheckResult(True, NODE_SUCCESS, f"{node_code} 匹配成功")
@@ -1080,13 +1174,15 @@ def output_check(node_code: str, output: dict[str, Any], task_payload: dict[str,
         return _check_ingredient_standardize(output)
     if node_code == "formula_profile":
         return _check_formula_profile(output)
+    if node_code == "market_profile_build":
+        return _check_market_profile_build(output)
     if output:
         return CheckResult(True, NODE_SUCCESS, "默认输出检查通过")
     return CheckResult(False, NODE_FAILED, "输出为空")
 
 
 def utc_now() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
 def _connect() -> pymysql.connections.Connection:
@@ -1260,6 +1356,48 @@ def _node_from_row(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _ensure_task_definition_nodes(
+    conn: pymysql.connections.Connection,
+    task_id: str,
+    task_type: str,
+    task_status: str,
+) -> None:
+    now = utc_now()
+    with conn.cursor() as cursor:
+        cursor.execute(
+            "SELECT node_code FROM pipeline_task_node WHERE task_id = %s",
+            (task_id,),
+        )
+        existing = {str(row["node_code"]) for row in cursor.fetchall()}
+        for node in get_pipeline_definition(task_type):
+            if node.node_code in existing:
+                continue
+            skip_historical = (
+                node.node_code == "market_profile_build"
+                and task_status in {TASK_DONE, TASK_FAILED, TASK_CANCELLED, TASK_NEED_REVIEW, "success"}
+            )
+            cursor.execute(
+                """
+                INSERT INTO pipeline_task_node
+                    (id, task_id, node_code, node_name, node_status, priority,
+                     error_message, finished_at, created_at, updated_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    f"{task_id}:{node.node_code}",
+                    task_id,
+                    node.node_code,
+                    node.node_name,
+                    NODE_SKIPPED if skip_historical else NODE_PENDING,
+                    node.priority,
+                    "节点上线前历史任务，不追溯执行" if skip_historical else None,
+                    now if skip_historical else None,
+                    now,
+                    now,
+                ),
+            )
+
+
 def get_task(task_id: str) -> dict[str, Any] | None:
     init_db()
     with _connect() as conn:
@@ -1268,6 +1406,8 @@ def get_task(task_id: str) -> dict[str, Any] | None:
             row = cursor.fetchone()
             if not row:
                 return None
+            _ensure_task_definition_nodes(conn, task_id, row["task_type"], row["task_status"])
+            conn.commit()
             cursor.execute(
                 "SELECT * FROM pipeline_task_node WHERE task_id = %s ORDER BY priority ASC, created_at ASC",
                 (task_id,),
@@ -1314,11 +1454,20 @@ def list_review_items(limit: int = 50, statuses: list[str] | None = None) -> dic
                     n.node_status,
                     n.error_message AS node_error_message,
                     n.updated_at AS node_updated_at,
-                    o.output_json
+                    o.output_json,
+                    COALESCE(
+                        JSON_UNQUOTE(JSON_EXTRACT(o.output_json, '$.formula_id')),
+                        JSON_UNQUOTE(JSON_EXTRACT(fi.output_json, '$.formula_id')),
+                        JSON_UNQUOTE(JSON_EXTRACT(fs.output_json, '$.formula_id'))
+                    ) AS formula_id
                 FROM pipeline_task_node n
                 JOIN pipeline_task t ON t.id = n.task_id
                 LEFT JOIN pipeline_node_output o
                     ON o.task_id = n.task_id AND o.node_code = n.node_code
+                LEFT JOIN pipeline_node_output fi
+                    ON fi.task_id = n.task_id AND fi.node_code = 'formula_input_build'
+                LEFT JOIN pipeline_node_output fs
+                    ON fs.task_id = n.task_id AND fs.node_code = 'formula_standardize'
                 WHERE n.node_status IN ({placeholders})
                 ORDER BY n.updated_at DESC
                 LIMIT %s
@@ -1342,6 +1491,7 @@ def list_review_items(limit: int = 50, statuses: list[str] | None = None) -> dic
                 "node_status": row["node_status"],
                 "node_error_message": row["node_error_message"],
                 "node_updated_at": str(row["node_updated_at"]),
+                "formula_id": int(row["formula_id"]) if row.get("formula_id") else None,
                 "output": _json_loads(row["output_json"], {}),
             }
         )
@@ -1488,11 +1638,36 @@ def build_node_input(task: dict[str, Any], node_def: NodeDefinition) -> dict[str
             }
         if node_def.node_code == "product_standardize":
             brand_output = _output_for(task, "brand_standardize")
+            formula_precheck_output = _output_for(task, "formula_precheck")
+            product_name_candidates: list[str] = []
+            standard_brand_name = str(brand_output.get("standard_brand_name") or "").strip()
+            for value in (
+                brand_output.get("ocr_brand_name"),
+                payload.get("product_name"),
+                brand_output.get("raw_product_name"),
+            ):
+                candidate = str(value or "").strip()
+                if candidate and candidate != standard_brand_name and candidate not in product_name_candidates:
+                    product_name_candidates.append(candidate)
             return {
                 "orchestrator_task_id": task["id"],
                 "orchestrator_node_code": node_def.node_code,
                 "source_id": brand_output.get("source_id"),
                 "brand_id": brand_output.get("brand_id"),
+                "product_name_candidates": product_name_candidates,
+                "product_name": product_name_candidates[0] if product_name_candidates else payload.get("product_name"),
+                "formula_precheck": formula_precheck_output,
+            }
+        if node_def.node_code == "formula_precheck":
+            brand_output = _output_for(task, "brand_standardize")
+            return {
+                "orchestrator_task_id": task["id"],
+                "orchestrator_node_code": node_def.node_code,
+                "source_id": brand_output.get("source_id"),
+                "parsed_row_id": brand_output.get("parsed_row_id"),
+                "file_sha256": brand_output.get("file_sha256"),
+                "brand_id": brand_output.get("brand_id"),
+                "standard_brand_name": brand_output.get("standard_brand_name"),
             }
         if node_def.node_code == "formula_standardize":
             product_output = _output_for(task, "product_standardize")
@@ -1525,6 +1700,14 @@ def build_node_input(task: dict[str, Any], node_def: NodeDefinition) -> dict[str
                 "orchestrator_node_code": node_def.node_code,
                 "formula_id": formula_input.get("formula_id"),
                 "batch_id": f"upload-{task['id']}",
+            }
+        if node_def.node_code == "market_profile_build":
+            formula_input = _output_for(task, "formula_input_build")
+            return {
+                "orchestrator_task_id": task["id"],
+                "orchestrator_node_code": node_def.node_code,
+                "formula_id": formula_input.get("formula_id"),
+                "scope": "full_market",
             }
 
     return payload
@@ -1602,7 +1785,10 @@ def _call_node(task: dict[str, Any], node_def: NodeDefinition) -> dict[str, Any]
         raise ValueError(f"节点未配置 callable_path: {node_def.node_code}")
     payload = build_node_input(task, node_def)
     func = _load_callable(node_def.callable_path)
-    result = func(payload)
+    if node_def.node_code in {"formula_input_build", "ingredient_extract"}:
+        result = func(formula_id=int(payload.get("formula_id")), apply=True)
+    else:
+        result = func(payload)
     if not isinstance(result, dict):
         return {"ok": True, "result": result}
     return result
@@ -1616,6 +1802,9 @@ def _execute_ready_node(task: dict[str, Any], node_def: NodeDefinition) -> None:
 
     try:
         output = _call_node(task, node_def)
+        output = _unwrap_node_output_envelope(output)
+        output = _augment_node_output(task, node_def.node_code, output)
+        output = _repair_incomplete_ingredient_extract_output(task, node_def.node_code, output)
         ok = bool(output.get("ok", True))
     except Exception as exc:
         with _connect() as conn:
@@ -1725,6 +1914,101 @@ def _unwrap_node_output_envelope(output: dict[str, Any]) -> dict[str, Any]:
     return dict(output)
 
 
+def _repair_incomplete_standardization_output(
+    task: dict[str, Any],
+    node_code: str,
+    output: dict[str, Any],
+) -> dict[str, Any]:
+    status_field = STANDARDIZATION_STATUS_FIELDS.get(node_code)
+    if not status_field or str(output.get(status_field) or "").strip():
+        return output
+
+    definitions = {node.node_code: node for node in get_pipeline_definition(task["task_type"])}
+    node_def = definitions.get(node_code)
+    if not node_def or not node_def.callable_path:
+        return output
+
+    try:
+        repaired = _call_node(task, node_def)
+    except Exception:
+        return output
+    repaired = _unwrap_node_output_envelope(repaired)
+    if not isinstance(repaired, dict) or not str(repaired.get(status_field) or "").strip():
+        return output
+
+    merged = dict(repaired)
+    for key, value in output.items():
+        if not _is_non_empty(merged.get(key)):
+            merged[key] = value
+    return _augment_node_output(task, node_code, merged)
+
+
+def _repair_incomplete_formula_input_output(
+    task: dict[str, Any],
+    node_code: str,
+    output: dict[str, Any],
+) -> dict[str, Any]:
+    if node_code != "formula_input_build" or str(output.get("build_status") or "").strip():
+        return output
+
+    formula_output = _output_for(task, "formula_standardize")
+    formula_id = output.get("formula_id") or formula_output.get("formula_id")
+    if not formula_id:
+        return output
+
+    definitions = {node.node_code: node for node in get_pipeline_definition(task["task_type"])}
+    node_def = definitions.get(node_code)
+    if not node_def or not node_def.callable_path:
+        return output
+
+    try:
+        repaired = _call_node(task, node_def)
+    except Exception:
+        return output
+    repaired = _unwrap_node_output_envelope(repaired)
+    if not isinstance(repaired, dict) or not str(repaired.get("build_status") or "").strip():
+        return output
+
+    merged = dict(repaired)
+    for key, value in output.items():
+        if not _is_non_empty(merged.get(key)):
+            merged[key] = value
+    return _augment_node_output(task, node_code, merged)
+
+
+def _repair_incomplete_ingredient_extract_output(
+    task: dict[str, Any],
+    node_code: str,
+    output: dict[str, Any],
+) -> dict[str, Any]:
+    """Recover a generated Profile when an API response omitted its status fields."""
+    if node_code != "ingredient_extract" or str(output.get("overall_status") or "").strip():
+        return output
+
+    formula_input = _output_for(task, "formula_input_build")
+    formula_standardize = _output_for(task, "formula_standardize")
+    formula_id = output.get("formula_id") or formula_input.get("formula_id") or formula_standardize.get("formula_id")
+    if not formula_id:
+        return output
+
+    with _connect() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                "SELECT * FROM catfood_formula_feature_profile WHERE formula_id=%s",
+                (int(formula_id),),
+            )
+            profile = cursor.fetchone()
+    if not profile or not str(profile.get("overall_status") or "").strip():
+        return output
+
+    repaired = dict(output)
+    repaired["formula_id"] = int(formula_id)
+    repaired["overall_status"] = profile["overall_status"]
+    repaired["profile"] = profile
+    repaired["profile_recovered_from_database"] = True
+    return _augment_node_output(task, node_code, repaired)
+
+
 def _merge_identity_fields(output: dict[str, Any], *sources: dict[str, Any]) -> None:
     for source in sources:
         if not isinstance(source, dict):
@@ -1771,6 +2055,8 @@ def _augment_node_output(task: dict[str, Any], node_code: str, output: dict[str,
         nested = output.get("standardized_ingredients")
         if isinstance(nested, dict):
             _merge_identity_fields(output, nested)
+    elif node_code == "market_profile_build":
+        _merge_identity_fields(output, standardize_output, extract_output, ocr_output)
 
     return output
 
@@ -1793,6 +2079,10 @@ def apply_node_result(
     output = _unwrap_node_output_envelope(dict(output or {}))
     output = _augment_node_output(task, node_code, output)
     normalized_status = str(call_status or "").strip().lower()
+    if normalized_status in SUCCESS_CALL_STATUSES:
+        output = _repair_incomplete_standardization_output(task, node_code, output)
+        output = _repair_incomplete_formula_input_output(task, node_code, output)
+        output = _repair_incomplete_ingredient_extract_output(task, node_code, output)
     with _connect() as conn:
         if output:
             _save_node_output(conn, task_id, node_code, output)
@@ -1949,7 +2239,7 @@ def complete_duplicate_formula_tasks(source_ids: list[int]) -> list[str]:
                     """UPDATE pipeline_task_node SET node_status='skipped',
                        error_message='重复配方已确认复用，后续无需重复物化',finished_at=%s,updated_at=%s
                        WHERE task_id=%s AND node_code IN ('formula_standardize','formula_input_build',
-                       'ingredient_extract','ingredient_standardize','formula_profile')""",
+                       'ingredient_extract','ingredient_standardize','formula_profile','market_profile_build')""",
                     (now, now, task_id),
                 )
                 cursor.execute(
@@ -2016,6 +2306,60 @@ def resume_product_tasks_for_source_ids(source_ids: list[int]) -> list[str]:
             task_ids = [str(row["task_id"]) for row in cursor.fetchall()]
     for task_id in task_ids:
         reset_node_for_reextract(task_id, "product_standardize", "产品人工确认后继续标准化")
+    return task_ids
+
+
+def resume_formula_tasks_for_source_ids(
+    source_ids: list[int],
+    resolved_output: dict[str, Any] | None = None,
+) -> list[str]:
+    """Apply a manual formula-resolution result to waiting formula nodes."""
+    normalized_ids = sorted({int(item) for item in source_ids if item is not None})
+    if not normalized_ids:
+        return []
+    placeholders = ", ".join(["%s"] * len(normalized_ids))
+    with _connect() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                f"""
+                SELECT DISTINCT o.task_id
+                FROM pipeline_node_output o
+                JOIN pipeline_task_node n
+                  ON n.task_id = o.task_id AND n.node_code = 'formula_standardize'
+                WHERE o.node_code = 'formula_standardize'
+                  AND n.node_status IN (%s, %s, %s)
+                  AND CAST(JSON_UNQUOTE(JSON_EXTRACT(o.output_json, '$.source_id')) AS UNSIGNED)
+                      IN ({placeholders})
+                """,
+                (NODE_NEED_REVIEW, NODE_FAILED, NODE_RUNNING, *normalized_ids),
+            )
+            task_ids = [str(row["task_id"]) for row in cursor.fetchall()]
+
+    for task_id in task_ids:
+        output = dict(resolved_output or {})
+        if not output:
+            task = get_task(task_id)
+            output = dict(_output_for(task or {}, "formula_standardize"))
+        output["formula_status"] = "matched"
+        apply_node_result(
+            task_id,
+            "formula_standardize",
+            call_status="success",
+            output=output,
+        )
+        with _connect() as conn:
+            _delete_node_output(conn, task_id, "formula_input_build")
+            _set_node_status(conn, task_id, "formula_input_build", NODE_READY, None)
+            for downstream_code in (
+                "ingredient_extract",
+                "ingredient_standardize",
+                "formula_profile",
+                "market_profile_build",
+            ):
+                _delete_node_output(conn, task_id, downstream_code)
+                _set_node_status(conn, task_id, downstream_code, NODE_PENDING, None)
+            _set_task_status(conn, task_id, TASK_PROCESSING, None)
+            conn.commit()
     return task_ids
 
 
