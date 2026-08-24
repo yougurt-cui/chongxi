@@ -40,6 +40,7 @@ try:
     from .api.formula_profile_api import formula_profile_api
     from .api.market_profile_api import market_profile_api
     from .api.comment_clean_sync_api import comment_clean_sync_api
+    from .api.comment_mining_api import comment_mining_api
 except ImportError:
     from api.consumer_api import consumer_api
     from api.business_api import business_api
@@ -58,6 +59,7 @@ except ImportError:
     from api.formula_profile_api import formula_profile_api
     from api.market_profile_api import market_profile_api
     from api.comment_clean_sync_api import comment_clean_sync_api
+    from api.comment_mining_api import comment_mining_api
 
 from services import cat_food_task_service as task_store
 
@@ -1932,6 +1934,7 @@ def create_app() -> Flask:
     flask_app.register_blueprint(formula_profile_api)
     flask_app.register_blueprint(market_profile_api)
     flask_app.register_blueprint(comment_clean_sync_api)
+    flask_app.register_blueprint(comment_mining_api)
 
     @flask_app.get("/health")
     def health() -> tuple[dict, int]:
