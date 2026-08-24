@@ -542,7 +542,7 @@ def write_output(engine, results: list):
         ON DUPLICATE KEY UPDATE {update_exprs}
     """)
 
-    records = df[cols].where(pd.notnull(df[cols]), None).to_dict(orient="records")
+    records = df[cols].astype(object).where(pd.notnull(df[cols]), None).to_dict(orient="records")
 
     with engine.begin() as conn:
         conn.execute(insert_sql, records)

@@ -223,7 +223,7 @@ def write_output(engine, df: pd.DataFrame):
         ON DUPLICATE KEY UPDATE {update_exprs}
     """)
 
-    records = df[cols].where(pd.notnull(df[cols]), None).to_dict(orient="records")
+    records = df[cols].astype(object).where(pd.notnull(df[cols]), None).to_dict(orient="records")
 
     if not records:
         print("无数据写入")

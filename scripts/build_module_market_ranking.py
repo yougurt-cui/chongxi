@@ -350,6 +350,7 @@ def write_output(engine, output_df: pd.DataFrame):
 
     records = (
         output_df[all_cols]
+        .astype(object)
         .where(pd.notnull(output_df[all_cols]), None)
         .to_dict(orient="records")
     )
