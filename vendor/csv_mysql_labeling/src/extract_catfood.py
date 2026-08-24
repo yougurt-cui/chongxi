@@ -4,7 +4,7 @@ import re
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Dict, Optional, Set
+from typing import Dict, Iterable, Optional, Set
 
 from rich.console import Console
 from sqlalchemy import text
@@ -20,6 +20,7 @@ DEFAULT_BRAND_RE = (
     "诚实[[:space:]]*一口|csyk|简创|布兰德|自然光环|帕特|顽皮|伊莱恩|"
     "好主人|卡妮|星速|明仔团|喵梵思"
 )
+STANDARD_BRAND_TABLE = "catfood_standard_brand"
 DEFAULT_HEALTH_RE = (
     "软便|拉稀|腹泻|便秘|黑下巴|呕吐|吐毛|泪痕|掉毛|毛发|过敏|玻璃胃|"
     "肠胃|消化|尿闭|尿血|泌尿|肾|口炎|胰腺|上火|分泌物|结石"
@@ -46,6 +47,67 @@ def _safe_table(name: str) -> str:
     if not TABLE_RE.fullmatch(name):
         raise ValueError(f"Invalid table name: {name}")
     return name
+
+
+def _clean_brand_name(value: object) -> str:
+    if value is None:
+        return ""
+    text_value = str(value).strip()
+    if not text_value or text_value.lower() == "nan":
+        return ""
+    return text_value
+
+
+def _mysql_regex_escape(value: str) -> str:
+    return re.sub(r"([\\.^$*+?{}\[\]|()])", r"\\\1", value)
+
+
+def _build_brand_re_from_values(values: Iterable[object]) -> str:
+    seen: Set[str] = set()
+    brands = []
+    for value in values:
+        brand = _clean_brand_name(value)
+        if not brand or brand in seen:
+            continue
+        seen.add(brand)
+        brands.append(brand)
+    brands.sort(key=lambda item: (len(item), item), reverse=True)
+    return "|".join(_mysql_regex_escape(brand) for brand in brands)
+
+
+def _load_standard_brand_re(engine: Engine, fallback: str = DEFAULT_BRAND_RE) -> str:
+    try:
+        with engine.begin() as conn:
+            exists = conn.execute(
+                text(
+                    """
+                    SELECT COUNT(*)
+                    FROM information_schema.tables
+                    WHERE table_schema = DATABASE()
+                      AND table_name = :table_name
+                    """
+                ),
+                {"table_name": STANDARD_BRAND_TABLE},
+            ).scalar()
+            if not exists:
+                return fallback
+            rows = conn.execute(
+                text(
+                    f"""
+                    SELECT standard_brand_name
+                    FROM `{STANDARD_BRAND_TABLE}`
+                    WHERE active = 1
+                      AND standard_brand_name IS NOT NULL
+                      AND TRIM(standard_brand_name) <> ''
+                    """
+                )
+            ).fetchall()
+    except Exception as exc:
+        console.print(f"[yellow]标准品牌表读取失败，使用默认品牌词[/yellow] {exc}")
+        return fallback
+
+    brand_re = _build_brand_re_from_values(row[0] for row in rows)
+    return brand_re or fallback
 
 
 def ensure_extract_tables(
@@ -240,7 +302,7 @@ def run_catfood_extraction_incremental(
     target_table: str = "catfood_brand_health_candidates",
     state_table: str = "catfood_brand_health_extract_state",
     cat_ctx_re: str = DEFAULT_CAT_CTX,
-    brand_re: str = DEFAULT_BRAND_RE,
+    brand_re: Optional[str] = None,
     health_re: str = DEFAULT_HEALTH_RE,
 ) -> ExtractResult:
     target_table = _safe_table(target_table)
@@ -251,6 +313,7 @@ def run_catfood_extraction_incremental(
     max_ts = _get_current_max_ingest_ts(engine)
     current_douyin_ts = max_ts["douyin"]
     current_xhs_ts = max_ts["xhs"]
+    brand_re = brand_re or _load_standard_brand_re(engine)
 
     scanned = _count_scanned_rows(
         engine=engine,
@@ -326,7 +389,7 @@ def run_catfood_extraction_incremental(
           'xiaohongshu' AS platform,
           id AS raw_id,
           external_id,
-          STR_TO_DATE(SUBSTRING(TRIM(created_at), 1, 10), '%Y-%m-%d') AS event_date,
+          STR_TO_DATE(NULLIF(SUBSTRING(TRIM(created_at), 1, 10), ''), '%Y-%m-%d') AS event_date,
           query_keyword AS keyword,
           title,
           content,

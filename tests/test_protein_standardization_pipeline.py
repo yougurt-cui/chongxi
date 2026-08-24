@@ -122,6 +122,28 @@ def protein_rules():
 
 
 class ProteinStandardizationPipelineTest(unittest.TestCase):
+    def test_carb_role_is_not_promoted_by_mixed_family_name(self):
+        item = {
+            "raw_name": "鹰嘴豆",
+            "standard_name": "鹰嘴豆",
+            "ingredient_family": "豆类/植物蛋白类",
+            "source_type": "plant",
+            "primary_nutrition_role": "碳水供给",
+        }
+        self.assertFalse(protein_aggregate._is_standard_protein_item(item))
+        self.assertFalse(protein_aggregate._is_plant_protein_item(item))
+
+    def test_explicit_plant_protein_overrides_carb_role_guard(self):
+        item = {
+            "raw_name": "豌豆蛋白",
+            "standard_name": "豌豆蛋白",
+            "ingredient_family": "豆类/植物蛋白类",
+            "source_type": "plant",
+            "primary_nutrition_role": "碳水供给",
+        }
+        self.assertTrue(protein_aggregate._is_standard_protein_item(item))
+        self.assertTrue(protein_aggregate._is_plant_protein_item(item))
+
     def test_candidate_name_normalization_removes_brackets_and_converts_script(self):
         cases = {
             "魚油（三文魚油）": "鱼油",
@@ -183,6 +205,25 @@ class ProteinStandardizationPipelineTest(unittest.TestCase):
         self.assertEqual(row["secondary_meat_source_type"], "肉粉")
         self.assertEqual(row["meat_source_complexity"], "同类多源")
         self.assertEqual(row["plant_protein_labels"], "豌豆蛋白")
+
+    def test_grouped_ingredient_headers_expand_before_standardization(self):
+        text = (
+            "鱼类等水生生物及其制品43%(金枪鱼、酶解沙丁鱼、酶解鳀鱼、深海白鱼粉、酶解三文鱼、深海三文鱼油)、"
+            "肉类及其制品42%、酶解鸡肉、鸡肉粉、鸡肉、鸡油、牛油、酶解鸡肝)、"
+            "果蔬类籽实及其制品(紫薯、马铃薯、南瓜、苹果、梨、蔓越莓、菊苣根粉)"
+        )
+        tokens = protein_aggregate._split_ingredient_tokens(text)
+        self.assertNotIn("鱼类等水生生物及其制品", tokens)
+        self.assertNotIn("肉类及其制品", tokens)
+        self.assertEqual(
+            tokens[:6],
+            ["金枪鱼", "酶解沙丁鱼", "酶解鳀鱼", "深海白鱼粉", "酶解三文鱼", "深海三文鱼油"],
+        )
+        items = protein_aggregate._standardize_ingredient_items(text, feature_rules=protein_rules())
+        self.assertEqual(items[0]["raw_name"], "金枪鱼")
+        self.assertEqual(items[1]["protein_form"], "水解蛋白")
+        fish_oil = next(item for item in items if item["raw_name"] == "深海三文鱼油")
+        self.assertFalse(fish_oil["is_protein"])
 
     def test_protein_score_regression_for_standardized_formula(self):
         rows = protein_aggregate.transform_rows(
@@ -279,6 +320,39 @@ class ProteinStandardizationPipelineTest(unittest.TestCase):
         self.assertTrue(item["is_protein"])
         self.assertTrue(item["is_plant_protein"])
         self.assertEqual(item["protein_rule_ids"], [101, 102])
+
+    def test_uniquely_splits_concatenated_standard_ingredients(self):
+        lookup = standard_lookup()
+        for row in (
+            {
+                "standard_ingredient_id": "STD91001", "standard_name": "小麦蛋白",
+                "ingredient_family": "谷物/植物蛋白类", "source_type": "plant",
+                "animal_source": "", "primary_nutrition_role": "植物蛋白", "confidence": 1.0,
+            },
+            {
+                "standard_ingredient_id": "STD91002", "standard_name": "甜菜粕",
+                "ingredient_family": "膳食纤维类", "source_type": "plant",
+                "animal_source": "", "primary_nutrition_role": "膳食纤维", "confidence": 1.0,
+            },
+        ):
+            lookup[protein_aggregate._normalize_ingredient_key(row["standard_name"])] = row
+
+        items = protein_aggregate._standardize_ingredient_items(
+            "**小麦蛋白甜菜粕",
+            lookup,
+            protein_rules(),
+        )
+
+        self.assertEqual([item["standard_name"] for item in items], ["小麦蛋白", "甜菜粕"])
+        self.assertEqual([item["position"] for item in items], [1, 2])
+        self.assertTrue(all(item["match_method"] == "standard_alias_compound_split" for item in items))
+
+    def test_does_not_split_an_existing_complete_ingredient(self):
+        lookup = standard_lookup()
+        items = protein_aggregate._standardize_ingredient_items("鲜鸡肉", lookup, protein_rules())
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0]["standard_name"], "鲜鸡肉")
+        self.assertEqual(items[0]["match_method"], "standard_alias")
 
     def test_rule_trace_is_written_to_item_features(self):
         features = feature_backfill._features_for_item(

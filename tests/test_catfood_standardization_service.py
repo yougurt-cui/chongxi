@@ -54,6 +54,37 @@ class CatfoodStandardizationServiceTest(unittest.TestCase):
         self.assertEqual(ocr[1], formula[1])
         self.assertEqual(ocr[2], formula[2])
 
+    def test_ingredient_noise_pool_names_are_removed_before_fingerprinting(self):
+        normalized, ingredients, fingerprint = normalize_ingredients(
+            "鲜鸡肉、产品成份、鸡油",
+            {normalize_name("产品成份")},
+        )
+        expected = normalize_ingredients("鲜鸡肉、鸡油")
+        self.assertEqual(normalized, expected[0])
+        self.assertEqual(ingredients, expected[1])
+        self.assertEqual(fingerprint, expected[2])
+
+    def test_variant_product_analysis_heading_ends_ingredient_text(self):
+        _, ingredients, _ = normalize_ingredients(
+            "鲜鸡肉、鸡油、产品成份分析保证值、粗蛋白质≥38%"
+        )
+        self.assertEqual(ingredients, ["鲜鸡肉", "鸡油"])
+
+    def test_grouped_ingredient_headers_expand_to_children(self):
+        _, ingredients, _ = normalize_ingredients(
+            "鱼类等水生生物及其制品43%(金枪鱼、酶解沙丁鱼、酶解鳀鱼、深海白鱼粉、酶解三文鱼、深海三文鱼油)、"
+            "肉类及其制品42%、酶解鸡肉、鸡肉粉、鸡肉、鸡油、牛油、酶解鸡肝)、"
+            "果蔬类籽实及其制品(紫薯、马铃薯、南瓜、苹果、梨、蔓越莓、菊苣根粉)"
+        )
+        self.assertNotIn("鱼类等水生生物及其制品", ingredients)
+        self.assertNotIn("肉类及其制品", ingredients)
+        self.assertEqual(
+            ingredients[:6],
+            ["金枪鱼", "酶解沙丁鱼", "酶解鳀鱼", "深海白鱼粉", "酶解三文鱼", "深海三文鱼油"],
+        )
+        self.assertIn("酶解鸡肉", ingredients)
+        self.assertIn("菊苣根粉", ingredients)
+
     def test_ingredient_similarity_uses_order(self):
         exact = ingredient_similarity(["鸡肉", "鱼肉", "鸡油"], ["鸡肉", "鱼肉", "鸡油"])
         reordered = ingredient_similarity(["鸡肉", "鱼肉", "鸡油"], ["鱼肉", "鸡肉", "鸡油"])

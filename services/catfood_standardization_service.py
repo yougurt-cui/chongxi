@@ -30,6 +30,7 @@ FORMULA_INPUT_TABLE = "catfood_formula_feature_input"
 MAPPING_TABLE = "catfood_ocr_standard_mapping"
 BRAND_CANDIDATE_TABLE = "catfood_standard_brand_candidate"
 PRODUCT_CANDIDATE_TABLE = "catfood_standard_product_candidate"
+INGREDIENT_NOISE_TABLE = "catfood_ingredient_noise_pool"
 
 
 def _connect():
@@ -192,6 +193,10 @@ def init_standardization_db() -> None:
                   normalized_ingredient_composition LONGTEXT NOT NULL,
                   normalized_ingredients_json JSON NULL,
                   ingredient_fingerprint CHAR(64) NOT NULL,
+                  active_ingredient_fingerprint CHAR(64)
+                    GENERATED ALWAYS AS (
+                      CASE WHEN status = 'active' THEN ingredient_fingerprint ELSE NULL END
+                    ) STORED,
                   nutrition_json JSON NULL,
                   effective_from DATE NULL,
                   effective_to DATE NULL,
@@ -200,11 +205,42 @@ def init_standardization_db() -> None:
                   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
                   updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
                   PRIMARY KEY (formula_id),
-                  UNIQUE KEY uq_product_formula_fingerprint (product_id, ingredient_fingerprint),
+                  UNIQUE KEY uq_product_active_formula_fingerprint (
+                    product_id, active_ingredient_fingerprint
+                  ),
                   KEY idx_formula_product_current (product_id, is_current)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
                 """
             )
+            cursor.execute(f"SHOW COLUMNS FROM `{FORMULA_TABLE}`")
+            formula_columns = {row["Field"] for row in cursor.fetchall()}
+            if "active_ingredient_fingerprint" not in formula_columns:
+                cursor.execute(
+                    f"""
+                    ALTER TABLE `{FORMULA_TABLE}`
+                    ADD COLUMN active_ingredient_fingerprint CHAR(64)
+                      GENERATED ALWAYS AS (
+                        CASE WHEN status = 'active' THEN ingredient_fingerprint ELSE NULL END
+                      ) STORED AFTER ingredient_fingerprint
+                    """
+                )
+            cursor.execute(f"SHOW INDEX FROM `{FORMULA_TABLE}`")
+            formula_indexes: dict[str, list[str]] = {}
+            for row in cursor.fetchall():
+                formula_indexes.setdefault(row["Key_name"], []).append(row["Column_name"])
+            if "uq_product_formula_fingerprint" in formula_indexes:
+                cursor.execute(
+                    f"ALTER TABLE `{FORMULA_TABLE}` DROP INDEX uq_product_formula_fingerprint"
+                )
+            if "uq_product_active_formula_fingerprint" not in formula_indexes:
+                cursor.execute(
+                    f"""
+                    ALTER TABLE `{FORMULA_TABLE}`
+                    ADD UNIQUE KEY uq_product_active_formula_fingerprint (
+                      product_id, active_ingredient_fingerprint
+                    )
+                    """
+                )
             cursor.execute(
                 f"""
                 CREATE TABLE IF NOT EXISTS `{FORMULA_INPUT_TABLE}` (
@@ -346,6 +382,25 @@ def init_standardization_db() -> None:
                   UNIQUE KEY uq_mapping_source_id (source_id),
                   KEY idx_mapping_brand_product_formula (brand_id, product_id, formula_id),
                   KEY idx_mapping_overall_status (overall_status)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                """
+            )
+            cursor.execute(
+                f"""
+                CREATE TABLE IF NOT EXISTS `{INGREDIENT_NOISE_TABLE}` (
+                  noise_id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+                  raw_name VARCHAR(255) NOT NULL,
+                  normalized_raw_name VARCHAR(255) NOT NULL,
+                  occurrence_count INT NOT NULL DEFAULT 1,
+                  example_context TEXT NULL,
+                  reason VARCHAR(255) NULL,
+                  reviewer VARCHAR(128) NULL,
+                  active TINYINT NOT NULL DEFAULT 1,
+                  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                  PRIMARY KEY (noise_id),
+                  UNIQUE KEY uq_ingredient_noise_normalized (normalized_raw_name),
+                  KEY idx_ingredient_noise_active (active)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
                 """
             )
@@ -767,8 +822,8 @@ def list_ingredient_review_items(*, formula_id: int | None = None, limit: int = 
 
 def resolve_ingredient_review(item_id: int, payload: dict[str, Any]) -> dict[str, Any]:
     action = _clean(payload.get("action"))
-    if action not in {"alias", "create"}:
-        raise ValueError("action 必须是 alias 或 create")
+    if action not in {"alias", "create", "noise"}:
+        raise ValueError("action 必须是 alias、create 或 noise")
     with _connect() as conn:
         with conn.cursor() as cursor:
             cursor.execute(
@@ -778,6 +833,56 @@ def resolve_ingredient_review(item_id: int, payload: dict[str, Any]) -> dict[str
             item = cursor.fetchone()
             if not item:
                 raise KeyError(f"原料项不存在: {item_id}")
+            if action == "noise":
+                normalized_raw_name = normalize_name(item["raw_name"])
+                if not normalized_raw_name:
+                    raise ValueError("噪声文本不能为空")
+                cursor.execute(
+                    f"""
+                    INSERT INTO `{INGREDIENT_NOISE_TABLE}`(
+                      raw_name, normalized_raw_name, occurrence_count,
+                      example_context, reason, reviewer, active
+                    ) VALUES(%s,%s,1,%s,%s,%s,1)
+                    ON DUPLICATE KEY UPDATE
+                      raw_name=VALUES(raw_name), occurrence_count=occurrence_count+1,
+                      example_context=VALUES(example_context), reason=VALUES(reason),
+                      reviewer=VALUES(reviewer), active=1, updated_at=NOW()
+                    """,
+                    (
+                        item["raw_name"], normalized_raw_name,
+                        _clean(payload.get("context")) or None,
+                        _clean(payload.get("review_reason")) or "OCR误识别/非原材料",
+                        _clean(payload.get("reviewer")) or None,
+                    ),
+                )
+                cursor.execute(
+                    """UPDATE catfood_formula_ingredient_item
+                       SET is_ignored=1,match_status='ignored',review_status='rejected',
+                           issue_severity=NULL,affected_domains_json=JSON_ARRAY(),
+                           review_reason=%s,reviewer=%s,reviewed_at=NOW()
+                       WHERE item_id=%s""",
+                    (
+                        _clean(payload.get("review_reason")) or "OCR误识别/非原材料",
+                        _clean(payload.get("reviewer")) or None,
+                        int(item_id),
+                    ),
+                )
+                cursor.execute(
+                    """UPDATE catfood_standard_ingredient_candidate
+                       SET status='discarded_noise',reviewer=%s,review_note=%s,reviewed_at=NOW()
+                       WHERE normalized_raw_name=%s AND status IN ('pending','new_standard_reviewed')""",
+                    (
+                        _clean(payload.get("reviewer")) or None,
+                        _clean(payload.get("review_reason")) or "OCR误识别/非原材料",
+                        item["raw_name"],
+                    ),
+                )
+                conn.commit()
+                return {
+                    "ok": True, "item_id": int(item_id),
+                    "formula_id": int(item["formula_id"]), "status": "noise",
+                    "raw_name": item["raw_name"],
+                }
             if action == "alias":
                 standard_id = _clean(payload.get("standard_ingredient_id"))
                 cursor.execute(
@@ -1238,7 +1343,9 @@ def _upsert_product_review_candidate(
         [f"产品标准化状态为 {product_status}，需要人工确认标准产品"],
         ensure_ascii=False,
     )
+    source_id = int(mapping["source_id"])
     if existing:
+        product_id = int(existing["product_id"])
         cursor.execute(
             f"""
             UPDATE `{PRODUCT_CANDIDATE_TABLE}`
@@ -1261,10 +1368,15 @@ def _upsert_product_review_candidate(
                 lineage["evidence_json"],
                 lineage["review_status"],
                 quality_reasons,
-                existing["product_id"],
+                product_id,
             ),
         )
-        return int(existing["product_id"])
+        _reject_superseded_product_candidates(
+            cursor,
+            source_id=source_id,
+            keep_product_id=product_id,
+        )
+        return product_id
 
     cursor.execute(
         f"""
@@ -1296,7 +1408,34 @@ def _upsert_product_review_candidate(
             uuid.uuid4().hex,
         ),
     )
-    return int(cursor.lastrowid)
+    product_id = int(cursor.lastrowid)
+    _reject_superseded_product_candidates(
+        cursor,
+        source_id=source_id,
+        keep_product_id=product_id,
+    )
+    return product_id
+
+
+def _reject_superseded_product_candidates(
+    cursor,
+    *,
+    source_id: int,
+    keep_product_id: int,
+) -> None:
+    cursor.execute(
+        f"""
+        UPDATE `{PRODUCT_CANDIDATE_TABLE}`
+        SET review_status = 'rejected',
+            reject_reason = '同一 OCR source 已生成更新的产品候选',
+            active = 0,
+            updated_at = NOW()
+        WHERE product_id <> %s
+          AND JSON_CONTAINS(source_ids_json, CAST(%s AS JSON), '$')
+          AND review_status IN ('needs_manual_review', 'pending', 'approved')
+        """,
+        (int(keep_product_id), json.dumps(int(source_id))),
+    )
 
 
 def seed_brand_master() -> None:
@@ -1584,6 +1723,118 @@ def resolve_brand_mapping(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _strong_formula_candidate(candidate: dict[str, Any]) -> bool:
+    ingredient_evidence = candidate.get("ingredient_evidence") or {}
+    nutrition_evidence = candidate.get("nutrition_evidence") or {}
+    return bool(
+        candidate.get("auto_match")
+        or candidate.get("fingerprint_exact")
+        or (
+            float(ingredient_evidence.get("score") or 0) >= 0.96
+            and float(ingredient_evidence.get("top5_exact_ratio") or 0) >= 0.8
+            and int(nutrition_evidence.get("comparable_count") or 0) >= 4
+            and float(nutrition_evidence.get("score") or 0) >= 0.95
+        )
+    )
+
+
+def precheck_formula_identity(payload: dict[str, Any]) -> dict[str, Any]:
+    init_standardization_db()
+    source_id = _required_int(payload.get("source_id"), "source_id")
+    brand_id = _optional_int(payload.get("brand_id"))
+    with _connect() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                f"SELECT * FROM `{MAPPING_TABLE}` WHERE source_id = %s",
+                (source_id,),
+            )
+            mapping = cursor.fetchone()
+            if not mapping:
+                row = _load_ocr_row(
+                    source_id=source_id,
+                    parsed_row_id=_optional_int(payload.get("parsed_row_id")),
+                    file_sha256=_clean(payload.get("file_sha256")),
+                )
+                _upsert_mapping_raw(cursor, row, _clean(payload.get("image_id")))
+                conn.commit()
+                mapping = row
+            normalized, ingredients, fingerprint = _normalize_ingredients_with_noise(cursor,
+                mapping.get("raw_ingredient_composition")
+            )
+            nutrition = _load_nutrition_signature(cursor, source_id)
+            if not ingredients:
+                return {
+                    "ok": True,
+                    "source_id": source_id,
+                    "brand_id": brand_id or mapping.get("brand_id"),
+                    "precheck_status": "pending",
+                    "reason": "原料组成为空",
+                }
+            candidates = _find_formula_product_matches(
+                cursor,
+                brand_id=int(brand_id or mapping.get("brand_id") or 0),
+                ingredients=ingredients,
+                fingerprint=fingerprint,
+                nutrition=nutrition,
+            )
+            same_brand_candidates = [
+                item for item in candidates
+                if not item.get("cross_brand")
+            ]
+            strong_candidates = [
+                item for item in same_brand_candidates
+                if _strong_formula_candidate(item)
+            ]
+            suggested_product_ids = sorted({int(item["product_id"]) for item in strong_candidates})
+            status = "matched" if len(suggested_product_ids) == 1 else "conflict" if len(suggested_product_ids) > 1 else "clear"
+            suggested = strong_candidates[0] if len(suggested_product_ids) == 1 else None
+    return {
+        "ok": True,
+        "source_id": source_id,
+        "brand_id": brand_id or mapping.get("brand_id"),
+        "precheck_status": status,
+        "suggested_product_id": suggested["product_id"] if suggested else None,
+        "suggested_formula_id": suggested.get("formula_id") if suggested else None,
+        "ingredient_fingerprint": fingerprint,
+        "normalized_ingredients": ingredients,
+        "formula_product_candidates": candidates[:20],
+        "same_brand_formula_candidates": same_brand_candidates[:10],
+    }
+
+
+def _product_name_candidates(payload: dict[str, Any], mapping: dict[str, Any]) -> list[str]:
+    candidates: list[str] = []
+    for value in payload.get("product_name_candidates") or []:
+        candidate = _clean(value)
+        if candidate and candidate not in candidates:
+            candidates.append(candidate)
+    for value in (
+        payload.get("product_name"),
+        payload.get("ocr_product_name"),
+        payload.get("ocr_brand_name"),
+        mapping.get("raw_product_name"),
+    ):
+        candidate = _clean(value)
+        if candidate and candidate not in candidates:
+            candidates.append(candidate)
+    return candidates
+
+
+def _name_match_conflicts_with_formula_precheck(product_id: int, precheck: dict[str, Any]) -> bool:
+    if not isinstance(precheck, dict):
+        return False
+    if _optional_int(precheck.get("suggested_product_id")) == int(product_id):
+        return False
+    product_formula_candidates = [
+        item for item in (precheck.get("same_brand_formula_candidates") or precheck.get("formula_product_candidates") or [])
+        if _optional_int(item.get("product_id")) == int(product_id)
+        and item.get("formula_id")
+    ]
+    if not product_formula_candidates:
+        return False
+    return not any(_strong_formula_candidate(item) for item in product_formula_candidates)
+
+
 def standardize_product(payload: dict[str, Any]) -> dict[str, Any]:
     init_standardization_db()
     source_id = _required_int(payload.get("source_id"), "source_id")
@@ -1605,9 +1856,15 @@ def standardize_product(payload: dict[str, Any]) -> dict[str, Any]:
                     "product_status": "blocked",
                     "reason": "品牌尚未匹配",
                 }
-            raw_name = _clean(mapping.get("raw_product_name"))
-            normalized = normalize_name(raw_name)
-            _, ingredients, fingerprint = normalize_ingredients(
+            product_name_candidates = _product_name_candidates(payload, mapping)
+            formula_precheck = payload.get("formula_precheck") if isinstance(payload.get("formula_precheck"), dict) else {}
+            raw_name = product_name_candidates[0] if product_name_candidates else _clean(mapping.get("raw_product_name"))
+            normalized_candidates = [
+                (name, normalize_name(name))
+                for name in product_name_candidates
+                if normalize_name(name)
+            ]
+            _, ingredients, fingerprint = _normalize_ingredients_with_noise(cursor,
                 mapping.get("raw_ingredient_composition")
             )
             nutrition = _load_nutrition_signature(cursor, source_id)
@@ -1669,20 +1926,23 @@ def standardize_product(payload: dict[str, Any]) -> dict[str, Any]:
 
             name_matches: list[dict[str, Any]] = []
             if not match and not duplicate_formula_matches:
-                cursor.execute(
-                    f"""
-                    SELECT p.*
-                    FROM `{PRODUCT_ALIAS_TABLE}` a
-                    JOIN `{PRODUCT_TABLE}` p ON p.product_id = a.product_id
-                    WHERE a.brand_id = %s
-                      AND a.normalized_alias = %s
-                      AND a.active = 1
-                      AND p.active = 1
-                    """,
-                    (mapping["brand_id"], normalized),
-                )
-                name_matches = cursor.fetchall()
-                if not name_matches and normalized:
+                matched_by_id: dict[int, dict[str, Any]] = {}
+                for _, normalized in normalized_candidates:
+                    cursor.execute(
+                        f"""
+                        SELECT p.*
+                        FROM `{PRODUCT_ALIAS_TABLE}` a
+                        JOIN `{PRODUCT_TABLE}` p ON p.product_id = a.product_id
+                        WHERE a.brand_id = %s
+                          AND a.normalized_alias = %s
+                          AND a.active = 1
+                          AND p.active = 1
+                        """,
+                        (mapping["brand_id"], normalized),
+                    )
+                    for item in cursor.fetchall():
+                        matched_by_id[int(item["product_id"])] = item
+                if not matched_by_id and normalized_candidates:
                     cursor.execute(
                         f"""
                         SELECT *
@@ -1691,16 +1951,24 @@ def standardize_product(payload: dict[str, Any]) -> dict[str, Any]:
                         """,
                         (mapping["brand_id"],),
                     )
-                    name_matches = [
-                        item
-                        for item in cursor.fetchall()
-                        if normalize_name(item["standard_product_name"]) == normalized
-                        or normalize_name(item["display_name"]) == normalized
-                    ]
+                    product_rows = cursor.fetchall()
+                    normalized_values = {normalized for _, normalized in normalized_candidates}
+                    for item in product_rows:
+                        if (
+                            normalize_name(item["standard_product_name"]) in normalized_values
+                            or normalize_name(item["display_name"]) in normalized_values
+                        ):
+                            matched_by_id[int(item["product_id"])] = item
+                name_matches = list(matched_by_id.values())
                 if len(name_matches) == 1:
-                    match = name_matches[0]
-                    match_method = "name"
-                    confidence = 1.0
+                    name_match = name_matches[0]
+                    if not _name_match_conflicts_with_formula_precheck(
+                        int(name_match["product_id"]),
+                        formula_precheck,
+                    ):
+                        match = name_match
+                        match_method = "name"
+                        confidence = 1.0
 
             if duplicate_formula_matches:
                 status = "conflict"
@@ -1726,6 +1994,7 @@ def standardize_product(payload: dict[str, Any]) -> dict[str, Any]:
                     cursor,
                     mapping={
                         **mapping,
+                        "raw_product_name": raw_name,
                         "standard_brand_name": brand_name,
                     },
                     product_status=status,
@@ -1739,6 +2008,7 @@ def standardize_product(payload: dict[str, Any]) -> dict[str, Any]:
                     overall_status = %s,
                     match_evidence_json = JSON_SET(
                       COALESCE(match_evidence_json, JSON_OBJECT()),
+                      '$.product_name_candidates', CAST(%s AS JSON),
                       '$.product_candidates', CAST(%s AS JSON),
                       '$.formula_product_candidates', CAST(%s AS JSON),
                       '$.product_match_method', CAST(%s AS JSON)
@@ -1750,6 +2020,7 @@ def standardize_product(payload: dict[str, Any]) -> dict[str, Any]:
                     status,
                     confidence,
                     status if status != "matched" else "pending",
+                    json.dumps(product_name_candidates, ensure_ascii=False),
                     json.dumps(name_matches, ensure_ascii=False, default=str),
                     json.dumps(formula_candidates, ensure_ascii=False, default=str),
                     json.dumps(match_method, ensure_ascii=False),
@@ -1767,6 +2038,8 @@ def standardize_product(payload: dict[str, Any]) -> dict[str, Any]:
         "product_status": status,
         "product_confidence": confidence,
         "product_match_method": match_method,
+        "product_name_candidates": product_name_candidates,
+        "formula_precheck": formula_precheck,
         "product_candidates": name_matches,
         "formula_product_candidates": formula_candidates,
         "duplicate_formula_candidates": duplicate_formula_matches,
@@ -1792,29 +2065,162 @@ INGREDIENT_OCR_PREFIX_NOISE = (
     "直播讲解",
 )
 
+INGREDIENT_GROUP_MARKERS = (
+    "及其制品",
+    "等水生生物",
+    "籽实及其制品",
+)
 
-def normalize_ingredients(value: Any) -> tuple[str, list[str], str]:
+# Premix category headers that group sub-ingredients (exact match only).
+# e.g. "维生素(维生素E补充剂、硝酸硫胺、...)" should expand sub-items,
+# but "维生素E补充剂(来源说明)" should NOT be treated as a group header.
+PREMIX_GROUP_HEADERS = frozenset(("维生素", "矿物质"))
+
+
+def _split_top_level_ingredient_tokens(value: Any) -> list[str]:
+    text = str(value or "")
+    tokens: list[str] = []
+    buffer: list[str] = []
+    depth = 0
+    for char in text:
+        if char in "(（[【":
+            depth += 1
+        elif char in ")）]】" and depth > 0:
+            depth -= 1
+        if char in ",，、;；。\n" and depth == 0:
+            token = "".join(buffer).strip()
+            if token:
+                tokens.append(token)
+            buffer = []
+            continue
+        buffer.append(char)
+    token = "".join(buffer).strip()
+    if token:
+        tokens.append(token)
+    return tokens
+
+
+def _is_ingredient_group_header(value: str) -> bool:
     text = _clean(value)
-    text = re.split(r"添加剂组成|添加剂|产品成分分析|营养分析|保证值", text, maxsplit=1)[0]
+    if not text:
+        return False
+    if text in PREMIX_GROUP_HEADERS:
+        return True
+    if any(marker in text for marker in INGREDIENT_GROUP_MARKERS):
+        return True
+    return bool(re.search(r"(?:鱼类|肉类|果蔬类|蔬果类|谷物类|豆类|油脂类)\s*\d*(?:\.\d+)?\s*[%％]?$", text))
+
+
+def _clean_ingredient_name_token(value: str) -> str:
+    item = re.sub(r"\d+(?:\.\d+)?\s*[%％]", "", value)
+    item = re.sub(r"\([^)]*\)|（[^）]*）", "", item)
+    item = _clean(item).strip(" :：()（）[]【】")
+    for prefix in INGREDIENT_OCR_PREFIX_NOISE:
+        if item.startswith(prefix):
+            item = item[len(prefix):].lstrip(" :：")
+            break
+    return item
+
+
+def _expand_grouped_ingredient_token(token: str) -> list[str]:
+    match = re.match(r"^\s*(?P<header>[^()（）]+?)(?:\d+(?:\.\d+)?\s*[%％])?\s*[（(](?P<inner>.*)[）)]\s*$", token)
+    if match and _is_ingredient_group_header(match.group("header")):
+        return [
+            item
+            for part in _split_top_level_ingredient_tokens(match.group("inner"))
+            for item in _expand_grouped_ingredient_token(part)
+        ]
+    if _is_ingredient_group_header(token) and re.search(r"\d+(?:\.\d+)?\s*[%％]", token):
+        return []
+    item = _clean_ingredient_name_token(token)
+    return [item] if item else []
+
+
+def normalize_ingredients(
+    value: Any,
+    noise_names: set[str] | None = None,
+) -> tuple[str, list[str], str]:
+    text = _clean(value)
+    text = re.split(r"添加剂组成|添加剂|产品成[分份]分析|营养分析|保证值", text, maxsplit=1)[0]
     text = re.sub(r"^(?:原料组成|配料组成)\s*[:：]?", "", text)
     ingredients: list[str] = []
-    for part in re.split(r"[,，、;；。\n]+", text):
-        item = re.sub(r"\([^)]*\)|（[^）]*）", "", part)
-        item = re.sub(r"\d+(?:\.\d+)?\s*%", "", item)
-        item = _clean(item).strip(" :：")
-        for prefix in INGREDIENT_OCR_PREFIX_NOISE:
-            if item.startswith(prefix):
-                item = item[len(prefix):].lstrip(" :：")
-                break
-        if not item or len(item) > 80:
-            continue
-        item = INGREDIENT_SYNONYMS.get(item, item)
-        ingredients.append(item)
+    for part in _split_top_level_ingredient_tokens(text):
+        for item in _expand_grouped_ingredient_token(part):
+            if not item or len(item) > 80:
+                continue
+            if noise_names and normalize_name(item) in noise_names:
+                continue
+            item = INGREDIENT_SYNONYMS.get(item, item)
+            ingredients.append(item)
     normalized = "，".join(ingredients)
     fingerprint = hashlib.sha256(
         json.dumps(ingredients, ensure_ascii=False).encode("utf-8")
     ).hexdigest()
     return normalized, ingredients, fingerprint
+
+
+def _load_ingredient_noise_names(cursor) -> set[str]:
+    cursor.execute(
+        f"SELECT normalized_raw_name FROM `{INGREDIENT_NOISE_TABLE}` WHERE active=1"
+    )
+    return {str(row["normalized_raw_name"]) for row in cursor.fetchall()}
+
+
+def _load_active_ingredient_alias_segments(cursor) -> dict[str, str]:
+    cursor.execute(
+        """
+        SELECT i.standard_name, a.alias_names
+        FROM catfood_standard_ingredient i
+        LEFT JOIN catfood_standard_ingredient_alias a
+          ON a.standard_ingredient_id=i.standard_ingredient_id
+        WHERE i.active=1
+        """
+    )
+    grouped: dict[str, set[str]] = {}
+    for row in cursor.fetchall():
+        standard_name = _clean(row.get("standard_name"))
+        aliases = [_clean(item) for item in str(row.get("alias_names") or "").split("、")]
+        for alias in (standard_name, *aliases):
+            key = normalize_name(alias)
+            if len(key) >= 2:
+                grouped.setdefault(key, set()).add(standard_name)
+    return {key: next(iter(names)) for key, names in grouped.items() if len(names) == 1}
+
+
+def _split_concatenated_ingredient_name(item: str, aliases: dict[str, str]) -> list[str]:
+    token = normalize_name(item)
+    if len(token) < 4 or token in aliases:
+        return []
+    candidates: list[list[str]] = []
+
+    def walk(offset: int, path: list[str]) -> None:
+        if len(candidates) > 1:
+            return
+        if offset == len(token):
+            if len(path) >= 2:
+                candidates.append(path[:])
+            return
+        for alias in sorted(aliases, key=len, reverse=True):
+            if alias != token and token.startswith(alias, offset):
+                path.append(aliases[alias])
+                walk(offset + len(alias), path)
+                path.pop()
+
+    walk(0, [])
+    return candidates[0] if len(candidates) == 1 else []
+
+
+def _normalize_ingredients_with_noise(cursor, value: Any) -> tuple[str, list[str], str]:
+    _, ingredients, _ = normalize_ingredients(value, _load_ingredient_noise_names(cursor))
+    aliases = _load_active_ingredient_alias_segments(cursor)
+    expanded: list[str] = []
+    for item in ingredients:
+        expanded.extend(_split_concatenated_ingredient_name(item, aliases) or [item])
+    normalized = "，".join(expanded)
+    fingerprint = hashlib.sha256(
+        json.dumps(expanded, ensure_ascii=False).encode("utf-8")
+    ).hexdigest()
+    return normalized, expanded, fingerprint
 
 
 def _rank_weight(index: int) -> float:
@@ -2081,7 +2487,7 @@ def _find_formula_product_matches(
                     (candidate_source_id,),
                 )
                 parsed = cursor.fetchone()
-                _, existing_items, existing_fingerprint = normalize_ingredients(
+                _, existing_items, existing_fingerprint = _normalize_ingredients_with_noise(cursor,
                     (parsed or {}).get("ingredient_composition")
                 )
                 if not existing_items:
@@ -2175,7 +2581,7 @@ def standardize_formula(payload: dict[str, Any]) -> dict[str, Any]:
                     "formula_status": "blocked",
                     "reason": "产品尚未匹配",
                 }
-            normalized, ingredients, fingerprint = normalize_ingredients(
+            normalized, ingredients, fingerprint = _normalize_ingredients_with_noise(cursor,
                 mapping.get("raw_ingredient_composition")
             )
             nutrition = _load_nutrition_signature(cursor, source_id)
@@ -2189,7 +2595,9 @@ def standardize_formula(payload: dict[str, Any]) -> dict[str, Any]:
                     f"""
                     SELECT *
                     FROM `{FORMULA_TABLE}`
-                    WHERE product_id = %s AND ingredient_fingerprint = %s
+                    WHERE product_id = %s
+                      AND ingredient_fingerprint = %s
+                      AND status = 'active'
                     """,
                     (mapping["product_id"], fingerprint),
                 )
@@ -2376,7 +2784,7 @@ def resolve_formula_mapping(payload: dict[str, Any]) -> dict[str, Any]:
             mapping = cursor.fetchone()
             if not mapping or not mapping.get("product_id"):
                 raise ValueError("映射不存在或产品尚未匹配")
-            normalized, ingredients, fingerprint = normalize_ingredients(
+            normalized, ingredients, fingerprint = _normalize_ingredients_with_noise(cursor,
                 mapping.get("raw_ingredient_composition")
             )
             nutrition = _load_nutrition_signature(cursor, source_id)
@@ -2483,7 +2891,9 @@ def resolve_duplicate_formula_mapping(payload: dict[str, Any]) -> dict[str, Any]
             mapping = cursor.fetchone()
             if not mapping:
                 raise ValueError("标准化映射不存在")
-            _, ingredients, fingerprint = normalize_ingredients(mapping.get("raw_ingredient_composition"))
+            _, ingredients, fingerprint = _normalize_ingredients_with_noise(
+                cursor, mapping.get("raw_ingredient_composition")
+            )
             cursor.execute(f"SELECT * FROM `{FORMULA_TABLE}` WHERE formula_id=%s AND status='active'", (formula_id,))
             formula = cursor.fetchone()
             if not formula or not ingredients or formula.get("ingredient_fingerprint") != fingerprint:
@@ -2502,6 +2912,86 @@ def resolve_duplicate_formula_mapping(payload: dict[str, Any]) -> dict[str, Any]
     return {"ok": True, "source_id": source_id, "formula_id": formula_id,
             "formula_status": "matched", "duplicate_formula": True,
             "pipeline_complete": True}
+
+
+def list_formula_conflict_items(*, limit: int = 200) -> dict[str, Any]:
+    init_standardization_db()
+    limit = max(1, min(int(limit or 200), 500))
+    with _connect() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                f"""
+                SELECT
+                  m.source_id,
+                  m.parsed_row_id,
+                  m.brand_id,
+                  m.product_id,
+                  m.raw_brand_name,
+                  m.raw_product_name,
+                  m.raw_ingredient_composition,
+                  m.match_evidence_json,
+                  m.updated_at,
+                  b.standard_brand_name,
+                  p.standard_product_name,
+                  p.display_name
+                FROM `{MAPPING_TABLE}` m
+                LEFT JOIN `{BRAND_TABLE}` b ON b.brand_id = m.brand_id
+                LEFT JOIN `{PRODUCT_TABLE}` p ON p.product_id = m.product_id
+                WHERE m.formula_status = 'conflict'
+                ORDER BY m.updated_at DESC
+                LIMIT %s
+                """,
+                (limit,),
+            )
+            items = cursor.fetchall()
+
+            for item in items:
+                item["match_evidence"] = _json_dict(item.pop("match_evidence_json", None))
+                cursor.execute(
+                    """
+                    SELECT task_id
+                    FROM pipeline_node_output
+                    WHERE node_code = 'formula_standardize'
+                      AND CAST(JSON_UNQUOTE(JSON_EXTRACT(output_json, '$.source_id')) AS UNSIGNED) = %s
+                    ORDER BY updated_at DESC
+                    LIMIT 1
+                    """,
+                    (int(item["source_id"]),),
+                )
+                task_row = cursor.fetchone()
+                item["task_id"] = task_row["task_id"] if task_row else None
+
+                cursor.execute(
+                    """
+                    SELECT output_json
+                    FROM pipeline_node_output
+                    WHERE node_code = 'formula_standardize'
+                      AND CAST(JSON_UNQUOTE(JSON_EXTRACT(output_json, '$.source_id')) AS UNSIGNED) = %s
+                    ORDER BY updated_at DESC
+                    LIMIT 1
+                    """,
+                    (int(item["source_id"]),),
+                )
+                output_row = cursor.fetchone()
+                output = _json_dict(output_row["output_json"]) if output_row else {}
+                item["formula_candidates"] = output.get("formula_candidates") or []
+
+                if item.get("product_id"):
+                    cursor.execute(
+                        f"""
+                        SELECT formula_id, product_id, formula_version, is_current, status,
+                               raw_ingredient_example, normalized_ingredient_composition
+                        FROM `{FORMULA_TABLE}`
+                        WHERE product_id = %s AND status = 'active'
+                        ORDER BY formula_version DESC
+                        """,
+                        (int(item["product_id"]),),
+                    )
+                    item["existing_formulas"] = cursor.fetchall()
+                else:
+                    item["existing_formulas"] = []
+
+    return {"ok": True, "items": items, "count": len(items)}
 
 
 def get_standard_mapping(source_id: int) -> dict[str, Any] | None:

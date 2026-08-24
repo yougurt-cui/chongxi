@@ -26,6 +26,15 @@ ADDITIVE_SECTION_RE = re.compile(
     r"(?:添加剂组成|添加剂|营养添加剂|营养性添加剂|产品成分分析|营养分析|保证值)",
     re.I,
 )
+INGREDIENT_GROUP_MARKERS = (
+    "及其制品",
+    "等水生生物",
+    "籽实及其制品",
+)
+# Premix category headers that group sub-ingredients (exact match only).
+# e.g. "维生素(维生素E补充剂、硝酸硫胺、...)" should expand sub-items,
+# but "维生素E补充剂(来源说明)" should NOT be treated as a group header.
+PREMIX_GROUP_HEADERS = frozenset(("维生素", "矿物质"))
 TRADITIONAL_TO_SIMPLIFIED = OpenCC("t2s")
 BRACKET_OPENERS = frozenset("(（[［【{｛〔〈《「『")
 BRACKET_CLOSERS = frozenset(")）]］】}｝〕〉》」』")
@@ -182,11 +191,60 @@ def _strip_additive_section(value: Any) -> str:
 
 
 def _clean_ingredient_token(value: Any) -> str:
-    token = str(value or "").strip(" \t\r\n。.")
+    token = str(value or "").strip(" \t\r\n。. *＊")
     token = re.sub(r"\d+(?:\.\d+)?\s*[%％]", "", token)
     token = re.sub(r"\(\s*\)|（\s*）", "", token)
     token = re.sub(r"^[：:]+", "", token)
-    return token.strip(" \t\r\n。.")
+    return token.strip(" \t\r\n。.()（）[]【】*＊")
+
+
+def _is_ingredient_group_header(value: Any) -> bool:
+    text_value = _clean_ingredient_token(value)
+    if not text_value:
+        return False
+    if text_value in PREMIX_GROUP_HEADERS:
+        return True
+    if any(marker in text_value for marker in INGREDIENT_GROUP_MARKERS):
+        return True
+    return bool(re.search(r"(?:鱼类|肉类|果蔬类|蔬果类|谷物类|豆类|油脂类)\s*$", text_value))
+
+
+def _split_top_level_ingredient_tokens(value: Any) -> list[str]:
+    text_value = str(value or "")
+    tokens: list[str] = []
+    buffer: list[str] = []
+    depth = 0
+    for char in text_value:
+        if char in "(（[【":
+            depth += 1
+        elif char in ")）]】" and depth > 0:
+            depth -= 1
+        if char in "、,，;；\n" and depth == 0:
+            token = "".join(buffer).strip()
+            if token:
+                tokens.append(token)
+            buffer = []
+            continue
+        buffer.append(char)
+    token = "".join(buffer).strip()
+    if token:
+        tokens.append(token)
+    return tokens
+
+
+def _expand_grouped_ingredient_token(token: str) -> list[str]:
+    match = re.match(r"^\s*(?P<header>[^()（）]+?)(?:\d+(?:\.\d+)?\s*[%％])?\s*[（(](?P<inner>.*)[）)]\s*$", token)
+    if match and _is_ingredient_group_header(match.group("header")):
+        return [
+            item
+            for part in _split_top_level_ingredient_tokens(match.group("inner"))
+            for item in _expand_grouped_ingredient_token(part)
+        ]
+    if _is_ingredient_group_header(token) and re.search(r"\d+(?:\.\d+)?\s*[%％]", str(token or "")):
+        return []
+    cleaned = _clean_ingredient_token(token)
+    cleaned = re.sub(r"\([^)]*\)|（[^）]*）", "", cleaned).strip(" \t\r\n。.()（）[]【】")
+    return [cleaned] if cleaned else []
 
 
 def _split_source_tokens(value: Any) -> list[str]:
@@ -201,23 +259,8 @@ def _split_ingredient_tokens(value: Any) -> list[str]:
     if not text_value:
         return []
     tokens: list[str] = []
-    buffer: list[str] = []
-    depth = 0
-    for char in text_value:
-        if char in "(（[【":
-            depth += 1
-        elif char in ")）]】" and depth > 0:
-            depth -= 1
-        if char in "、,，;；\n" and depth == 0:
-            token = _clean_ingredient_token("".join(buffer))
-            if token:
-                tokens.append(token)
-            buffer = []
-            continue
-        buffer.append(char)
-    token = _clean_ingredient_token("".join(buffer))
-    if token:
-        tokens.append(token)
+    for token in _split_top_level_ingredient_tokens(text_value):
+        tokens.extend(_expand_grouped_ingredient_token(token))
     return tokens
 
 
@@ -431,9 +474,52 @@ def _match_standard_ingredient(
     return lookup.get(key)
 
 
+def _split_concatenated_standard_ingredients(
+    raw_name: str,
+    lookup: dict[str, dict[str, Any]],
+) -> list[tuple[str, dict[str, Any]]]:
+    """Split an unmatched OCR token only when aliases uniquely cover it end-to-end."""
+    token = _normalize_ingredient_literal_key(raw_name)
+    if len(token) < 4 or not lookup:
+        return []
+
+    aliases: dict[str, dict[str, Any]] = {}
+    ambiguous_aliases: set[str] = set()
+    for lookup_key, ingredient in lookup.items():
+        alias = lookup_key.removeprefix("literal:")
+        if len(alias) < 2 or alias == token:
+            continue
+        ingredient_id = str(ingredient.get("standard_ingredient_id") or "")
+        existing = aliases.get(alias)
+        if existing and str(existing.get("standard_ingredient_id") or "") != ingredient_id:
+            ambiguous_aliases.add(alias)
+        else:
+            aliases[alias] = ingredient
+    for alias in ambiguous_aliases:
+        aliases.pop(alias, None)
+
+    candidates: list[list[tuple[str, dict[str, Any]]]] = []
+
+    def walk(offset: int, path: list[tuple[str, dict[str, Any]]]) -> None:
+        if len(candidates) > 1:
+            return
+        if offset == len(token):
+            if len(path) >= 2:
+                candidates.append(path[:])
+            return
+        for alias in sorted(aliases, key=len, reverse=True):
+            if token.startswith(alias, offset):
+                path.append((alias, aliases[alias]))
+                walk(offset + len(alias), path)
+                path.pop()
+
+    walk(0, [])
+    return candidates[0] if len(candidates) == 1 else []
+
+
 def _infer_protein_form(raw_name: Any, standard_name: Any = None) -> Optional[str]:
     text_pool = f"{raw_name or ''} {standard_name or ''}"
-    if "水解" in text_pool:
+    if "水解" in text_pool or "酶解" in text_pool:
         return "水解蛋白"
     if "肉粉" in text_pool or "鱼粉" in text_pool or "虾粉" in text_pool or "磷虾粉" in text_pool:
         return "肉粉"
@@ -455,6 +541,11 @@ def _is_standard_protein_item(item: dict[str, Any]) -> bool:
     family = str(item.get("ingredient_family") or "")
     role = str(item.get("primary_nutrition_role") or "")
     text_pool = f"{raw_name} {standard_name} {family} {role}"
+    explicit_name_pool = f"{raw_name} {standard_name}"
+    if any(marker in role for marker in ("碳水", "纤维")) and not any(
+        marker in explicit_name_pool for marker in PLANT_PROTEIN_MARKERS
+    ):
+        return False
     if any(marker in text_pool for marker in PLANT_PROTEIN_MARKERS):
         return True
     if source_type == "animal" and ("蛋白" in role or any(marker in text_pool for marker in PROTEIN_ANIMAL_MARKERS)):
@@ -463,6 +554,14 @@ def _is_standard_protein_item(item: dict[str, Any]) -> bool:
 
 
 def _is_plant_protein_item(item: dict[str, Any]) -> bool:
+    role = str(item.get("primary_nutrition_role") or "")
+    explicit_name_pool = " ".join(
+        str(item.get(key) or "") for key in ("raw_name", "standard_name")
+    )
+    if any(marker in role for marker in ("碳水", "纤维")) and not any(
+        marker in explicit_name_pool for marker in PLANT_PROTEIN_MARKERS
+    ):
+        return False
     text_pool = " ".join(
         str(item.get(key) or "")
         for key in ("raw_name", "standard_name", "ingredient_family", "primary_nutrition_role")
@@ -575,8 +674,16 @@ def _standardize_ingredient_items(
 ) -> list[dict[str, Any]]:
     lookup = lookup or {}
     items: list[dict[str, Any]] = []
-    for index, token in enumerate(_split_ingredient_tokens(ingredient_composition), start=1):
+    expanded_tokens: list[tuple[str, dict[str, Any] | None, bool]] = []
+    for token in _split_ingredient_tokens(ingredient_composition):
         matched = _match_standard_ingredient(token, lookup)
+        split_items = [] if matched else _split_concatenated_standard_ingredients(token, lookup)
+        if split_items:
+            expanded_tokens.extend((alias, ingredient, True) for alias, ingredient in split_items)
+        else:
+            expanded_tokens.append((token, matched, False))
+
+    for index, (token, matched, was_split) in enumerate(expanded_tokens, start=1):
         standard_name = matched.get("standard_name") if matched else None
         item = {
             "position": index,
@@ -588,8 +695,8 @@ def _standardize_ingredient_items(
             "animal_source": matched.get("animal_source") if matched else _normalize_source_token(token),
             "primary_nutrition_role": matched.get("primary_nutrition_role") if matched else None,
             "protein_form": _infer_protein_form(token, standard_name),
-            "match_method": "standard_alias" if matched else "rule_fallback",
-            "confidence": float(matched.get("confidence") or 1.0) if matched else 0.0,
+            "match_method": "standard_alias_compound_split" if was_split else "standard_alias" if matched else "rule_fallback",
+            "confidence": min(float(matched.get("confidence") or 1.0), 0.98) if was_split else float(matched.get("confidence") or 1.0) if matched else 0.0,
             "is_protein": False,
             "is_plant_protein": False,
         }
