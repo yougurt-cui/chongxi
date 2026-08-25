@@ -1367,10 +1367,11 @@ td b{color:var(--cx-text)!important}
     document.getElementById('accountAvatar').textContent = name.slice(0, 1);
     const alert = document.getElementById('subscriptionAlert');
     const parsedDays = Number(remainingDays);
-    const showCountdown = Number.isFinite(parsedDays) && parsedDays < 7;
+    const showCountdown = Number.isFinite(parsedDays);
+    const showCountdownWarning = showCountdown && parsedDays < 7;
     const countdown = showCountdown ? `｜剩余 ${parsedDays} 天` : '';
     if (status === 'trial_active') {
-      alert.className = `subscription-alert${showCountdown ? ' danger' : ''}`;
+      alert.className = `subscription-alert${showCountdownWarning ? ' danger' : ''}`;
       alert.textContent = `⚠ 企业体验版${countdown}`;
     } else {
       alert.className = 'subscription-alert paid';
