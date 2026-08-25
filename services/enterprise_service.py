@@ -48,15 +48,10 @@ def _as_datetime(value: datetime | str) -> datetime:
     return datetime.strptime(value, "%Y-%m-%d %H:%M:%S")
 
 
-def _calendar_expiry(base: datetime | date, days: int, *, grant_partial_day: bool = False) -> datetime:
-    """Return a midnight expiry for whole calendar-day access.
-
-    When access starts during a day, ``grant_partial_day`` keeps that partial
-    opening day free and starts counting the requested whole days tomorrow.
-    """
+def _calendar_expiry(base: datetime | date, days: int) -> datetime:
+    """Return the exclusive midnight boundary after ``days`` calendar days."""
     base_date = base.date() if isinstance(base, datetime) else base
-    offset = days + (1 if grant_partial_day else 0)
-    return datetime.combine(base_date + timedelta(days=offset), time.min)
+    return datetime.combine(base_date + timedelta(days=days), time.min)
 
 
 def _remaining_calendar_days(expired_at: datetime | str, now: datetime | None = None) -> int:
@@ -72,11 +67,9 @@ def _is_calendar_expired(expired_at: datetime | str, now: datetime | None = None
 
 
 def _normalize_legacy_expiry(expired_at: datetime | str) -> datetime:
-    """Move legacy clock-based expiry to the next midnight without reducing access."""
+    """Normalize a legacy clock-based expiry to its natural-day boundary."""
     value = _as_datetime(expired_at)
-    if value.time() == time.min:
-        return value
-    return datetime.combine(value.date() + timedelta(days=1), time.min)
+    return datetime.combine(value.date(), time.min)
 
 
 def _connect():
@@ -405,7 +398,7 @@ def activate_trial(company_id: int) -> dict:
                 return {"ok": False, "message": f"当前状态不允许开通体验：{company['account_status']}"}
 
             now = datetime.now()
-            expired = _calendar_expiry(now, TRIAL_DAYS, grant_partial_day=True)
+            expired = _calendar_expiry(now, TRIAL_DAYS)
             cur.execute(
                 """UPDATE companies
                    SET account_status = 'trial_active',

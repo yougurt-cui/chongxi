@@ -10,10 +10,10 @@ from services.enterprise_service import (
 
 
 def test_calendar_expiry_ignores_activation_clock_time():
-    morning = _calendar_expiry(datetime(2026, 8, 24, 8, 5, 0), 7, grant_partial_day=True)
-    evening = _calendar_expiry(datetime(2026, 8, 24, 19, 55, 9), 7, grant_partial_day=True)
+    morning = _calendar_expiry(datetime(2026, 8, 24, 8, 5, 0), 7)
+    evening = _calendar_expiry(datetime(2026, 8, 24, 19, 55, 9), 7)
 
-    assert morning == datetime(2026, 9, 1, 0, 0, 0)
+    assert morning == datetime(2026, 8, 31, 0, 0, 0)
     assert evening == morning
 
 
@@ -21,18 +21,18 @@ def test_extension_adds_only_requested_whole_days():
     assert _calendar_expiry(datetime(2026, 9, 1, 0, 0, 0), 3) == datetime(2026, 9, 4, 0, 0, 0)
 
 
-def test_legacy_clock_expiry_is_rounded_forward_without_losing_access():
-    assert _normalize_legacy_expiry(datetime(2026, 8, 31, 19, 55, 9)) == datetime(2026, 9, 1, 0, 0, 0)
+def test_legacy_clock_expiry_uses_same_calendar_date_boundary():
+    assert _normalize_legacy_expiry(datetime(2026, 8, 31, 19, 55, 9)) == datetime(2026, 8, 31, 0, 0, 0)
     assert _normalize_legacy_expiry(datetime(2026, 9, 1, 0, 0, 0)) == datetime(2026, 9, 1, 0, 0, 0)
 
 
 def test_remaining_days_only_changes_when_calendar_date_changes():
-    expired_at = datetime(2026, 9, 1, 0, 0, 0)
+    expired_at = datetime(2026, 8, 31, 0, 0, 0)
 
-    assert _remaining_calendar_days(expired_at, datetime(2026, 8, 25, 0, 0, 1)) == 7
-    assert _remaining_calendar_days(expired_at, datetime(2026, 8, 25, 23, 59, 59)) == 7
-    assert _remaining_calendar_days(expired_at, datetime(2026, 8, 31, 12, 0, 0)) == 1
-    assert _remaining_calendar_days(expired_at, datetime(2026, 9, 1, 0, 0, 0)) == 0
+    assert _remaining_calendar_days(expired_at, datetime(2026, 8, 25, 0, 0, 1)) == 6
+    assert _remaining_calendar_days(expired_at, datetime(2026, 8, 25, 23, 59, 59)) == 6
+    assert _remaining_calendar_days(expired_at, datetime(2026, 8, 30, 12, 0, 0)) == 1
+    assert _remaining_calendar_days(expired_at, datetime(2026, 8, 31, 0, 0, 0)) == 0
 
 
 def test_expiry_switches_at_start_of_expiry_date():
