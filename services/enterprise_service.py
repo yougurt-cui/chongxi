@@ -468,6 +468,7 @@ def get_subscription_status(company_id: int) -> dict:
             remaining_days = _remaining_calendar_days(company_dict["trial_expired_at"], now)
         elif company_dict["account_status"] == ACCOUNT_STATUS_PAID_ACTIVE and company_dict["subscription_expired_at"]:
             remaining_days = _remaining_calendar_days(company_dict["subscription_expired_at"], now)
+        company_dict = _serialize_local_datetimes(company_dict)
         return {
             "ok": True,
             "company": company_dict,
