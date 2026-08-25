@@ -13,7 +13,7 @@ import hashlib
 import os
 import secrets
 import uuid
-from datetime import datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from typing import Any
 
 import pymysql
@@ -42,6 +42,43 @@ def _now() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
+def _as_datetime(value: datetime | str) -> datetime:
+    if isinstance(value, datetime):
+        return value
+    return datetime.strptime(value, "%Y-%m-%d %H:%M:%S")
+
+
+def _calendar_expiry(base: datetime | date, days: int, *, grant_partial_day: bool = False) -> datetime:
+    """Return a midnight expiry for whole calendar-day access.
+
+    When access starts during a day, ``grant_partial_day`` keeps that partial
+    opening day free and starts counting the requested whole days tomorrow.
+    """
+    base_date = base.date() if isinstance(base, datetime) else base
+    offset = days + (1 if grant_partial_day else 0)
+    return datetime.combine(base_date + timedelta(days=offset), time.min)
+
+
+def _remaining_calendar_days(expired_at: datetime | str, now: datetime | None = None) -> int:
+    """Calculate whole remaining calendar days without considering the clock time."""
+    current = now or datetime.now()
+    return max(0, (_as_datetime(expired_at).date() - current.date()).days)
+
+
+def _is_calendar_expired(expired_at: datetime | str, now: datetime | None = None) -> bool:
+    """Treat the expiry date as an exclusive natural-day boundary."""
+    current = now or datetime.now()
+    return current.date() >= _as_datetime(expired_at).date()
+
+
+def _normalize_legacy_expiry(expired_at: datetime | str) -> datetime:
+    """Move legacy clock-based expiry to the next midnight without reducing access."""
+    value = _as_datetime(expired_at)
+    if value.time() == time.min:
+        return value
+    return datetime.combine(value.date() + timedelta(days=1), time.min)
+
+
 def _connect():
     cfg = get_feature_mysql_config()
     return pymysql.connect(**cfg, cursorclass=pymysql.cursors.DictCursor, autocommit=False)
@@ -66,13 +103,25 @@ def _gen_order_no() -> str:
 def _row_to_dict(row) -> dict | None:
     if row is None:
         return None
-    result = dict(row)
+    result = _serialize_local_datetimes(dict(row))
     result.pop("password_hash", None)
     return result
 
 
 def _rows_to_list(rows) -> list[dict]:
-    return [dict(r) for r in rows] if rows else []
+    return [_serialize_local_datetimes(dict(r)) for r in rows] if rows else []
+
+
+def _serialize_local_datetimes(row: dict) -> dict:
+    """Serialize naive MySQL DATETIME values as local wall-clock time.
+
+    Flask otherwise emits them as GMT dates, causing browsers in China to add
+    another eight hours when rendering administration tables.
+    """
+    for key, value in row.items():
+        if isinstance(value, datetime):
+            row[key] = value.isoformat(timespec="seconds")
+    return row
 
 
 # ── 建表 ──────────────────────────────────────────────
@@ -301,21 +350,39 @@ def _sync_company_status(company: dict) -> dict:
     now = datetime.now()
     status = company["account_status"]
     changed = False
+    expiry_changed = False
+
+    expiry_column = None
+    if status == ACCOUNT_STATUS_TRIAL_ACTIVE and company["trial_expired_at"]:
+        expiry_column = "trial_expired_at"
+    elif status == ACCOUNT_STATUS_PAID_ACTIVE and company["subscription_expired_at"]:
+        expiry_column = "subscription_expired_at"
+    if expiry_column:
+        normalized_expiry = _normalize_legacy_expiry(company[expiry_column])
+        if normalized_expiry != _as_datetime(company[expiry_column]):
+            company[expiry_column] = normalized_expiry
+            expiry_changed = True
 
     if status == ACCOUNT_STATUS_TRIAL_ACTIVE and company["trial_expired_at"]:
-        if now >= company["trial_expired_at"]:
+        if _is_calendar_expired(company["trial_expired_at"], now):
             status = ACCOUNT_STATUS_TRIAL_EXPIRED
             changed = True
     elif status == ACCOUNT_STATUS_PAID_ACTIVE and company["subscription_expired_at"]:
-        if now >= company["subscription_expired_at"]:
+        if _is_calendar_expired(company["subscription_expired_at"], now):
             status = ACCOUNT_STATUS_PAID_EXPIRED
             changed = True
 
-    if changed:
+    if changed or expiry_changed:
         conn = _connect()
         try:
             with conn.cursor() as cur:
-                cur.execute("UPDATE companies SET account_status = %s WHERE id = %s", (status, company["id"]))
+                if expiry_changed and expiry_column:
+                    cur.execute(
+                        f"UPDATE companies SET account_status = %s, {expiry_column} = %s WHERE id = %s",
+                        (status, company[expiry_column], company["id"]),
+                    )
+                else:
+                    cur.execute("UPDATE companies SET account_status = %s WHERE id = %s", (status, company["id"]))
             conn.commit()
         finally:
             conn.close()
@@ -338,7 +405,7 @@ def activate_trial(company_id: int) -> dict:
                 return {"ok": False, "message": f"当前状态不允许开通体验：{company['account_status']}"}
 
             now = datetime.now()
-            expired = now + timedelta(days=TRIAL_DAYS)
+            expired = _calendar_expiry(now, TRIAL_DAYS, grant_partial_day=True)
             cur.execute(
                 """UPDATE companies
                    SET account_status = 'trial_active',
@@ -371,9 +438,7 @@ def extend_trial(company_id: int, days: int) -> dict:
                 return {"ok": False, "message": "企业不存在"}
 
             base = company["trial_expired_at"] or datetime.now()
-            if isinstance(base, str):
-                base = datetime.strptime(base, "%Y-%m-%d %H:%M:%S")
-            new_expired = base + timedelta(days=days)
+            new_expired = _calendar_expiry(_as_datetime(base), days)
             cur.execute(
                 "UPDATE companies SET trial_expired_at = %s, account_status = 'trial_active' WHERE id = %s",
                 (new_expired, company_id),
@@ -400,15 +465,9 @@ def get_subscription_status(company_id: int) -> dict:
         now = datetime.now()
         remaining_days = None
         if company_dict["account_status"] == ACCOUNT_STATUS_TRIAL_ACTIVE and company_dict["trial_expired_at"]:
-            exp = company_dict["trial_expired_at"]
-            if isinstance(exp, str):
-                exp = datetime.strptime(exp, "%Y-%m-%d %H:%M:%S")
-            remaining_days = max(0, (exp - now).days)
+            remaining_days = _remaining_calendar_days(company_dict["trial_expired_at"], now)
         elif company_dict["account_status"] == ACCOUNT_STATUS_PAID_ACTIVE and company_dict["subscription_expired_at"]:
-            exp = company_dict["subscription_expired_at"]
-            if isinstance(exp, str):
-                exp = datetime.strptime(exp, "%Y-%m-%d %H:%M:%S")
-            remaining_days = max(0, (exp - now).days)
+            remaining_days = _remaining_calendar_days(company_dict["subscription_expired_at"], now)
         return {
             "ok": True,
             "company": company_dict,
@@ -485,6 +544,7 @@ def get_order(order_no: str) -> dict:
         if not order:
             return {"ok": False, "message": "订单不存在"}
         result = dict(order)
+        result = _serialize_local_datetimes(result)
         result["amount"] = float(result["amount"])
         return {"ok": True, "order": result}
     finally:
@@ -504,7 +564,7 @@ def list_orders() -> list[dict]:
             rows = cur.fetchall()
         result = []
         for r in rows:
-            d = dict(r)
+            d = _serialize_local_datetimes(dict(r))
             d["amount"] = float(d["amount"])
             result.append(d)
         return result
@@ -676,7 +736,7 @@ def list_corporate_payments() -> list[dict]:
             rows = cur.fetchall()
         result = []
         for r in rows:
-            d = dict(r)
+            d = _serialize_local_datetimes(dict(r))
             d["amount"] = float(d["amount"])
             result.append(d)
         return result
