@@ -42,15 +42,15 @@
     padding:0 30px; background:#fff; border-bottom:1px solid #e8edf4;
     position:sticky; top:0; z-index:5;
   }
-  .topbar strong { font-size:16px; }
-  .user { display:flex; align-items:center; gap:10px; font-size:13px; color:#64748b; }
+  .topbar strong { flex:0 0 auto; font-size:16px; }
+  .user { display:flex; flex:0 0 auto; align-items:center; gap:10px; font-size:13px; color:#64748b; white-space:nowrap; }
   .avatar { width:34px; height:34px; border-radius:50%; background:#e2e8f0; display:grid; place-items:center; color:#334155; font-weight:700; }
-  .account-tools { margin-left:auto; display:flex; align-items:center; gap:10px; }
-  .subscription-alert { display:flex; align-items:center; gap:9px; min-height:36px; padding:7px 12px; border:1px solid #f4d58d; border-radius:8px; background:#fff8e7; color:#c66a16; font-size:12px; font-weight:650; }
+  .account-tools { min-width:0; margin-left:auto; display:flex; align-items:center; justify-content:flex-end; gap:14px; }
+  .subscription-alert { display:flex; flex:0 0 auto; align-items:center; gap:9px; min-height:36px; padding:7px 12px; border:1px solid #f4d58d; border-radius:8px; background:#fff8e7; color:#c66a16; font-size:12px; font-weight:650; white-space:nowrap; }
   .subscription-alert.paid { border-color:#bfe7d4; background:#eefaf4; color:#087a59; }
   .subscription-alert.danger { border-color:#f3b9b9; background:#fff1f1; color:#c43d3d; }
   .subscription-buy { border:0; background:transparent; color:inherit; font-weight:750; cursor:pointer; text-decoration:underline; text-underline-offset:2px; }
-  .account-menu { position:relative; }
+  .account-menu { position:relative; min-width:0; }
   .account-trigger { display:flex; align-items:center; gap:8px; border:1px solid #e2e5e9; background:#fff; border-radius:9px; padding:5px 9px 5px 6px; cursor:pointer; color:#30343b; }
   .account-trigger .avatar { flex:0 0 auto; }
   .account-trigger span { max-width:170px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px; }
@@ -788,7 +788,7 @@ td b{color:var(--cx-text)!important}
       <strong id="topTitle">用户需求盘点</strong>
       <div class="account-tools">
         <div id="subscriptionAlert" class="subscription-alert">正在验证企业登录状态…</div>
-        <div class="user"><span id="dataUpdatedAt">数据更新：2026-08-12</span></div>
+        <div class="user"><span id="dataUpdatedAt">数据更新：—</span></div>
         <div class="account-menu">
           <button id="accountTrigger" class="account-trigger" type="button" aria-expanded="false"><span id="accountAvatar" class="avatar">CX</span><span id="accountCompany">企业用户</span>⌄</button>
           <div id="accountDropdown" class="account-dropdown" hidden>
@@ -1366,7 +1366,18 @@ td b{color:var(--cx-text)!important}
     document.getElementById('accountCompany').textContent = name;
     document.getElementById('accountAvatar').textContent = name.slice(0, 1);
     const alert = document.getElementById('subscriptionAlert');
-    const parsedDays = Number(remainingDays);
+    const expiry = status === 'trial_active'
+      ? company.trial_expired_at
+      : company.subscription_expired_at || company.paid_expired_at;
+    const expiryDate = String(expiry || '').slice(0, 10);
+    const expiryParts = expiryDate.split('-').map(Number);
+    const today = new Date();
+    const parsedDays = expiryParts.length === 3 && expiryParts.every(Number.isFinite)
+      ? Math.max(0, Math.round(
+        (new Date(expiryParts[0], expiryParts[1] - 1, expiryParts[2]).getTime()
+          - new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime()) / 86400000,
+      ))
+      : Number(remainingDays);
     const showCountdown = Number.isFinite(parsedDays);
     const showCountdownWarning = showCountdown && parsedDays < 7;
     const countdown = showCountdown ? `｜剩余 ${parsedDays} 天` : '';
@@ -1425,6 +1436,14 @@ td b{color:var(--cx-text)!important}
     '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
   })[char]);
   const formatNumber = value => Number(value || 0).toLocaleString('zh-CN');
+  const formatDate = value => {
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return String(value || '暂无').slice(0, 10);
+    const pad = part => String(part).padStart(2, '0');
+    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+  };
+  const dateNode = document.getElementById('dataUpdatedAt');
+  if (dateNode) dateNode.textContent = `数据更新：${formatDate(new Date())}`;
   const renderBars = (items, color = 'var(--cx-green)') => {
     if (!items?.length) return '<div class="empty-state">暂无数据</div>';
     const max = Math.max(...items.map(item => item.count), 1);
@@ -1487,9 +1506,7 @@ td b{color:var(--cx-text)!important}
       <section class="prototype-section"><div class="prototype-head"><div><h3>01 功能需求地图</h3><p>看清用户需求结构与高频交叉场景，为产品研发提供线索</p></div><div class="chart-tabs" id="needMapTabs"><button class="chart-tab active" data-set="health">健康问题</button><button class="chart-tab" data-set="stage">生命阶段</button><button class="chart-tab" data-set="breed">品种</button></div></div><div id="needBubbleChart">${renderBubbleChart(data.needs.bubble_sets.health,'健康问题')}</div><div class="matrix-grid">${renderMatrix('生命阶段 × 健康问题',data.needs.matrix_columns,data.needs.stage_matrix)}${renderMatrix('品种 × 健康问题',data.needs.matrix_columns,data.needs.breed_matrix)}${renderMatrix('品种 × 生命阶段',data.needs.breed_stage_columns,data.needs.breed_stage_matrix)}</div></section>
       <section class="prototype-section"><div class="prototype-head"><div><h3>02 用户选择洞察</h3><p>理解用户在比较产品时看重什么，以及这些依据最终如何影响选择结果</p></div><span class="tag">近 ${formatNumber(data.counts.decision)} 条选择评论</span></div><div class="decision-grid"><div class="decision-card"><h4>用户选择依据</h4>${factorRows(factors)}<div class="insight" style="margin-top:12px"><b>解读：</b>${escapeHtml(factors[0]?.name||'核心因素')}是当前用户比较时最核心的关注，占 ${factors[0]?.share||0}%。</div></div><div class="decision-card"><h4>选择依据 → 选择结果　流向分布</h4>${renderSankey(data)}<div class="insight"><b>说明：</b>流线宽度来自真实 Decision 标签的交叉计数。</div></div></div></section>
       <section class="prototype-section"><div class="prototype-head"><div><h3>03 用户迁移路径</h3><p>看清用户在品牌之间如何流动，以及驱动换粮的核心原因</p></div><div class="chart-tabs"><button class="chart-tab active">阵营迁移</button><button class="chart-tab">品牌流向</button><button class="chart-tab">SKU 流向</button></div></div>${paths.length?renderMigration(data):'<div class="empty-state">暂无完整品牌迁移路径</div>'}<div class="reason-layout"><div><h4>用户为什么换</h4>${factorRows(data.switches.reasons)}</div><div class="reason-insight"><b>💡 洞察</b>${escapeHtml(data.switches.reasons[0]?.name||'健康适配')}占比最高，是驱动用户换粮的核心因素；完整品牌路径率为 ${data.switches.complete_path_rate}%。</div></div></section>
-      <div class="insight"><b>数据说明：</b>本页直接聚合 catfood_need_comment_labels、catfood_decision_comment_labels 和 catfood_switch_comment_labels。更新时间：${escapeHtml(data.updated_at || '暂无')}。</div>`;
-    const dateNode = document.querySelector('.topbar .user span');
-    if (dateNode && data.updated_at) dateNode.textContent = `数据更新：${String(data.updated_at).slice(0, 10)}`;
+      <div class="insight"><b>数据说明：</b>本页直接聚合 catfood_need_comment_labels、catfood_decision_comment_labels 和 catfood_switch_comment_labels。更新时间：${escapeHtml(formatDate(data.updated_at))}。</div>`;
     const bubbleLabels={health:'健康问题',stage:'生命阶段',breed:'品种'};
     const bindBubbles=items=>document.querySelectorAll('.need-bubble').forEach(node=>node.addEventListener('click',()=>{document.querySelectorAll('.need-bubble').forEach(x=>x.classList.remove('active'));node.classList.add('active');const item=items[Number(node.dataset.bubbleIndex)];document.getElementById('bubbleDetail').innerHTML=`<b>${escapeHtml(item.name)}</b>：相关评论 ${formatNumber(item.count)} 条，占当前维度 ${item.share}%；近12个月同比增长率 ${item.growth==null?'（新增，无基期数据）':(item.growth>=0?'+'+item.growth+'%':item.growth+'%')}。`;}));
     bindBubbles(data.needs.bubble_sets.health);
