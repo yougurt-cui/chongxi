@@ -58,6 +58,8 @@
   .account-dropdown button { width:100%; border:0; border-radius:7px; padding:9px 10px; background:transparent; text-align:left; cursor:pointer; color:#41474d; }
   .account-dropdown button:hover { background:#f3f6f4; }
   .account-dropdown .logout { color:#cf4141; }
+  #food-compare { max-width:none; padding:0; }
+  .food-compare-frame { display:block; width:100%; height:calc(100vh - 66px); border:0; background:#f8faff; }
   .page { display:none; padding:28px 30px 48px; max-width:1500px; margin:auto; }
   .page.active { display:block; }
   .hero {
@@ -779,6 +781,7 @@ td b{color:var(--cx-text)!important}
       <button data-page="ingredients">04 产品机会地图</button>
       <button data-page="diagnosis">05 SKU 风险预测</button>
       <button data-page="portrait">06 全网产品画像</button>
+      <button data-page="food-compare">07 宠物食品对比</button>
     </div>
     <div class="sidebar-bottom">PROFESSIONAL WORKSPACE<br>用户反馈 · SKU · 配方 · 原料</div>
   </aside>
@@ -1322,6 +1325,10 @@ td b{color:var(--cx-text)!important}
   <div id="productPortraitDashboard"><div class="card"><div class="empty-state">正在加载全网产品画像…</div></div></div>
 </section>
 
+<section class="page" id="food-compare">
+  <iframe class="food-compare-frame" src="/cat-food-compare.html?embed=1" title="宠物食品对比" loading="lazy"></iframe>
+</section>
+
 
 
 
@@ -1418,7 +1425,8 @@ td b{color:var(--cx-text)!important}
     competitor:'竞品增长拆解',
     ingredients:'产品机会地图',
     diagnosis:'SKU 风险预测',
-    portrait:'全网产品画像'
+    portrait:'全网产品画像',
+    'food-compare':'宠物食品对比'
   };
   document.querySelectorAll('.nav button').forEach(btn => {
     btn.addEventListener('click', () => {

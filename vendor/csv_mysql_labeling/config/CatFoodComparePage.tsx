@@ -1653,6 +1653,7 @@ function ChangeFoodAdviceLoading() {
 }
 
 function CatFoodComparePage() {
+  const embedded = new URLSearchParams(window.location.search).get("embed") === "1";
   const [productOptions, setProductOptions] = useState<ProductOption[]>([]);
   const [productsLoading, setProductsLoading] = useState(true);
   const [productsError, setProductsError] = useState("");
@@ -1904,8 +1905,8 @@ function CatFoodComparePage() {
 
   return (
     <div className="min-h-screen overflow-x-hidden bg-[#F8FAFF]">
-      <HeaderNav />
-      <div className="pt-[72px]">
+      {!embedded && <HeaderNav />}
+      <div className={embedded ? "" : "pt-[72px]"}>
         <main className="min-w-0 px-8 py-6 max-[1599px]:px-6">
           <div className="mx-auto max-w-[1500px] space-y-4">
             <SearchFilterBar
