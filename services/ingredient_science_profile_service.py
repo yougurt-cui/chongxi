@@ -67,7 +67,7 @@ DOMAIN_ATTRIBUTE_DEFINITIONS = {
         "protein_form": {"kind": "single", "values": ["unknown", "none", "fresh", "frozen", "meal", "hydrolyzed", "concentrate", "isolate", "other"]},
         "source_specificity": {"kind": "single", "values": ["unknown", "generic", "category_clear", "specific"]},
         "animal_source": {"kind": "single", "values": ["unknown", "none", "chicken", "duck", "turkey", "fish", "beef", "lamb", "pork", "egg", "mixed", "other"]},
-        "plant_protein_form": {"kind": "single", "values": ["unknown", "none", "whole", "meal", "concentrate", "isolate", "hydrolyzed", "other"]},
+        "plant_protein_form": {"kind": "single", "values": ["unknown", "none", "whole", "mild", "concentrated", "isolate"]},
         "animal_source_category": {"kind": "single", "values": ["unknown", "none", "poultry", "livestock", "rabbit", "fish", "shellfish", "egg", "dairy", "other"]},
     },
     "carbohydrate": {
@@ -645,6 +645,15 @@ def update_science_profile(standard_ingredient_id: str, payload: dict[str, Any])
     else:
         domain_attributes = normalized.get("domain_attributes", existing.get("domain_attributes", {}))
     domain_attributes = strip_identity_owned_attributes(category, domain_attributes)
+    inherited_attributes = inherited_domain_attributes(category, existing)
+    if category == "protein":
+        if inherited_attributes.get("protein_source") == "plant":
+            # 植物蛋白不适用动物来源分类和动物蛋白形态。
+            domain_attributes["protein_form"] = "none"
+            domain_attributes["animal_source_category"] = "none"
+        else:
+            # 非植物蛋白不适用植物蛋白形态。
+            domain_attributes["plant_protein_form"] = "none"
     status = normalized.get("science_status", existing["science_status"])
     evidence = normalized.get("evidence_level", existing["evidence_level"])
     review_note = normalized.get("review_note", existing.get("review_note"))

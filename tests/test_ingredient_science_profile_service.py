@@ -56,6 +56,15 @@ class IngredientScienceProfileTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "未知领域属性"):
             normalize_domain_attributes("carbohydrate", {"protein_form": "fresh"})
 
+    def test_plant_protein_form_uses_dedicated_enum(self):
+        result = normalize_domain_attributes(
+            "protein",
+            {"plant_protein_form": "mild", "protein_form": "none", "animal_source_category": "none"},
+        )
+        self.assertEqual(result["plant_protein_form"], "mild")
+        with self.assertRaisesRegex(ValueError, "枚举值无效"):
+            normalize_domain_attributes("protein", {"plant_protein_form": "meal"})
+
     def test_identity_fields_are_inherited_not_stored_twice(self):
         inherited = inherited_domain_attributes(
             "protein", {"source_type": "animal", "animal_source": "鸡"}
