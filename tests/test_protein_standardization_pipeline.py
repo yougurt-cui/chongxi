@@ -263,7 +263,21 @@ class ProteinStandardizationPipelineTest(unittest.TestCase):
         self.assertEqual(target["plant_protein_interference_norm"], "2级｜单一高浓缩型植物蛋白")
         self.assertEqual(target["plant_protein_interference_score"], 0.5)
         self.assertEqual(target["protein_structure_score"], 0.754)
-        self.assertEqual(target["protein_quality_score"], 0.825)
+        self.assertEqual(target["protein_quality_score"], 0.862)
+
+    def test_animal_dominance_does_not_double_count_plant_interference(self):
+        base = {
+            "animal_source_level1_categories": "禽类",
+            "animal_source_level2_sources": "鸡",
+            "animal_sources": "鸡",
+        }
+        without_interference = protein_score1.calc_animal_protein_dominance_score(
+            {**base, "plant_protein_interference_score": 0.0}
+        )
+        with_interference = protein_score1.calc_animal_protein_dominance_score(
+            {**base, "plant_protein_interference_score": 1.0}
+        )
+        self.assertEqual(with_interference, without_interference)
 
     def test_item_feature_tags_include_fat_fiber_and_starch_domains(self):
         item_cases = {
@@ -299,6 +313,26 @@ class ProteinStandardizationPipelineTest(unittest.TestCase):
         self.assertEqual(items[1]["protein_form"], "鲜肉")
         self.assertEqual(items[0]["protein_rule_ids"], [103])
         self.assertEqual(items[1]["protein_rule_ids"], [106])
+
+    def test_active_science_profile_overrides_name_form_fallback(self):
+        standard = {
+            "standard_ingredient_id": "STD99001",
+            "standard_name": "测试蛋白原料",
+            "ingredient_family": "鸡肉类",
+            "source_type": "animal",
+            "animal_source": "鸡",
+            "primary_nutrition_role": "蛋白质供给",
+            "science_status": "active",
+            "science_nutrition_category": "protein",
+            "science_profile_version": 3,
+            "science_attributes": {"protein_form": "hydrolyzed", "source_specificity": "specific"},
+            "confidence": 1.0,
+        }
+        lookup = {protein_aggregate._normalize_ingredient_key(standard["standard_name"]): standard}
+        item = protein_aggregate._standardize_ingredient_items(standard["standard_name"], lookup)[0]
+        self.assertEqual(item["protein_form"], "水解蛋白")
+        self.assertEqual(item["protein_form_origin"], "science_profile")
+        self.assertEqual(item["science_profile_version"], 3)
 
     def test_structured_role_rule_recovers_plant_protein(self):
         lookup = standard_lookup()

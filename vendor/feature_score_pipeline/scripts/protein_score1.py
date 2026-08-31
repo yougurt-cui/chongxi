@@ -491,6 +491,12 @@ def clamp01(value):
 
 
 def calc_animal_protein_dominance_score(row):
+    """Score animal-source presence and specificity independently.
+
+    Plant-protein interference is intentionally excluded here.  It already has
+    its own quality component (low_plant_interference), so subtracting it here
+    would count the same position-weighted signal twice.
+    """
     level1 = normalize_text(row.get("animal_source_level1_categories", ""))
     level2 = normalize_text(row.get("animal_source_level2_sources", ""))
     animal_sources = normalize_text(row.get("animal_sources", ""))
@@ -507,8 +513,6 @@ def calc_animal_protein_dominance_score(row):
     if "鱼类" in level1 or "鱼" in text_pool:
         score += 0.05
 
-    plant_interference = row.get("plant_protein_interference_score", 0.0)
-    score -= 0.25 * clamp01(plant_interference)
     return clamp01(score)
 
 

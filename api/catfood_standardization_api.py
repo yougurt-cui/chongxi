@@ -29,6 +29,15 @@ from services.formula_incremental_service import (
     materialize_formula_risks,
     materialize_formula_scores,
 )
+from services.ingredient_science_profile_service import (
+    ensure_science_profile_draft,
+    get_science_profile,
+    list_science_profiles,
+    list_score_rules,
+    preview_base_contributions,
+    science_profile_options,
+    update_science_profile,
+)
 from services.orchestrator_service import (
     resume_brand_tasks_for_source_ids,
     resume_formula_tasks_for_source_ids,
@@ -159,6 +168,83 @@ def standardization_ingredients():
     try:
         return jsonify({"ok": True, "items": list_standard_ingredients(query=request.args.get("q") or "",
                                                                          limit=int(request.args.get("limit") or 1000))}), 200
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+
+
+@catfood_standardization_api.get("/science-profiles/options")
+def standardization_science_profile_options():
+    return jsonify({"ok": True, **science_profile_options()}), 200
+
+
+@catfood_standardization_api.post("/science-profiles/contribution-preview")
+def standardization_science_contribution_preview():
+    try:
+        payload = request.get_json(silent=True) or {}
+        return jsonify(preview_base_contributions(
+            str(payload.get("nutrition_category") or ""),
+            payload.get("domain_attributes"),
+        )), 200
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+
+
+@catfood_standardization_api.get("/science-score-rules")
+def standardization_science_score_rules():
+    try:
+        return jsonify(list_score_rules()), 200
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+
+
+@catfood_standardization_api.get("/science-profiles")
+def standardization_science_profiles():
+    try:
+        return jsonify(list_science_profiles(
+            status=str(request.args.get("status") or ""),
+            query=str(request.args.get("q") or ""),
+            limit=int(request.args.get("limit") or 200),
+        )), 200
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+
+
+@catfood_standardization_api.get("/science-profiles/<standard_ingredient_id>")
+def standardization_science_profile_get(standard_ingredient_id: str):
+    try:
+        profile = get_science_profile(
+            standard_ingredient_id,
+            create_draft=request.args.get("create_draft") in {"1", "true", "yes"},
+        )
+        if not profile:
+            return jsonify({"ok": False, "error": "science profile not found"}), 404
+        return jsonify({"ok": True, "profile": profile}), 200
+    except KeyError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 404
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+
+
+@catfood_standardization_api.post("/science-profiles/<standard_ingredient_id>/draft")
+def standardization_science_profile_draft(standard_ingredient_id: str):
+    try:
+        return jsonify({"ok": True, "profile": ensure_science_profile_draft(standard_ingredient_id)}), 200
+    except KeyError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 404
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+
+
+@catfood_standardization_api.put("/science-profiles/<standard_ingredient_id>")
+def standardization_science_profile_update(standard_ingredient_id: str):
+    try:
+        profile = update_science_profile(
+            standard_ingredient_id,
+            request.get_json(silent=True) or {},
+        )
+        return jsonify({"ok": True, "profile": profile}), 200
+    except KeyError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 404
     except Exception as exc:
         return jsonify({"ok": False, "error": str(exc)}), 400
 

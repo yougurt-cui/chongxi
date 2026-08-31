@@ -516,6 +516,155 @@
       margin-bottom: 18px;
       align-items: end;
     }
+    #scienceProfileDialog {
+      width: min(1180px, calc(100vw - 32px));
+      max-width: none;
+      max-height: calc(100vh - 32px);
+      overflow: hidden;
+    }
+    .science-profile-card {
+      width: 100%;
+      max-height: calc(100vh - 32px);
+      overflow: hidden;
+      background: var(--panel-soft);
+      padding: 16px;
+    }
+    .science-profile-card > .toolbar {
+      padding: 12px 14px;
+      margin-bottom: 12px;
+    }
+    .science-profile-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 12px;
+      margin-bottom: 12px;
+      align-items: end;
+    }
+    .science-profile-grid.metadata { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .science-identity-snapshot {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 10px;
+      background: #eef4ff;
+      border: 1px solid #cddcff;
+      border-radius: 8px;
+      padding: 10px 12px;
+      margin-bottom: 12px;
+    }
+    .science-identity-value { color: var(--ink); font-size: 13px; font-weight: 800; }
+    .science-function-result {
+      min-height: 36px;
+      display: flex;
+      align-items: center;
+      padding: 7px 9px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel-soft);
+      font-size: 13px;
+      font-weight: 800;
+    }
+    .science-profile-grid.functions { display: block; }
+    .science-domain-section {
+      display: grid;
+      grid-template-columns: minmax(0, 2fr) minmax(260px, 1fr);
+      gap: 10px;
+      margin-bottom: 12px;
+    }
+    .science-domain-fields,
+    .science-contribution-preview {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 12px;
+    }
+    .science-domain-fields-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 8px;
+    }
+    .science-domain-fields-grid label { min-width: 0; }
+    .science-multi-options { display: flex; flex-wrap: wrap; gap: 5px 10px; }
+    .science-multi-options label { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; }
+    .science-contribution-list { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+    .science-contribution-chip {
+      padding: 5px 8px;
+      border-radius: 8px;
+      background: #eef4ff;
+      color: var(--primary);
+      font-size: 12px;
+      font-weight: 800;
+    }
+    .science-function-group {
+      display: grid;
+      grid-template-columns: 138px repeat(5, minmax(0, 1fr));
+      gap: 10px;
+      align-items: end;
+    }
+    .science-function-group + .science-function-group {
+      border-top: 1px solid var(--line);
+      margin-top: 10px;
+      padding-top: 10px;
+    }
+    .science-function-group-title {
+      align-self: center;
+      color: var(--primary);
+      font-size: 13px;
+      font-weight: 800;
+      line-height: 1.45;
+    }
+    .science-score-target {
+      display: block;
+      min-height: 16px;
+      margin-top: 4px;
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.35;
+    }
+    .science-profile-grid label { min-width: 0; }
+    .science-profile-grid select {
+      min-width: 0;
+      min-height: 36px;
+      padding: 7px 9px;
+    }
+    #scienceReviewNote {
+      min-height: 58px;
+      height: 58px;
+      max-height: 58px;
+      resize: none;
+    }
+    .science-profile-actions { margin-top: 12px; }
+    .score-rule-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(380px, 1fr));
+      gap: 12px;
+    }
+    .score-rule-card {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 14px;
+      box-shadow: var(--shadow);
+    }
+    .score-rule-head { display: flex; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
+    .score-rule-source { font-size: 11px; color: var(--muted); }
+    .score-rule-components { display: grid; gap: 6px; }
+    .score-rule-component {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 70px 70px;
+      gap: 8px;
+      align-items: center;
+      padding: 7px 9px;
+      border-radius: 8px;
+      background: var(--panel-soft);
+      font-size: 12px;
+    }
+    .score-rule-weight { color: var(--primary); font-weight: 800; text-align: right; }
+    .score-rule-direction { color: var(--muted); text-align: right; }
     .field-label {
       display: block;
       margin-bottom: 6px;
@@ -538,12 +687,19 @@
       color: var(--muted);
     }
     .toast {
-      margin-bottom: 14px;
+      position: fixed;
+      top: 18px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 100000;
+      width: min(680px, calc(100vw - 32px));
+      margin: 0;
       display: none;
       border-radius: 8px;
       padding: 11px 13px;
       font-size: 14px;
       line-height: 1.6;
+      box-shadow: 0 12px 32px rgba(15, 23, 42, 0.22);
     }
     .toast.show { display: block; }
     .toast.ok { background: #ecfdf5; color: #047857; border: 1px solid #a7f3d0; }
@@ -551,6 +707,13 @@
     @media (max-width: 820px) {
       .topbar, .toolbar, .tabs { flex-direction: column; align-items: stretch; }
       .filters { grid-template-columns: 1fr; }
+      .science-profile-grid,
+      .science-profile-grid.functions { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .science-function-group { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .science-function-group-title { grid-column: 1 / -1; }
+      .science-domain-section { grid-template-columns: 1fr; }
+      .science-domain-fields-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .science-identity-snapshot { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     }
   </style>
 </head>
@@ -622,6 +785,8 @@
         <button id="productIdentityTab" class="tab" type="button">产品身份</button>
         <button id="formulaIdentityTab" class="tab" type="button">配方身份</button>
         <button id="ingredientIdentityTab" class="tab" type="button">原材料身份</button>
+        <button id="scienceProfileTab" class="tab" type="button">科学属性</button>
+        <button id="scoreRuleTab" class="tab" type="button">评分规则</button>
       </section>
 
       <div id="brandIdentityPanel">
@@ -783,7 +948,47 @@
         </tr></thead><tbody id="ingredientIdentityRows"></tbody></table></div>
         <div id="ingredientIdentityEmpty" class="empty" style="display:none;">暂无待确认原料。</div></section>
       </div>
+
+      <div id="scienceProfilePanel" hidden>
+        <section class="toolbar">
+          <div><div class="title">原材料科学属性</div><div id="scienceProfileSummary" class="muted">等待加载...</div></div>
+          <div class="row-actions">
+            <select id="scienceProfileStatus" class="cell-input"><option value="draft">待确认草稿</option><option value="active">已生效</option><option value="excluded">已排除</option><option value="">全部</option></select>
+            <input id="scienceProfileQuery" class="cell-input" placeholder="搜索标准原料" />
+            <button id="scienceProfileRefresh" class="button secondary" type="button">刷新科学属性</button>
+          </div>
+        </section>
+        <section class="card"><div class="table-wrap"><table style="min-width:1200px;"><thead><tr>
+          <th>标准原料</th><th>原营养角色</th><th>营养类别</th><th>亚型</th><th>功能摘要</th><th>证据</th><th>状态</th><th>操作</th>
+        </tr></thead><tbody id="scienceProfileRows"></tbody></table></div>
+        <div id="scienceProfileEmpty" class="empty" style="display:none;">暂无科学属性记录。</div></section>
+      </div>
+
+      <div id="scoreRulePanel" hidden>
+        <section class="toolbar">
+          <div><div class="title">大指标与原子指标组成</div><div id="scoreRuleSummary" class="muted">展示当前正式计算使用的权重和方向，只读。</div></div>
+          <button id="scoreRuleRefresh" class="button secondary" type="button">刷新规则</button>
+        </section>
+        <div id="scoreRuleGroups"></div>
+      </div>
     </section>
+
+    <dialog id="scienceProfileDialog">
+      <form method="dialog" class="science-profile-card">
+        <div class="toolbar"><div><div class="title" id="scienceProfileDialogTitle">维护科学属性</div><div class="muted">仅补充评分需要的科学性质；原料身份信息从已确认数据继承。保存后该记录将审核生效。</div></div><div class="row-actions"><button id="scienceProfileSave" class="button" type="button">保存并生效</button><button class="small-button secondary" value="cancel" type="submit">关闭</button></div></div>
+        <div id="scienceIdentitySnapshot" class="science-identity-snapshot"></div>
+        <select id="scienceCategory" hidden></select>
+        <select id="scienceSubtype" hidden></select>
+        <select id="scienceEvidence" hidden></select>
+        <select id="scienceStatus" hidden></select>
+        <div class="science-domain-section">
+          <div class="science-domain-fields"><div class="title" style="font-size:14px;">评分科学属性</div><div class="muted">记录原料事实；主蛋白、次蛋白等由产品配方动态判断。</div><div id="scienceDomainFields" class="science-domain-fields-grid"></div></div>
+          <div class="science-contribution-preview"><div class="title" style="font-size:14px;">基础贡献预览</div><div class="muted">未乘配料位置系数，不影响当前正式评分。</div><div id="scienceContributionPreview" class="science-contribution-list"></div></div>
+        </div>
+        <div id="scienceFunctionFields" class="science-profile-grid functions"></div>
+        <label style="display:block;margin-top:12px;"><span class="field-label">审核说明</span><textarea id="scienceReviewNote" class="cell-input" rows="3" style="width:100%;"></textarea></label>
+      </form>
+    </dialog>
 
     <section id="diseaseSection" class="section" hidden>
       <section class="toolbar">
@@ -1162,6 +1367,8 @@
     const productIdentityTab = document.getElementById("productIdentityTab");
     const formulaIdentityTab = document.getElementById("formulaIdentityTab");
     const ingredientIdentityTab = document.getElementById("ingredientIdentityTab");
+    const scienceProfileTab = document.getElementById("scienceProfileTab");
+    const scoreRuleTab = document.getElementById("scoreRuleTab");
     const brandIdentityPanel = document.getElementById("brandIdentityPanel");
     const brandCandidateRows = document.getElementById("brandCandidateRows");
     const brandCandidateEmpty = document.getElementById("brandCandidateEmpty");
@@ -1179,6 +1386,31 @@
     const ingredientIdentitySummaryEl = document.getElementById("ingredientIdentitySummary");
     const ingredientIdentityRefreshBtn = document.getElementById("ingredientIdentityRefresh");
     const ingredientFormulaFilter = document.getElementById("ingredientFormulaFilter");
+    const scienceProfilePanel = document.getElementById("scienceProfilePanel");
+    const scoreRulePanel = document.getElementById("scoreRulePanel");
+    const scoreRuleGroups = document.getElementById("scoreRuleGroups");
+    const scoreRuleSummary = document.getElementById("scoreRuleSummary");
+    const scoreRuleRefresh = document.getElementById("scoreRuleRefresh");
+    const scienceProfileRows = document.getElementById("scienceProfileRows");
+    const scienceProfileEmpty = document.getElementById("scienceProfileEmpty");
+    const scienceProfileSummary = document.getElementById("scienceProfileSummary");
+    const scienceProfileRefresh = document.getElementById("scienceProfileRefresh");
+    const scienceProfileStatus = document.getElementById("scienceProfileStatus");
+    const scienceProfileQuery = document.getElementById("scienceProfileQuery");
+    const scienceProfileDialog = document.getElementById("scienceProfileDialog");
+    const scienceProfileDialogTitle = document.getElementById("scienceProfileDialogTitle");
+    const scienceCategory = document.getElementById("scienceCategory");
+    const scienceSubtype = document.getElementById("scienceSubtype");
+    const scienceEvidence = document.getElementById("scienceEvidence");
+    const scienceStatus = document.getElementById("scienceStatus");
+    const scienceIdentitySnapshot = document.getElementById("scienceIdentitySnapshot");
+    const scienceDomainFields = document.getElementById("scienceDomainFields");
+    const scienceContributionPreview = document.getElementById("scienceContributionPreview");
+    const scienceFunctionFields = document.getElementById("scienceFunctionFields");
+    const scienceReviewNote = document.getElementById("scienceReviewNote");
+    const scienceProfileSave = document.getElementById("scienceProfileSave");
+    let scienceOptions = null;
+    let activeScienceProfile = null;
     const standardIngredientOptions = document.getElementById("standardIngredientOptions");
     let standardIngredients = [];
     let ingredientMetaOptions = { families: [], sources: [], animals: [], roles: [] };
@@ -2423,7 +2655,7 @@
               })
             });
             for (const taskId of result.resumed_task_ids || []) await api("/api/orchestrator/dispatch-call-sync", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({limit:1,task_id:taskId,node_codes:["ingredient_extract"]})});
-            showToast(action === "noise" ? "已加入噪声池并从原材料中剔除" : "原料身份已确认，Profile 正在重新生成");
+            showToast(action === "noise" ? "已加入噪声池并从原材料中剔除" : result.science_profile_warning ? `原料身份已确认；${result.science_profile_warning}` : "原料身份已确认，科学属性草稿已生成，Profile 正在重新生成", result.science_profile_warning ? "error" : undefined);
           });
         }));
         ingredientIdentityRowsEl.appendChild(row);
@@ -2441,16 +2673,134 @@
       finally { ingredientIdentityRefreshBtn.disabled = false; }
     }
 
+    const scienceCategoryLabels = {protein:"蛋白来源",fat:"脂肪来源",carbohydrate:"碳水来源",fiber:"膳食纤维",prebiotic:"益生元",probiotic:"益生菌",antioxidant:"抗氧化支持",mineral:"矿物质",vitamin:"维生素",other:"其他"};
+    const scienceFunctionLabels = {protein_supply:"蛋白供给",starch_burden:"淀粉负担",fat_supply:"脂肪供给",forming_support:"吸水成形",bulk_support:"粪便骨架",buffer_support:"肠道缓冲",microbiome_feed:"菌群底物",scfa_support:"SCFA支持",omega3_support:"Omega-3支持",antioxidant_support:"抗氧化支持"};
+    const scienceFunctionGroups = [
+      {label:"营养供给与负担",keys:["protein_supply","starch_burden","fat_supply"]},
+      {label:"纤维与肠道支持",keys:["forming_support","bulk_support","buffer_support","microbiome_feed","scfa_support"]},
+      {label:"专项功能支持",keys:["omega3_support","antioxidant_support"]}
+    ];
+    const scienceScoreTargets = {protein_supply:"蛋白质量、蛋白支持",starch_burden:"碳水负担（负向）",fat_supply:"脂肪供给、能量密度",forming_support:"p_form",bulk_support:"p_bulk",buffer_support:"p_buffer",microbiome_feed:"q_feed",scfa_support:"q_scfa",omega3_support:"Omega-3 支持分",antioxidant_support:"抗氧化、皮肤保护"};
+    const scienceDomainLabels = {protein_source:"蛋白来源",protein_form:"蛋白形态",source_specificity:"来源明确程度",animal_source:"动物来源",plant_protein_form:"植物蛋白形态",starch_category:"淀粉类别",fiber_solubility:"纤维溶解性",fermentability:"发酵性",fiber_functions:"纤维功能",prebiotic_functions:"益生元功能",fat_source:"脂肪来源",fat_functions:"脂肪功能"};
+    const scienceDomainValueLabels = {unknown:"未判断",none:"无",animal:"动物",plant:"植物",mixed:"混合",fresh:"鲜肉",frozen:"冻肉",meal:"肉粉",hydrolyzed:"水解蛋白",concentrate:"浓缩",isolate:"分离",other:"其他",generic:"泛称",category_clear:"类别明确",specific:"来源具体",chicken:"鸡",duck:"鸭",turkey:"火鸡",fish:"鱼",beef:"牛",lamb:"羊",pork:"猪",egg:"蛋",whole:"整料",mild:"温和型",concentrated:"高浓缩",legume:"豆类",grain:"谷物",tuber:"薯类",flour:"高淀粉粉类",refined_starch:"精制/纯淀粉",insoluble:"不可溶",soluble:"可溶",low:"低",medium_low:"中低",medium:"中",high:"高",forming:"吸水成形",bulk:"粪便骨架",buffer:"肠道缓冲",microbiome_feed:"菌群底物",scfa_support:"SCFA支持",marine:"海洋",energy:"能量供给",omega3:"Omega-3",omega6:"Omega-6",antioxidant_support:"抗氧化支持"};
+    const scienceContributionLabels = {digestibility:"消化支持",source_clarity:"肉源清晰度",starch_burden:"淀粉负担",p_form:"吸水成形 p_form",p_bulk:"粪便骨架 p_bulk",p_buffer:"肠道缓冲 p_buffer",q_feed:"菌群底物 q_feed",q_scfa:"SCFA支持 q_scfa",omega3_support:"Omega-3支持",antioxidant_support:"抗氧化支持"};
+    const scienceFunctionTargets = {starch_burden:"starch_burden",forming_support:"p_form",bulk_support:"p_bulk",buffer_support:"p_buffer",microbiome_feed:"q_feed",scfa_support:"q_scfa",omega3_support:"omega3_support",antioxidant_support:"antioxidant_support"};
+    const scienceFunctionsByCategory = {protein:["protein_supply"],carbohydrate:["starch_burden"],fiber:["forming_support","bulk_support","buffer_support","microbiome_feed","scfa_support"],prebiotic:["forming_support","bulk_support","buffer_support","microbiome_feed","scfa_support"],fat:["fat_supply","omega3_support","antioxidant_support"],antioxidant:["antioxidant_support"]};
+    const scienceInheritedKeys = {protein:["protein_source","animal_source"],fat:["fat_source"]};
+    const scienceStrengthLabels = {unknown:"未判断",none:"无",weak:"弱",medium:"中",strong:"强"};
+    const scienceStatusLabels = {draft:"待确认",active:"已生效",excluded:"已排除",deprecated:"已停用"};
+    const scienceEvidenceLabels = {unknown:"未评估",low:"弱",medium:"一般",high:"较强"};
+    function optionHtml(values, labels, selected) { return values.map(value => `<option value="${escapeHtml(value)}" ${value===selected?"selected":""}>${escapeHtml(labels?.[value] || value)}</option>`).join(""); }
+    async function ensureScienceOptions() { if (!scienceOptions) scienceOptions = await api("/api/catfood/standardization/science-profiles/options"); }
+    function syncScienceSubtypes(selected) { const values = scienceOptions?.nutrition_subtypes?.[scienceCategory.value] || ["other"]; scienceSubtype.innerHTML = optionHtml(values, null, values.includes(selected) ? selected : values[0]); }
+    function collectScienceDomainAttributes() {
+      const result = {...(activeScienceProfile?.inherited_domain_attributes || {})};
+      scienceDomainFields.querySelectorAll("[data-science-domain]").forEach(control => {
+        const key = control.dataset.scienceDomain;
+        if (control.type === "checkbox") {
+          if (!result[key]) result[key] = [];
+          if (control.checked) result[key].push(control.value);
+        } else result[key] = control.value;
+      });
+      return result;
+    }
+    let sciencePreviewTimer = null;
+    async function refreshScienceContributionPreview() {
+      clearTimeout(sciencePreviewTimer);
+      sciencePreviewTimer = setTimeout(async () => {
+        try {
+          const result = await api("/api/catfood/standardization/science-profiles/contribution-preview", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({nutrition_category:scienceCategory.value,domain_attributes:collectScienceDomainAttributes()})});
+          const entries = Object.entries(result.contributions || {});
+          scienceContributionPreview.innerHTML = entries.length ? entries.map(([key,value]) => `<span class="science-contribution-chip">${escapeHtml(scienceContributionLabels[key] || key)}：${escapeHtml(value)}</span>`).join("") : `<span class="muted">当前属性尚无基础贡献；正式评分保持不变。</span>`;
+          renderScienceFunctions(activeScienceProfile || {}, result.contributions || {});
+        } catch (error) { scienceContributionPreview.innerHTML = `<span class="muted">${escapeHtml(error instanceof Error ? error.message : "预览失败")}</span>`; }
+      }, 120);
+    }
+    function renderScienceDomainFields(profile, reset = false) {
+      const definitions = scienceOptions?.domain_attribute_definitions?.[scienceCategory.value] || {};
+      const values = reset ? {} : (profile.effective_domain_attributes || profile.domain_attributes || {});
+      const inheritedKeys = new Set(scienceInheritedKeys[scienceCategory.value] || []);
+      scienceDomainFields.innerHTML = Object.entries(definitions).filter(([key]) => !inheritedKeys.has(key)).filter(([key]) => key !== "plant_protein_form" || (profile.inherited_domain_attributes?.protein_source || values.protein_source) === "plant").map(([key,definition]) => {
+        if (definition.kind === "multi") return `<div><span class="field-label">${escapeHtml(scienceDomainLabels[key] || key)}（可多选）</span><div class="science-multi-options">${definition.values.map(value => `<label><input type="checkbox" data-science-domain="${escapeHtml(key)}" value="${escapeHtml(value)}" ${(values[key] || []).includes(value)?"checked":""}>${escapeHtml(scienceDomainValueLabels[value] || value)}</label>`).join("")}</div></div>`;
+        return `<label><span class="field-label">${escapeHtml(scienceDomainLabels[key] || key)}</span><select class="cell-input" data-science-domain="${escapeHtml(key)}">${optionHtml(definition.values, scienceDomainValueLabels, values[key] || "unknown")}</select></label>`;
+      }).join("") || `<span class="muted">该营养类别暂时没有评分科学属性。</span>`;
+      scienceDomainFields.querySelectorAll("[data-science-domain]").forEach(control => control.addEventListener("change", refreshScienceContributionPreview));
+      refreshScienceContributionPreview();
+    }
+    function renderScienceIdentity(profile) {
+      const identity = profile.identity_snapshot || profile;
+      const items = [["标准原料",identity.standard_name],["原料族",identity.ingredient_family],["来源类型",scienceDomainValueLabels[identity.source_type] || identity.source_type],["动物来源",identity.animal_source || "无"],["主要营养角色",identity.primary_nutrition_role]];
+      scienceIdentitySnapshot.innerHTML = items.map(([label,value]) => `<div><span class="field-label">${escapeHtml(label)}</span><div class="science-identity-value">${escapeHtml(value || "-")}</div></div>`).join("");
+    }
+    function inferredStrength(value) {
+      if (value == null) return "由产品配方计算";
+      if (value <= 0) return "无";
+      if (value <= 0.3) return "弱";
+      if (value <= 0.7) return "中";
+      return "强";
+    }
+    function renderScienceFunctions(profile, contributions = {}) {
+      const allowedKeys = new Set(scienceOptions.function_attribute_keys);
+      const categoryKeys = new Set(scienceFunctionsByCategory[scienceCategory.value] || []);
+      const groups = scienceFunctionGroups.map(group => ({...group,keys:group.keys.filter(key => allowedKeys.has(key) && categoryKeys.has(key))})).filter(group => group.keys.length);
+      scienceFunctionFields.innerHTML = groups.length ? groups.map(group => `<div class="science-function-group"><div class="science-function-group-title">${escapeHtml(group.label)}<div class="muted">自动结论</div></div>${group.keys.map(key => { const target=scienceFunctionTargets[key]; const value=target ? contributions[target] : null; return `<label><span class="field-label">${escapeHtml(scienceFunctionLabels[key] || key)}</span><div class="science-function-result">${escapeHtml(inferredStrength(value))}${value != null ? `（${escapeHtml(value)}）` : ""}</div><span class="science-score-target">影响：${escapeHtml(scienceScoreTargets[key] || "待定义")}</span></label>`; }).join("")}</div>`).join("") : `<span class="muted">该领域暂无自动功能结论。</span>`;
+    }
+    async function openScienceProfile(profile) {
+      await ensureScienceOptions(); activeScienceProfile = profile;
+      scienceProfileDialogTitle.textContent = `维护科学属性：${profile.standard_name || profile.standard_ingredient_id}`;
+      scienceCategory.innerHTML = optionHtml(scienceOptions.nutrition_categories, scienceCategoryLabels, profile.nutrition_category);
+      syncScienceSubtypes(profile.nutrition_subtype);
+      scienceEvidence.innerHTML = optionHtml(scienceOptions.evidence_levels, scienceEvidenceLabels, profile.evidence_level);
+      scienceStatus.innerHTML = optionHtml(scienceOptions.science_statuses.filter(value => value !== "deprecated"), scienceStatusLabels, profile.science_status);
+      scienceReviewNote.value = profile.review_note || ""; renderScienceIdentity(profile); renderScienceDomainFields(profile); renderScienceFunctions(profile); scienceProfileDialog.showModal();
+    }
+    function renderScienceProfiles(items) {
+      scienceProfileSummary.textContent = `${items.length} 条科学属性记录；当前仅用于维护和解释，不影响正式评分。`;
+      scienceProfileRows.innerHTML = ""; scienceProfileEmpty.style.display = items.length ? "none" : "block";
+      items.forEach(profile => {
+        const row = document.createElement("tr");
+        const summary = Object.entries(profile.function_attributes || {}).filter(([,value]) => !["unknown","none"].includes(value)).map(([key,value]) => `${scienceFunctionLabels[key] || key}:${scienceStrengthLabels[value] || value}`).join("、") || "尚未确认";
+        row.innerHTML = `<td><strong>${escapeHtml(profile.standard_name || profile.standard_ingredient_id)}</strong><div class="muted">${escapeHtml(profile.standard_ingredient_id)}</div></td><td>${escapeHtml(profile.primary_nutrition_role || "-")}</td><td>${escapeHtml(scienceCategoryLabels[profile.nutrition_category] || profile.nutrition_category)}</td><td>${escapeHtml(profile.nutrition_subtype)}</td><td class="payload-cell">${escapeHtml(summary)}</td><td>${escapeHtml(scienceEvidenceLabels[profile.evidence_level] || profile.evidence_level)}</td><td>${escapeHtml(scienceStatusLabels[profile.science_status] || profile.science_status)}</td><td><button class="small-button" type="button">维护</button></td>`;
+        row.querySelector("button").addEventListener("click", () => openScienceProfile(profile)); scienceProfileRows.appendChild(row);
+      });
+    }
+    async function loadScienceProfiles() {
+      scienceProfileRefresh.disabled = true;
+      try { const data = await api(`/api/catfood/standardization/science-profiles?limit=500&status=${encodeURIComponent(scienceProfileStatus.value)}&q=${encodeURIComponent(scienceProfileQuery.value.trim())}`); renderScienceProfiles(data.items || []); }
+      catch (error) { scienceProfileSummary.textContent = error instanceof Error ? error.message : "科学属性加载失败"; }
+      finally { scienceProfileRefresh.disabled = false; }
+    }
+
+    const scoreDirectionLabels = {positive:"正向",pressure:"压力方向",reverse:"反向使用",balance:"居中平衡"};
+    function renderScoreRules(data) {
+      const grouped = {};
+      (data.rules || []).forEach(rule => { (grouped[rule.rule_group] ||= []).push(rule); });
+      scoreRuleSummary.textContent = `${data.rules?.length || 0} 个大指标；数据库配置与当前代码规则统一展示。`;
+      scoreRuleGroups.innerHTML = Object.entries(grouped).map(([group,rules]) => `<section style="margin-bottom:18px;"><div class="title" style="margin-bottom:10px;">${escapeHtml(group)}</div><div class="score-rule-grid">${rules.map(rule => `<article class="score-rule-card"><div class="score-rule-head"><div><div class="title">${escapeHtml(rule.score_name)}</div><div class="muted">${escapeHtml(rule.score_code)}</div></div><div class="score-rule-source">${rule.source === "database" ? "数据库配置" : "当前代码"}<br>${escapeHtml(rule.config_version || "-")}</div></div><div class="score-rule-components">${rule.components.map(component => `<div class="score-rule-component"><div><strong>${escapeHtml(component.component_name)}</strong><div class="muted">${escapeHtml(component.component_code)}</div>${component.note ? `<div class="muted">${escapeHtml(component.note)}</div>` : ""}</div><div class="score-rule-weight">${escapeHtml((Number(component.weight)*100).toFixed(1))}%</div><div class="score-rule-direction">${escapeHtml(scoreDirectionLabels[component.direction] || component.direction)}</div></div>`).join("")}</div></article>`).join("")}</div></section>`).join("");
+      const positions = data.position_weights || [];
+      if (positions.length) scoreRuleGroups.insertAdjacentHTML("beforeend", `<section><div class="title" style="margin-bottom:10px;">配料位置系数</div><div class="score-rule-grid">${positions.map(item => `<div class="score-rule-card"><strong>${escapeHtml(item.is_unknown ? "位置未知" : item.rank_start === item.rank_end ? `第 ${item.rank_start} 位` : `第 ${item.rank_start}～${item.rank_end} 位`)}</strong><span class="score-rule-weight" style="float:right;">× ${escapeHtml(item.position_weight)}</span><div class="muted">${escapeHtml(item.note || "")}</div></div>`).join("")}</div></section>`);
+    }
+    async function loadScoreRules() {
+      scoreRuleRefresh.disabled = true;
+      try { renderScoreRules(await api("/api/catfood/standardization/science-score-rules")); }
+      catch (error) { scoreRuleSummary.textContent = error instanceof Error ? error.message : "评分规则加载失败"; }
+      finally { scoreRuleRefresh.disabled = false; }
+    }
+
     function switchIdentityTab(tab) {
       activeIdentityTab = tab;
       brandIdentityTab.classList.toggle("active", tab === "brand");
       productIdentityTab.classList.toggle("active", tab === "product");
       formulaIdentityTab.classList.toggle("active", tab === "formula");
       ingredientIdentityTab.classList.toggle("active", tab === "ingredient");
+      scienceProfileTab.classList.toggle("active", tab === "science");
+      scoreRuleTab.classList.toggle("active", tab === "rules");
       brandIdentityPanel.hidden = tab !== "brand";
       productIdentityPanel.hidden = tab !== "product";
       formulaIdentityPanel.hidden = tab !== "formula";
       ingredientIdentityPanel.hidden = tab !== "ingredient";
+      scienceProfilePanel.hidden = tab !== "science";
+      scoreRulePanel.hidden = tab !== "rules";
       if (tab === "product") {
         if (!standardBrandOptions.children.length) loadStandardBrandOptions();
         loadProductIdentityItems();
@@ -2458,6 +2808,10 @@
         loadFormulaIdentityItems();
       } else if (tab === "ingredient") {
         loadIngredientIdentityItems();
+      } else if (tab === "science") {
+        loadScienceProfiles();
+      } else if (tab === "rules") {
+        loadScoreRules();
       } else if (!identityRowsEl.children.length) {
         loadBrandCandidates();
         loadIdentityItems();
@@ -3018,9 +3372,35 @@
     productIdentityTab.addEventListener("click", () => switchIdentityTab("product"));
     formulaIdentityTab.addEventListener("click", () => switchIdentityTab("formula"));
     ingredientIdentityTab.addEventListener("click", () => switchIdentityTab("ingredient"));
+    scienceProfileTab.addEventListener("click", () => switchIdentityTab("science"));
+    scoreRuleTab.addEventListener("click", () => switchIdentityTab("rules"));
     formulaIdentityRefreshBtn.addEventListener("click", loadFormulaIdentityItems);
     ingredientIdentityRefreshBtn.addEventListener("click", loadIngredientIdentityItems);
     ingredientFormulaFilter.addEventListener("keydown", (event) => { if (event.key === "Enter") loadIngredientIdentityItems(); });
+    scienceProfileRefresh.addEventListener("click", loadScienceProfiles);
+    scoreRuleRefresh.addEventListener("click", loadScoreRules);
+    scienceProfileStatus.addEventListener("change", loadScienceProfiles);
+    scienceProfileQuery.addEventListener("keydown", (event) => { if (event.key === "Enter") loadScienceProfiles(); });
+    scienceCategory.addEventListener("change", () => { syncScienceSubtypes(); renderScienceDomainFields(activeScienceProfile || {}, true); });
+    scienceProfileSave.addEventListener("click", async () => {
+      if (!activeScienceProfile) return;
+      const originalText = scienceProfileSave.textContent;
+      scienceProfileSave.disabled = true;
+      scienceProfileSave.textContent = "保存中...";
+      try {
+        const result = await api(`/api/catfood/standardization/science-profiles/${encodeURIComponent(activeScienceProfile.standard_ingredient_id)}`, {method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({domain_attributes:collectScienceDomainAttributes(),evidence_level:scienceEvidence.value,science_status:"active",review_note:scienceReviewNote.value,reviewed_by:"pipeline-review-page"})});
+        if (!result.profile?.profile_version) throw new Error("保存结果校验失败，请重试");
+        activeScienceProfile = result.profile;
+        scienceProfileDialog.close();
+        showToast(`科学属性已保存并生效（版本 ${result.profile.profile_version}）；已移出待确认列表`);
+        await loadScienceProfiles();
+      } catch (error) {
+        showToast(error instanceof Error ? `保存失败：${error.message}` : "保存失败，请重试", "error");
+      } finally {
+        scienceProfileSave.disabled = false;
+        scienceProfileSave.textContent = originalText;
+      }
+    });
     diseaseRefreshBtn.addEventListener("click", loadDiseaseItems);
     diseaseBulkApproveBtn.addEventListener("click", bulkApproveDisease);
     diseaseBulkRejectBtn.addEventListener("click", bulkRejectDisease);

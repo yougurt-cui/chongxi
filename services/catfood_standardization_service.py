@@ -14,6 +14,7 @@ import pymysql
 import yaml
 
 from app_config import get_mysql_config
+from services.ingredient_science_profile_service import ensure_science_profile_draft
 
 
 BASE_DIR = Path(__file__).resolve().parents[1]
@@ -958,8 +959,15 @@ def resolve_ingredient_review(item_id: int, payload: dict[str, Any]) -> dict[str
                  standard["animal_source"], standard["primary_nutrition_role"], _clean(payload.get("reviewer")) or None, int(item_id)),
             )
         conn.commit()
-    return {"ok": True, "item_id": int(item_id), "formula_id": int(item["formula_id"]),
-            "standard_ingredient_id": standard_id, "standard_name": standard["standard_name"]}
+    result = {"ok": True, "item_id": int(item_id), "formula_id": int(item["formula_id"]),
+              "standard_ingredient_id": standard_id, "standard_name": standard["standard_name"]}
+    # Science-profile creation is intentionally non-blocking. Identity review and
+    # task resumption must keep working while the new capability is rolled out.
+    try:
+        result["science_profile"] = ensure_science_profile_draft(standard_id)
+    except Exception as exc:
+        result["science_profile_warning"] = f"科学属性草稿生成失败: {exc}"
+    return result
 
 
 def review_brand_candidate(

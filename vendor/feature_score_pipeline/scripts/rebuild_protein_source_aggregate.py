@@ -390,6 +390,11 @@ PLANT_PROTEIN_MARKERS = (
     "濃縮米蛋白",
     "植物蛋白",
 )
+PROTEIN_FORM_SCIENCE_LABELS = {
+    "fresh": "鲜肉", "frozen": "冻肉", "meal": "肉粉",
+    "hydrolyzed": "水解蛋白", "concentrate": "植物浓缩蛋白",
+    "isolate": "植物分离蛋白", "other": "其他蛋白形态",
+}
 
 
 def _load_standard_ingredient_lookup(
@@ -404,6 +409,20 @@ def _load_standard_ingredient_lookup(
     ingredient_fq = _fq(standard_db, ingredient_table)
     alias_fq = _fq(standard_db, alias_table)
     alias_exists = _table_exists(engine, standard_db, alias_table)
+    science_table = "catfood_ingredient_science_profile"
+    science_exists = _table_exists(engine, standard_db, science_table)
+    science_join = (
+        f"LEFT JOIN {_fq(standard_db, science_table)} sp "
+        "ON sp.standard_ingredient_id=i.standard_ingredient_id AND sp.science_status='active'"
+        if science_exists else ""
+    )
+    science_select = (
+        "sp.domain_attributes_json,sp.profile_version AS science_profile_version,"
+        "sp.science_status,sp.nutrition_category AS science_nutrition_category"
+        if science_exists else
+        "NULL AS domain_attributes_json,NULL AS science_profile_version,NULL AS science_status,"
+        "NULL AS science_nutrition_category"
+    )
     if alias_exists:
         sql = f"""
         SELECT
@@ -413,10 +432,12 @@ def _load_standard_ingredient_lookup(
           i.ingredient_family,
           i.source_type,
           i.animal_source,
-          i.primary_nutrition_role
+          i.primary_nutrition_role,
+          {science_select}
         FROM {alias_fq} a
         JOIN {ingredient_fq} i
           ON i.standard_ingredient_id = a.standard_ingredient_id
+        {science_join}
         WHERE i.active = 1
         """
     else:
@@ -430,14 +451,21 @@ def _load_standard_ingredient_lookup(
           i.ingredient_family,
           i.source_type,
           i.animal_source,
-          i.primary_nutrition_role
+          i.primary_nutrition_role,
+          {science_select}
         FROM {ingredient_fq} i
+        {science_join}
         WHERE i.active = 1
         """
     grouped: dict[str, list[dict[str, Any]]] = {}
     with engine.connect() as conn:
         for row in conn.execute(text(sql)).mappings().all():
             item = dict(row)
+            raw_science = item.pop("domain_attributes_json", None)
+            try:
+                item["science_attributes"] = raw_science if isinstance(raw_science, dict) else json.loads(raw_science or "{}")
+            except (TypeError, json.JSONDecodeError):
+                item["science_attributes"] = {}
             aliases = _split_grouped_alias_names(item.pop("alias_names", None))
             if item.get("standard_name") not in aliases:
                 aliases.append(str(item.get("standard_name") or ""))
@@ -685,6 +713,9 @@ def _standardize_ingredient_items(
 
     for index, (token, matched, was_split) in enumerate(expanded_tokens, start=1):
         standard_name = matched.get("standard_name") if matched else None
+        science_attributes = dict(matched.get("science_attributes") or {}) if matched else {}
+        science_form = str(science_attributes.get("protein_form") or "").strip().lower()
+        science_form_label = PROTEIN_FORM_SCIENCE_LABELS.get(science_form)
         item = {
             "position": index,
             "raw_name": token,
@@ -694,13 +725,20 @@ def _standardize_ingredient_items(
             "source_type": matched.get("source_type") if matched else None,
             "animal_source": matched.get("animal_source") if matched else _normalize_source_token(token),
             "primary_nutrition_role": matched.get("primary_nutrition_role") if matched else None,
-            "protein_form": _infer_protein_form(token, standard_name),
+            "protein_form": science_form_label or _infer_protein_form(token, standard_name),
+            "plant_protein_form": science_attributes.get("plant_protein_form"),
+            "science_profile_version": matched.get("science_profile_version") if matched else None,
+            "science_profile_active": bool(matched and matched.get("science_status") == "active"),
+            "science_nutrition_category": matched.get("science_nutrition_category") if matched else None,
+            "protein_form_origin": "science_profile" if science_form_label else "legacy_rule",
             "match_method": "standard_alias_compound_split" if was_split else "standard_alias" if matched else "rule_fallback",
             "confidence": min(float(matched.get("confidence") or 1.0), 0.98) if was_split else float(matched.get("confidence") or 1.0) if matched else 0.0,
             "is_protein": False,
             "is_plant_protein": False,
         }
         item["is_protein"] = _is_standard_protein_item(item)
+        if item["science_profile_active"] and item["science_nutrition_category"] == "protein":
+            item["is_protein"] = True
         item["is_plant_protein"] = _is_plant_protein_item(item)
         if not item["is_protein"]:
             item["protein_form"] = None
@@ -773,6 +811,12 @@ def _protein_labels_from_standard_items(
         if not item["is_plant_protein"] and _clean_text(item.get("animal_source"))
     ]
     plant_items = [item for item in protein_items if item["is_plant_protein"]]
+    science_eligible = [item for item in protein_items if item.get("standard_ingredient_id")]
+    science_used = [item for item in science_eligible if item.get("protein_form_origin") == "science_profile"]
+    science_missing = [
+        {"standard_ingredient_id": item.get("standard_ingredient_id"), "name": item.get("standard_name") or item.get("raw_name")}
+        for item in science_eligible if item.get("protein_form_origin") != "science_profile"
+    ]
     animal_sources = _join_unique([item.get("animal_source") for item in animal_items])
     level1, level2 = _classify_animal_sources(
         animal_sources,
@@ -798,7 +842,10 @@ def _protein_labels_from_standard_items(
         "secondary_meat_source_count": len(_split_source_tokens(secondary_species)) if secondary_species else None,
         "meat_source_complexity": _infer_meat_source_complexity(animal_items),
         "plant_protein_labels": _join_unique([item.get("raw_name") for item in plant_items]),
-        "protein_source_origin": "standard_ingredient_match" if lookup else "standard_rule_fallback",
+        "protein_source_origin": "science_profile" if science_eligible and len(science_used) == len(science_eligible) else "science_profile_with_legacy_fallback" if science_used else "legacy_rule",
+        "science_profile_coverage": round(len(science_used) / len(science_eligible), 4) if science_eligible else 0.0,
+        "science_profile_used_count": len(science_used),
+        "science_profile_missing": science_missing,
     }
 
 
@@ -1220,27 +1267,41 @@ def load_existing_aggregate_rows(
     target_db: str,
     target_table: str,
 ) -> list[dict[str, Any]]:
+    with engine.connect() as conn:
+        existing_columns = {
+            row["COLUMN_NAME"]
+            for row in conn.execute(text("""
+                SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+                WHERE TABLE_SCHEMA=:schema_name AND TABLE_NAME=:table_name
+            """), {"schema_name": target_db, "table_name": target_table}).mappings().all()
+        }
+
+    def target_column(name: str, alias: str | None = None) -> str:
+        output_name = alias or name
+        return f"t.`{name}` AS `{output_name}`" if name in existing_columns else f"NULL AS `{output_name}`"
+
     sql = f"""
     SELECT
       t.source_id,
+      {target_column('formula_id')},
       t.product_key,
-      t.guarantee_product_id,
+      {target_column('guarantee_product_id')},
       t.brand_name AS brand,
       t.product_name,
       t.animal_sources,
       t.protein_source_details,
       parsed.ingredient_composition,
-      t.primary_meat_source_species,
-      t.secondary_meat_source_species,
+      {target_column('primary_meat_source_species')},
+      {target_column('secondary_meat_source_species')},
       t.primary_meat_source_type,
       t.secondary_meat_source_type,
-      t.primary_meat_source_count AS feature_primary_meat_source_count,
-      t.secondary_meat_source_count AS feature_secondary_meat_source_count,
-      t.protein_source_origin,
+      {target_column('primary_meat_source_count', 'feature_primary_meat_source_count')},
+      {target_column('secondary_meat_source_count', 'feature_secondary_meat_source_count')},
+      {target_column('protein_source_origin')},
       t.plant_protein_labels,
-      t.guarantee_crude_protein_metric_name AS guarantee_metric_name,
-      t.guarantee_crude_protein_value AS guarantee_metric_value,
-      t.guarantee_crude_protein_unit AS guarantee_metric_unit
+      {target_column('guarantee_crude_protein_metric_name', 'guarantee_metric_name')},
+      {target_column('guarantee_crude_protein_value', 'guarantee_metric_value')},
+      {target_column('guarantee_crude_protein_unit', 'guarantee_metric_unit')}
     FROM {_fq(target_db, target_table)} t
     INNER JOIN {_fq(parsed_db, parsed_table)} parsed
       ON parsed.source_id = t.source_id
@@ -1698,6 +1759,9 @@ def transform_rows(
                 "secondary_meat_source_count": secondary_count,
                 "protein_source_origin": standard_labels.get("protein_source_origin") or _clean_text(row.get("protein_source_origin")),
                 "plant_protein_labels": standard_labels.get("plant_protein_labels") or _clean_text(row.get("plant_protein_labels")),
+                "science_profile_coverage": standard_labels.get("science_profile_coverage", 0.0),
+                "science_profile_used_count": standard_labels.get("science_profile_used_count", 0),
+                "science_profile_missing": standard_labels.get("science_profile_missing", []),
                 "guarantee_crude_protein_metric_name": guarantee_metric_name,
                 "guarantee_crude_protein_value": guarantee_value,
                 "guarantee_crude_protein_unit": guarantee_metric_unit,
@@ -1810,6 +1874,89 @@ def write_rows(
     return batch_id, backup_table if keep_backup else None
 
 
+COMPARISON_FIELDS = (
+    "animal_sources", "animal_source_level1_categories", "animal_source_level2_sources",
+    "protein_source_details", "primary_meat_source_type", "secondary_meat_source_type",
+    "meat_source_complexity", "plant_protein_labels",
+)
+
+
+def write_science_migration_comparison(
+    engine: Engine, *, target_db: str, current_table: str,
+    comparison_table: str, science_rows: list[dict[str, Any]],
+) -> dict[str, Any]:
+    comparison_fq = _fq(target_db, comparison_table)
+    current_fq = _fq(target_db, current_table)
+    with engine.begin() as conn:
+        current_rows = {
+            int(row["formula_id"]): dict(row)
+            for row in conn.execute(text(f"SELECT * FROM {current_fq}")).mappings().all()
+            if row.get("formula_id") is not None
+        }
+        conn.execute(text(f"DROP TABLE IF EXISTS {comparison_fq}"))
+        conn.execute(text(f"""
+            CREATE TABLE {comparison_fq} (
+              comparison_id BIGINT NOT NULL AUTO_INCREMENT,
+              source_id BIGINT NOT NULL,
+              formula_id BIGINT NULL,
+              product_key VARCHAR(255) NULL,
+              brand_name VARCHAR(255) NULL,
+              product_name VARCHAR(255) NULL,
+              science_profile_coverage DECIMAL(8,4) NOT NULL DEFAULT 0,
+              science_profile_used_count INT NOT NULL DEFAULT 0,
+              missing_science_attributes_json JSON NULL,
+              old_labels_json JSON NOT NULL,
+              science_labels_json JSON NOT NULL,
+              changed_fields_json JSON NOT NULL,
+              comparison_status VARCHAR(32) NOT NULL,
+              compared_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              PRIMARY KEY (comparison_id),
+              KEY idx_science_compare_formula (formula_id),
+              KEY idx_science_compare_source (source_id),
+              KEY idx_science_compare_status (comparison_status),
+              KEY idx_science_compare_coverage (science_profile_coverage)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        """))
+        insert = text(f"""
+            INSERT INTO {comparison_fq}(
+              source_id,formula_id,product_key,brand_name,product_name,
+              science_profile_coverage,science_profile_used_count,
+              missing_science_attributes_json,old_labels_json,science_labels_json,
+              changed_fields_json,comparison_status
+            ) VALUES(
+              :source_id,:formula_id,:product_key,:brand_name,:product_name,
+              :science_profile_coverage,:science_profile_used_count,
+              :missing_science_attributes_json,:old_labels_json,:science_labels_json,
+              :changed_fields_json,:comparison_status
+            )
+        """)
+        records = []
+        for new in science_rows:
+            old = current_rows.get(int(new["formula_id"]), {}) if new.get("formula_id") is not None else {}
+            old_labels = {field: old.get(field) for field in COMPARISON_FIELDS}
+            new_labels = {field: new.get(field) for field in COMPARISON_FIELDS}
+            changed = [field for field in COMPARISON_FIELDS if _clean_text(old_labels.get(field)) != _clean_text(new_labels.get(field))]
+            coverage = float(new.get("science_profile_coverage") or 0.0)
+            status = "no_baseline" if not old else "missing_science" if coverage < 1.0 else "changed" if changed else "matched"
+            records.append({
+                "source_id": int(new["source_id"]), "formula_id": new.get("formula_id"),
+                "product_key": new.get("product_key"), "brand_name": new.get("brand_name"),
+                "product_name": new.get("product_name"), "science_profile_coverage": coverage,
+                "science_profile_used_count": int(new.get("science_profile_used_count") or 0),
+                "missing_science_attributes_json": json.dumps(new.get("science_profile_missing") or [], ensure_ascii=False),
+                "old_labels_json": json.dumps(old_labels, ensure_ascii=False),
+                "science_labels_json": json.dumps(new_labels, ensure_ascii=False),
+                "changed_fields_json": json.dumps(changed, ensure_ascii=False),
+                "comparison_status": status,
+            })
+        if records:
+            conn.execute(insert, records)
+    counts: dict[str, int] = {}
+    for record in records:
+        counts[record["comparison_status"]] = counts.get(record["comparison_status"], 0) + 1
+    return {"comparison_table": f"{target_db}.{comparison_table}", "row_count": len(records), "status_counts": counts}
+
+
 def summarize(rows: list[dict[str, Any]]) -> dict[str, Any]:
     return {
         "row_count": len(rows),
@@ -1880,6 +2027,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--standard-alias-table", default="catfood_standard_ingredient_alias", help="standard ingredient alias table")
     parser.add_argument("--target-db", default="protein_feature_platform", help="target database")
     parser.add_argument("--target-table", default="protein_source_aggregate", help="target aggregate table")
+    parser.add_argument("--comparison-table", default="protein_source_aggregate_science_comparison", help="auxiliary science migration comparison table")
+    parser.add_argument("--comparison-only", action="store_true", help="write only the auxiliary comparison table; never update the target aggregate")
     parser.add_argument("--limit", type=int, default=0, help="max parsed OCR rows to process in direct mode, 0 means all new rows")
     parser.add_argument("--concurrency", type=int, default=int(os.getenv("CATFOOD_PROTEIN_LABEL_CONCURRENCY", "4")), help="parallel LLM requests in direct mode")
     parser.add_argument("--preview-limit", type=int, default=10, help="preview rows in dry-run mode")
@@ -1904,6 +2053,7 @@ def main() -> int:
     standard_alias_table = _safe_name(args.standard_alias_table, "standard alias table")
     target_db = _safe_name(args.target_db, "target db")
     target_table = _safe_name(args.target_table, "target table")
+    comparison_table = _safe_name(args.comparison_table, "comparison table")
 
     engine = make_engine(args)
     if args.input_mode == "direct":
@@ -1978,6 +2128,17 @@ def main() -> int:
 
     if args.dry_run:
         print_preview(rows, max(1, int(args.preview_limit)))
+        return 0
+
+    if args.comparison_only:
+        result = write_science_migration_comparison(
+            engine,
+            target_db=target_db,
+            current_table=target_table,
+            comparison_table=comparison_table,
+            science_rows=rows,
+        )
+        print(json.dumps({"status": "ok", "target_aggregate_updated": False, **result}, ensure_ascii=False))
         return 0
 
     batch_id, backup_table = write_rows(
