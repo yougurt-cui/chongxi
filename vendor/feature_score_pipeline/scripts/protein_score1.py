@@ -497,6 +497,10 @@ def calc_animal_protein_dominance_score(row):
     its own quality component (low_plant_interference), so subtracting it here
     would count the same position-weighted signal twice.
     """
+    explicit = parse_number(row.get("animal_protein_dominance_score"))
+    if not pd.isna(explicit):
+        return clamp01(explicit)
+
     level1 = normalize_text(row.get("animal_source_level1_categories", ""))
     level2 = normalize_text(row.get("animal_source_level2_sources", ""))
     animal_sources = normalize_text(row.get("animal_sources", ""))

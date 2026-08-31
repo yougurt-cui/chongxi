@@ -395,6 +395,21 @@ PROTEIN_FORM_SCIENCE_LABELS = {
     "hydrolyzed": "水解蛋白", "concentrate": "植物浓缩蛋白",
     "isolate": "植物分离蛋白", "other": "其他蛋白形态",
 }
+DEFAULT_POSITION_WEIGHT_RANGES = (
+    (1, 1, 1.2), (2, 3, 1.0), (4, 5, 0.8),
+    (6, 8, 0.6), (9, 12, 0.4), (13, 9999, 0.2),
+)
+
+
+def _ingredient_position_weight(position: Any) -> float:
+    try:
+        rank = int(position)
+    except (TypeError, ValueError):
+        return 0.5
+    for rank_start, rank_end, weight in DEFAULT_POSITION_WEIGHT_RANGES:
+        if rank_start <= rank <= rank_end:
+            return weight
+    return 0.5
 
 
 def _load_standard_ingredient_lookup(
@@ -788,13 +803,8 @@ def _infer_meat_source_complexity(animal_items: list[dict[str, Any]]) -> Optiona
             if ANIMAL_SOURCE_LEVEL2_TO_LEVEL1.get(str(item.get("animal_source") or ""))
         }
     )
-    item_count = len(animal_items)
     if source_count <= 1:
-        if item_count <= 1:
-            return "单一来源"
-        if item_count == 2:
-            return "同类双源"
-        return "同类多源"
+        return "单一来源"
     if category_count <= 1:
         return "同类双源" if source_count == 2 else "同类多源"
     return "跨类双源" if source_count == 2 else "跨类多源"
@@ -813,6 +823,11 @@ def _protein_labels_from_standard_items(
         if not item["is_plant_protein"] and _clean_text(item.get("animal_source"))
     ]
     plant_items = [item for item in protein_items if item["is_plant_protein"]]
+    protein_position_weights = [_ingredient_position_weight(item.get("position")) for item in protein_items]
+    animal_position_weights = [_ingredient_position_weight(item.get("position")) for item in animal_items]
+    plant_position_weights = [_ingredient_position_weight(item.get("position")) for item in plant_items]
+    total_position_contribution = sum(protein_position_weights)
+    animal_position_contribution = sum(animal_position_weights)
     science_eligible = [item for item in protein_items if item.get("standard_ingredient_id")]
     science_used = [
         item for item in science_eligible
@@ -848,6 +863,9 @@ def _protein_labels_from_standard_items(
         "secondary_meat_source_count": len(_split_source_tokens(secondary_species)) if secondary_species else None,
         "meat_source_complexity": _infer_meat_source_complexity(animal_items),
         "plant_protein_labels": _join_unique([item.get("raw_name") for item in plant_items]),
+        "protein_position_weight": round(total_position_contribution / len(protein_position_weights), 4) if protein_position_weights else None,
+        "plant_protein_position_weight": round(sum(plant_position_weights) / len(plant_position_weights), 4) if plant_position_weights else None,
+        "animal_protein_dominance_score": round(animal_position_contribution / total_position_contribution, 6) if total_position_contribution else 0.0,
         "protein_source_origin": "science_profile" if science_eligible and len(science_used) == len(science_eligible) else "science_profile_with_legacy_fallback" if science_used else "legacy_rule",
         "science_profile_coverage": round(len(science_used) / len(science_eligible), 4) if science_eligible else 0.0,
         "science_profile_used_count": len(science_used),
@@ -1114,6 +1132,9 @@ def _target_table_ddl(table_name: str) -> str:
       `secondary_meat_source_count` INT DEFAULT NULL,
       `protein_source_origin` VARCHAR(255) DEFAULT NULL,
       `plant_protein_labels` TEXT,
+      `protein_position_weight` DECIMAL(8,4) DEFAULT NULL,
+      `plant_protein_position_weight` DECIMAL(8,4) DEFAULT NULL,
+      `animal_protein_dominance_score` DECIMAL(8,6) DEFAULT NULL,
       `guarantee_crude_protein_metric_name` VARCHAR(100) DEFAULT NULL,
       `guarantee_crude_protein_value` DECIMAL(8,2) DEFAULT NULL,
       `guarantee_crude_protein_unit` VARCHAR(50) DEFAULT NULL,
@@ -1146,6 +1167,13 @@ def _ensure_target_columns(conn, *, target_db: str, target_table: str) -> None:
                 "AFTER `secondary_meat_source_type`"
             )
         )
+    for column_name, definition in (
+        ("protein_position_weight", "DECIMAL(8,4) DEFAULT NULL"),
+        ("plant_protein_position_weight", "DECIMAL(8,4) DEFAULT NULL"),
+        ("animal_protein_dominance_score", "DECIMAL(8,6) DEFAULT NULL"),
+    ):
+        if column_name not in existing:
+            conn.execute(text(f"ALTER TABLE {_fq(target_db, target_table)} ADD COLUMN `{column_name}` {definition}"))
 
 
 def load_rows(
@@ -1305,6 +1333,9 @@ def load_existing_aggregate_rows(
       {target_column('secondary_meat_source_count', 'feature_secondary_meat_source_count')},
       {target_column('protein_source_origin')},
       t.plant_protein_labels,
+      {target_column('protein_position_weight')},
+      {target_column('plant_protein_position_weight')},
+      {target_column('animal_protein_dominance_score')},
       {target_column('guarantee_crude_protein_metric_name', 'guarantee_metric_name')},
       {target_column('guarantee_crude_protein_value', 'guarantee_metric_value')},
       {target_column('guarantee_crude_protein_unit', 'guarantee_metric_unit')}
@@ -1765,6 +1796,9 @@ def transform_rows(
                 "secondary_meat_source_count": secondary_count,
                 "protein_source_origin": standard_labels.get("protein_source_origin") or _clean_text(row.get("protein_source_origin")),
                 "plant_protein_labels": standard_labels.get("plant_protein_labels") or _clean_text(row.get("plant_protein_labels")),
+                "protein_position_weight": standard_labels.get("protein_position_weight"),
+                "plant_protein_position_weight": standard_labels.get("plant_protein_position_weight"),
+                "animal_protein_dominance_score": standard_labels.get("animal_protein_dominance_score"),
                 "science_profile_coverage": standard_labels.get("science_profile_coverage", 0.0),
                 "science_profile_used_count": standard_labels.get("science_profile_used_count", 0),
                 "science_profile_missing": standard_labels.get("science_profile_missing", []),
@@ -1810,6 +1844,9 @@ def write_rows(
           secondary_meat_source_count,
           protein_source_origin,
           plant_protein_labels,
+          protein_position_weight,
+          plant_protein_position_weight,
+          animal_protein_dominance_score,
           guarantee_crude_protein_metric_name,
           guarantee_crude_protein_value,
           guarantee_crude_protein_unit
@@ -1833,6 +1870,9 @@ def write_rows(
           :secondary_meat_source_count,
           :protein_source_origin,
           :plant_protein_labels,
+          :protein_position_weight,
+          :plant_protein_position_weight,
+          :animal_protein_dominance_score,
           :guarantee_crude_protein_metric_name,
           :guarantee_crude_protein_value,
           :guarantee_crude_protein_unit
@@ -1856,6 +1896,9 @@ def write_rows(
           secondary_meat_source_count = VALUES(secondary_meat_source_count),
           protein_source_origin = VALUES(protein_source_origin),
           plant_protein_labels = VALUES(plant_protein_labels),
+          protein_position_weight = VALUES(protein_position_weight),
+          plant_protein_position_weight = VALUES(plant_protein_position_weight),
+          animal_protein_dominance_score = VALUES(animal_protein_dominance_score),
           guarantee_crude_protein_metric_name = VALUES(guarantee_crude_protein_metric_name),
           guarantee_crude_protein_value = VALUES(guarantee_crude_protein_value),
           guarantee_crude_protein_unit = VALUES(guarantee_crude_protein_unit),
@@ -1883,7 +1926,8 @@ def write_rows(
 COMPARISON_FIELDS = (
     "animal_sources", "animal_source_level1_categories", "animal_source_level2_sources",
     "protein_source_details", "primary_meat_source_type", "secondary_meat_source_type",
-    "meat_source_complexity", "plant_protein_labels",
+    "meat_source_complexity", "plant_protein_labels", "protein_position_weight",
+    "plant_protein_position_weight", "animal_protein_dominance_score",
 )
 
 
@@ -1950,8 +1994,8 @@ def write_science_migration_comparison(
                 "product_name": new.get("product_name"), "science_profile_coverage": coverage,
                 "science_profile_used_count": int(new.get("science_profile_used_count") or 0),
                 "missing_science_attributes_json": json.dumps(new.get("science_profile_missing") or [], ensure_ascii=False),
-                "old_labels_json": json.dumps(old_labels, ensure_ascii=False),
-                "science_labels_json": json.dumps(new_labels, ensure_ascii=False),
+                "old_labels_json": json.dumps(old_labels, ensure_ascii=False, default=str),
+                "science_labels_json": json.dumps(new_labels, ensure_ascii=False, default=str),
                 "changed_fields_json": json.dumps(changed, ensure_ascii=False),
                 "comparison_status": status,
             })

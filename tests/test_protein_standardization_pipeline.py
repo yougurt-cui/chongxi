@@ -203,7 +203,7 @@ class ProteinStandardizationPipelineTest(unittest.TestCase):
         self.assertNotIn("维生素", row["protein_source_details"])
         self.assertEqual(row["primary_meat_source_type"], "鲜肉/冻肉")
         self.assertEqual(row["secondary_meat_source_type"], "肉粉")
-        self.assertEqual(row["meat_source_complexity"], "同类多源")
+        self.assertEqual(row["meat_source_complexity"], "单一来源")
         self.assertEqual(row["plant_protein_labels"], "豌豆蛋白")
 
     def test_grouped_ingredient_headers_expand_before_standardization(self):
@@ -257,12 +257,12 @@ class ProteinStandardizationPipelineTest(unittest.TestCase):
         scored = protein_score1.add_score_columns(pd.DataFrame(rows))
         target = scored[scored["source_id"] == 1].iloc[0].to_dict()
 
-        self.assertEqual(target["meat_source_complexity_score"], 3.0)
+        self.assertEqual(target["meat_source_complexity_score"], 1.0)
         self.assertEqual(target["main_protein_form_score"], 1.25)
         self.assertEqual(target["secondary_protein_form_score"], 1.0)
         self.assertEqual(target["plant_protein_interference_norm"], "2级｜单一高浓缩型植物蛋白")
-        self.assertEqual(target["plant_protein_interference_score"], 0.5)
-        self.assertEqual(target["protein_structure_score"], 0.754)
+        self.assertEqual(target["plant_protein_interference_score"], 0.4)
+        self.assertEqual(target["protein_structure_score"], 0.682)
         self.assertEqual(target["protein_quality_score"], 0.862)
 
     def test_animal_dominance_does_not_double_count_plant_interference(self):
@@ -278,6 +278,24 @@ class ProteinStandardizationPipelineTest(unittest.TestCase):
             {**base, "plant_protein_interference_score": 1.0}
         )
         self.assertEqual(with_interference, without_interference)
+
+    def test_animal_dominance_prefers_position_contribution_ratio(self):
+        score = protein_score1.calc_animal_protein_dominance_score(
+            {
+                "animal_protein_dominance_score": 0.72,
+                "animal_source_level1_categories": "禽类",
+                "animal_source_level2_sources": "鸡",
+            }
+        )
+        self.assertEqual(score, 0.72)
+
+    def test_repeated_same_animal_source_is_single_source_complexity(self):
+        items = [
+            {"animal_source": "鸡", "raw_name": "鲜鸡肉"},
+            {"animal_source": "鸡", "raw_name": "鸡肉粉"},
+            {"animal_source": "鸡", "raw_name": "鸡肝粉"},
+        ]
+        self.assertEqual(protein_aggregate._infer_meat_source_complexity(items), "单一来源")
 
     def test_item_feature_tags_include_fat_fiber_and_starch_domains(self):
         item_cases = {
