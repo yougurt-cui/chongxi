@@ -737,8 +737,10 @@ def _standardize_ingredient_items(
             "is_plant_protein": False,
         }
         item["is_protein"] = _is_standard_protein_item(item)
-        if item["science_profile_active"] and item["science_nutrition_category"] == "protein":
-            item["is_protein"] = True
+        if item["science_profile_active"]:
+            # 生效后的科学属性具有最终裁决权，避免“蛋白锌”等非营养蛋白
+            # 因名称命中旧规则而被错误纳入蛋白来源。
+            item["is_protein"] = item["science_nutrition_category"] == "protein"
         item["is_plant_protein"] = _is_plant_protein_item(item)
         if not item["is_protein"]:
             item["protein_form"] = None
@@ -812,10 +814,14 @@ def _protein_labels_from_standard_items(
     ]
     plant_items = [item for item in protein_items if item["is_plant_protein"]]
     science_eligible = [item for item in protein_items if item.get("standard_ingredient_id")]
-    science_used = [item for item in science_eligible if item.get("protein_form_origin") == "science_profile"]
+    science_used = [
+        item for item in science_eligible
+        if item.get("science_profile_active") and item.get("science_nutrition_category") == "protein"
+    ]
     science_missing = [
         {"standard_ingredient_id": item.get("standard_ingredient_id"), "name": item.get("standard_name") or item.get("raw_name")}
-        for item in science_eligible if item.get("protein_form_origin") != "science_profile"
+        for item in science_eligible
+        if not (item.get("science_profile_active") and item.get("science_nutrition_category") == "protein")
     ]
     animal_sources = _join_unique([item.get("animal_source") for item in animal_items])
     level1, level2 = _classify_animal_sources(

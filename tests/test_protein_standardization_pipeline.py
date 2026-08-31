@@ -334,6 +334,30 @@ class ProteinStandardizationPipelineTest(unittest.TestCase):
         self.assertEqual(item["protein_form_origin"], "science_profile")
         self.assertEqual(item["science_profile_version"], 3)
 
+    def test_active_non_protein_science_profile_overrides_legacy_name_rule(self):
+        standard = {
+            "standard_ingredient_id": "STD-MINERAL", "standard_name": "蛋白锌",
+            "source_type": "other", "primary_nutrition_role": "矿物质补充",
+            "science_status": "active", "science_nutrition_category": "mineral",
+            "science_attributes": {}, "confidence": 1.0,
+        }
+        lookup = {protein_aggregate._normalize_ingredient_key(standard["standard_name"]): standard}
+        item = protein_aggregate._standardize_ingredient_items("蛋白锌", lookup)[0]
+        self.assertFalse(item["is_protein"])
+
+    def test_active_plant_protein_counts_as_science_coverage_without_protein_form(self):
+        standard = {
+            "standard_ingredient_id": "STD-PLANT", "standard_name": "大豆粕",
+            "source_type": "plant", "primary_nutrition_role": "蛋白质供给",
+            "science_status": "active", "science_nutrition_category": "protein",
+            "science_attributes": {"protein_form": "none", "plant_protein_form": "meal"},
+            "confidence": 1.0,
+        }
+        lookup = {protein_aggregate._normalize_ingredient_key(standard["standard_name"]): standard}
+        labels = protein_aggregate._protein_labels_from_standard_items("大豆粕", lookup)
+        self.assertEqual(labels["science_profile_coverage"], 1.0)
+        self.assertEqual(labels["science_profile_missing"], [])
+
     def test_structured_role_rule_recovers_plant_protein(self):
         lookup = standard_lookup()
         custom = {
