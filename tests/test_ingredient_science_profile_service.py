@@ -59,11 +59,11 @@ class IngredientScienceProfileTests(unittest.TestCase):
     def test_plant_protein_form_uses_dedicated_enum(self):
         result = normalize_domain_attributes(
             "protein",
-            {"plant_protein_form": "mild", "protein_form": "none", "animal_source_category": "none"},
+            {"plant_protein_form": "meal", "protein_form": "none", "animal_source_category": "none"},
         )
-        self.assertEqual(result["plant_protein_form"], "mild")
+        self.assertEqual(result["plant_protein_form"], "meal")
         with self.assertRaisesRegex(ValueError, "枚举值无效"):
-            normalize_domain_attributes("protein", {"plant_protein_form": "meal"})
+            normalize_domain_attributes("protein", {"plant_protein_form": "mild"})
 
     def test_identity_fields_are_inherited_not_stored_twice(self):
         inherited = inherited_domain_attributes(

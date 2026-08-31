@@ -67,7 +67,7 @@ DOMAIN_ATTRIBUTE_DEFINITIONS = {
         "protein_form": {"kind": "single", "values": ["unknown", "none", "fresh", "frozen", "meal", "hydrolyzed", "concentrate", "isolate", "other"]},
         "source_specificity": {"kind": "single", "values": ["unknown", "generic", "category_clear", "specific"]},
         "animal_source": {"kind": "single", "values": ["unknown", "none", "chicken", "duck", "turkey", "fish", "beef", "lamb", "pork", "egg", "mixed", "other"]},
-        "plant_protein_form": {"kind": "single", "values": ["unknown", "none", "whole", "mild", "concentrated", "isolate"]},
+        "plant_protein_form": {"kind": "single", "values": ["none", "whole", "meal", "concentrate", "isolate", "hydrolyzed", "other", "unknown"]},
         "animal_source_category": {"kind": "single", "values": ["unknown", "none", "poultry", "livestock", "rabbit", "fish", "shellfish", "egg", "dairy", "other"]},
     },
     "carbohydrate": {
