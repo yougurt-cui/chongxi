@@ -2,6 +2,7 @@
 from __future__ import print_function
 
 import os
+import json
 import re
 import sys
 from pathlib import Path
@@ -357,6 +358,34 @@ def infer_secondary_protein_form(row):
         return "鲜肉"
 
     return "无"
+
+
+def calc_main_protein_form_score(row, score_map=None):
+    score_map = score_map or MAIN_PROTEIN_FORM_MAP
+    raw = normalize_text(row.get("primary_meat_source_type", ""))
+    shares = row.get("protein_form_contribution_shares") or {}
+    if isinstance(shares, str):
+        try:
+            shares = json.loads(shares)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            shares = {}
+    main_forms = [token for token in re.split(r"[/、|+]", raw) if token]
+    if isinstance(shares, dict) and main_forms:
+        weighted = []
+        label_by_form = {
+            "水解蛋白": "水解蛋白为主", "鲜肉": "鲜肉为主",
+            "冻肉": "冻肉为主", "肉粉": "肉粉为主",
+        }
+        for form in main_forms:
+            weight = parse_number(shares.get(form))
+            label = label_by_form.get(form)
+            if label and not pd.isna(weight) and weight > 0:
+                weighted.append((float(weight), map_score(label, score_map, default=0.0)))
+        total = sum(weight for weight, _ in weighted)
+        if total > 0:
+            return sum(weight * score for weight, score in weighted) / total
+    normalized = infer_main_protein_form(row)
+    return map_score(normalized, score_map, default=np.nan)
 
 
 def collect_protein_forms(row):
@@ -946,9 +975,9 @@ def add_score_columns(
         "meat_source_complexity_norm"
     ].apply(lambda x: map_score(x, label_score_maps["meat_source_complexity"], default=np.nan))
 
-    scored_df["main_protein_form_score"] = scored_df[
-        "main_protein_form_norm"
-    ].apply(lambda x: map_score(x, label_score_maps["main_protein_form"], default=np.nan))
+    scored_df["main_protein_form_score"] = scored_df.apply(
+        lambda row: calc_main_protein_form_score(row, label_score_maps["main_protein_form"]), axis=1
+    )
 
     scored_df["secondary_protein_form_score"] = scored_df[
         "secondary_protein_form_norm"

@@ -264,6 +264,19 @@ def _split_ingredient_tokens(value: Any) -> list[str]:
     return tokens
 
 
+def _declared_percentage_by_ingredient(value: Any) -> dict[str, float]:
+    result: dict[str, float] = {}
+    text_value = _clean_text(_strip_additive_section(value))
+    for raw_token in _split_top_level_ingredient_tokens(text_value):
+        match = re.search(r"(\d+(?:\.\d+)?)\s*[%％]", raw_token)
+        if not match or _is_ingredient_group_header(raw_token):
+            continue
+        expanded = _expand_grouped_ingredient_token(raw_token)
+        if len(expanded) == 1:
+            result[_normalize_ingredient_key(expanded[0])] = float(match.group(1))
+    return result
+
+
 PROTEIN_EXPLICIT_MARKERS = (
     "蛋白粉",
     "蛋白质",
@@ -717,6 +730,7 @@ def _standardize_ingredient_items(
 ) -> list[dict[str, Any]]:
     lookup = lookup or {}
     items: list[dict[str, Any]] = []
+    declared_percentages = _declared_percentage_by_ingredient(ingredient_composition)
     expanded_tokens: list[tuple[str, dict[str, Any] | None, bool]] = []
     for token in _split_ingredient_tokens(ingredient_composition):
         matched = _match_standard_ingredient(token, lookup)
@@ -734,6 +748,7 @@ def _standardize_ingredient_items(
         item = {
             "position": index,
             "raw_name": token,
+            "declared_percentage": declared_percentages.get(_normalize_ingredient_key(token)),
             "standard_ingredient_id": matched.get("standard_ingredient_id") if matched else None,
             "standard_name": standard_name,
             "ingredient_family": matched.get("ingredient_family") if matched else None,
@@ -776,14 +791,75 @@ def _join_unique(values: list[Any]) -> Optional[str]:
     return "、".join(result) if result else None
 
 
-def _infer_main_form(forms: list[Any]) -> Optional[str]:
-    cleaned = [_clean_text(form) for form in forms if _clean_text(form)]
-    if not cleaned:
+def _declared_ingredient_percentage(value: Any) -> Optional[float]:
+    match = re.search(r"(\d+(?:\.\d+)?)\s*%", str(value or ""))
+    if not match:
         return None
-    head_forms = set(cleaned[:2])
-    if {"鲜肉", "冻肉"} <= head_forms:
-        return "鲜肉/冻肉"
-    return cleaned[0]
+    return max(0.0, min(100.0, float(match.group(1))))
+
+
+def _ingredient_contributions(items: list[dict[str, Any]]) -> dict[int, float]:
+    """Return comparable ingredient contributions keyed by parsed position.
+
+    Declared percentages are authoritative. Any undeclared remainder is
+    distributed across all undeclared ingredients with the configured position
+    weights. If the formula has no percentages, position weights are used
+    directly.
+    """
+    declared = {
+        int(item["position"]): (
+            float(item["declared_percentage"])
+            if item.get("declared_percentage") is not None
+            else _declared_ingredient_percentage(item.get("raw_name"))
+        )
+        for item in items
+    }
+    has_declared = any(value is not None for value in declared.values())
+    if not has_declared:
+        return {int(item["position"]): _ingredient_position_weight(item.get("position")) for item in items}
+
+    known_total = min(100.0, sum(value or 0.0 for value in declared.values()))
+    unknown_items = [item for item in items if declared[int(item["position"])] is None]
+    unknown_weight_total = sum(_ingredient_position_weight(item.get("position")) for item in unknown_items)
+    remaining = max(0.0, 100.0 - known_total)
+    result: dict[int, float] = {}
+    for item in items:
+        position = int(item["position"])
+        value = declared[position]
+        if value is not None:
+            result[position] = value
+        elif unknown_weight_total > 0:
+            result[position] = remaining * _ingredient_position_weight(position) / unknown_weight_total
+        else:
+            result[position] = 0.0
+    return result
+
+
+def _infer_protein_form_roles(
+    animal_items: list[dict[str, Any]],
+    contributions: dict[int, float],
+) -> tuple[Optional[str], Optional[str], dict[str, float]]:
+    form_contributions: dict[str, float] = {}
+    for item in animal_items:
+        form = _clean_text(item.get("protein_form"))
+        if not form:
+            continue
+        form_contributions[form] = form_contributions.get(form, 0.0) + contributions.get(int(item["position"]), 0.0)
+    total = sum(form_contributions.values())
+    if total <= 0:
+        return None, None, {}
+    shares = {form: value / total for form, value in form_contributions.items()}
+    ranked = sorted(shares, key=lambda form: (-shares[form], form))
+    if shares[ranked[0]] >= 0.60:
+        main_forms = [ranked[0]]
+    else:
+        main_forms = [form for form in ranked if shares[form] >= 0.25]
+        if not main_forms:
+            main_forms = [ranked[0]]
+    secondary_forms = [form for form in ranked if form not in main_forms and shares[form] >= 0.10]
+    main = "/".join(main_forms)
+    secondary = "、".join(secondary_forms) or None
+    return main, secondary, {form: round(share, 6) for form, share in shares.items()}
 
 
 def _infer_meat_source_complexity(animal_items: list[dict[str, Any]]) -> Optional[str]:
@@ -816,6 +892,7 @@ def _protein_labels_from_standard_items(
     feature_rules: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     items = _standardize_ingredient_items(ingredient_composition, lookup, feature_rules)
+    ingredient_contributions = _ingredient_contributions(items)
     protein_items = [item for item in items if item["is_protein"]]
     animal_items = [
         item
@@ -824,10 +901,9 @@ def _protein_labels_from_standard_items(
     ]
     plant_items = [item for item in protein_items if item["is_plant_protein"]]
     protein_position_weights = [_ingredient_position_weight(item.get("position")) for item in protein_items]
-    animal_position_weights = [_ingredient_position_weight(item.get("position")) for item in animal_items]
     plant_position_weights = [_ingredient_position_weight(item.get("position")) for item in plant_items]
-    total_position_contribution = sum(protein_position_weights)
-    animal_position_contribution = sum(animal_position_weights)
+    total_position_contribution = sum(ingredient_contributions.get(int(item["position"]), 0.0) for item in protein_items)
+    animal_position_contribution = sum(ingredient_contributions.get(int(item["position"]), 0.0) for item in animal_items)
     science_eligible = [item for item in protein_items if item.get("standard_ingredient_id")]
     science_used = [
         item for item in science_eligible
@@ -843,10 +919,9 @@ def _protein_labels_from_standard_items(
         animal_sources,
         _join_unique([item.get("raw_name") for item in animal_items]),
     )
-    forms = [item.get("protein_form") for item in animal_items if item.get("protein_form")]
-    primary_form = _infer_main_form(forms)
-    secondary_start = 2 if primary_form == "鲜肉/冻肉" else 1
-    secondary_form = _join_unique(forms[secondary_start:]) if len(forms) > secondary_start else None
+    primary_form, secondary_form, form_shares = _infer_protein_form_roles(
+        animal_items, ingredient_contributions
+    )
     primary_species = _clean_text(animal_items[0].get("animal_source")) if animal_items else None
     secondary_species = _join_unique([item.get("animal_source") for item in animal_items[1:]]) if len(animal_items) > 1 else None
     return {
@@ -859,11 +934,12 @@ def _protein_labels_from_standard_items(
         "secondary_meat_source_species": secondary_species,
         "primary_meat_source_type": primary_form,
         "secondary_meat_source_type": secondary_form,
+        "protein_form_contribution_shares": form_shares,
         "primary_meat_source_count": 1 if primary_species else None,
         "secondary_meat_source_count": len(_split_source_tokens(secondary_species)) if secondary_species else None,
         "meat_source_complexity": _infer_meat_source_complexity(animal_items),
         "plant_protein_labels": _join_unique([item.get("raw_name") for item in plant_items]),
-        "protein_position_weight": round(total_position_contribution / len(protein_position_weights), 4) if protein_position_weights else None,
+        "protein_position_weight": round(sum(protein_position_weights) / len(protein_position_weights), 4) if protein_position_weights else None,
         "plant_protein_position_weight": round(sum(plant_position_weights) / len(plant_position_weights), 4) if plant_position_weights else None,
         "animal_protein_dominance_score": round(animal_position_contribution / total_position_contribution, 6) if total_position_contribution else 0.0,
         "protein_source_origin": "science_profile" if science_eligible and len(science_used) == len(science_eligible) else "science_profile_with_legacy_fallback" if science_used else "legacy_rule",
@@ -1799,6 +1875,7 @@ def transform_rows(
                 "protein_position_weight": standard_labels.get("protein_position_weight"),
                 "plant_protein_position_weight": standard_labels.get("plant_protein_position_weight"),
                 "animal_protein_dominance_score": standard_labels.get("animal_protein_dominance_score"),
+                "protein_form_contribution_shares": standard_labels.get("protein_form_contribution_shares", {}),
                 "science_profile_coverage": standard_labels.get("science_profile_coverage", 0.0),
                 "science_profile_used_count": standard_labels.get("science_profile_used_count", 0),
                 "science_profile_missing": standard_labels.get("science_profile_missing", []),
@@ -1928,6 +2005,7 @@ COMPARISON_FIELDS = (
     "protein_source_details", "primary_meat_source_type", "secondary_meat_source_type",
     "meat_source_complexity", "plant_protein_labels", "protein_position_weight",
     "plant_protein_position_weight", "animal_protein_dominance_score",
+    "protein_form_contribution_shares",
 )
 
 

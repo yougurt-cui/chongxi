@@ -201,8 +201,8 @@ class ProteinStandardizationPipelineTest(unittest.TestCase):
         self.assertEqual(row["protein_source_details"], "鲜鸡肉、冻鸡肉、鸡肉粉、豌豆蛋白")
         self.assertNotIn("牛磺酸", row["protein_source_details"])
         self.assertNotIn("维生素", row["protein_source_details"])
-        self.assertEqual(row["primary_meat_source_type"], "鲜肉/冻肉")
-        self.assertEqual(row["secondary_meat_source_type"], "肉粉")
+        self.assertEqual(row["primary_meat_source_type"], "鲜肉")
+        self.assertEqual(row["secondary_meat_source_type"], "冻肉、肉粉")
         self.assertEqual(row["meat_source_complexity"], "单一来源")
         self.assertEqual(row["plant_protein_labels"], "豌豆蛋白")
 
@@ -258,12 +258,12 @@ class ProteinStandardizationPipelineTest(unittest.TestCase):
         target = scored[scored["source_id"] == 1].iloc[0].to_dict()
 
         self.assertEqual(target["meat_source_complexity_score"], 1.0)
-        self.assertEqual(target["main_protein_form_score"], 1.25)
+        self.assertEqual(target["main_protein_form_score"], 1.0)
         self.assertEqual(target["secondary_protein_form_score"], 1.0)
         self.assertEqual(target["plant_protein_interference_norm"], "2级｜单一高浓缩型植物蛋白")
         self.assertEqual(target["plant_protein_interference_score"], 0.4)
-        self.assertEqual(target["protein_structure_score"], 0.682)
-        self.assertEqual(target["protein_quality_score"], 0.862)
+        self.assertEqual(target["protein_structure_score"], 0.664)
+        self.assertEqual(target["protein_quality_score"], 0.919)
 
     def test_animal_dominance_does_not_double_count_plant_interference(self):
         base = {
@@ -296,6 +296,23 @@ class ProteinStandardizationPipelineTest(unittest.TestCase):
             {"animal_source": "鸡", "raw_name": "鸡肝粉"},
         ]
         self.assertEqual(protein_aggregate._infer_meat_source_complexity(items), "单一来源")
+
+    def test_main_protein_form_aggregates_declared_ratios_across_ingredients(self):
+        rows = protein_aggregate.transform_rows(
+            [{
+                "source_id": 9, "formula_id": 9009,
+                "ingredient_composition": "鲜鸡肉35%、冻鸭肉20%、鸡肉粉25%、木薯粉20%",
+            }],
+            standard_lookup=standard_lookup(),
+        )
+        row = rows[0]
+        self.assertEqual(row["primary_meat_source_type"], "鲜肉/肉粉/冻肉")
+        self.assertIsNone(row["secondary_meat_source_type"])
+        self.assertAlmostEqual(row["protein_form_contribution_shares"]["鲜肉"], 0.4375)
+        self.assertAlmostEqual(
+            protein_score1.calc_main_protein_form_score(row),
+            1.4375,
+        )
 
     def test_item_feature_tags_include_fat_fiber_and_starch_domains(self):
         item_cases = {
