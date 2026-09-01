@@ -75,6 +75,21 @@ class IngredientScienceProfileTests(unittest.TestCase):
         )
         self.assertEqual(fiber["fiber_functions"], ["forming", "gel_forming"])
 
+    def test_antioxidant_and_mineral_domain_enums(self):
+        antioxidant = normalize_domain_attributes(
+            "antioxidant",
+            {
+                "antioxidant_type": "plant_extract",
+                "antioxidant_functions": ["lipid_protection", "radical_scavenging"],
+            },
+        )
+        self.assertEqual(antioxidant["antioxidant_type"], "plant_extract")
+        mineral = normalize_domain_attributes(
+            "mineral",
+            {"mineral_type": "chelated", "mineral_elements": ["zinc", "copper"]},
+        )
+        self.assertEqual(mineral["mineral_elements"], ["zinc", "copper"])
+
     def test_identity_fields_are_inherited_not_stored_twice(self):
         inherited = inherited_domain_attributes(
             "protein", {"source_type": "animal", "animal_source": "鸡"}

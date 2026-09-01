@@ -89,6 +89,14 @@ DOMAIN_ATTRIBUTE_DEFINITIONS = {
         "fat_source": {"kind": "single", "values": ["unknown", "none", "animal", "marine", "plant", "mixed"]},
         "fat_functions": {"kind": "multi", "values": ["energy", "omega3", "omega6", "antioxidant_support"]},
     },
+    "antioxidant": {
+        "antioxidant_type": {"kind": "single", "values": ["unknown", "none", "natural_vitamin", "phytochemical", "plant_extract", "synthetic", "other"]},
+        "antioxidant_functions": {"kind": "multi", "values": ["lipid_protection", "radical_scavenging", "synergist"]},
+    },
+    "mineral": {
+        "mineral_type": {"kind": "single", "values": ["unknown", "none", "inorganic_salt", "organic_salt", "chelated", "natural", "other"]},
+        "mineral_elements": {"kind": "multi", "values": ["calcium", "phosphorus", "sodium", "potassium", "chloride", "magnesium", "iron", "zinc", "copper", "manganese", "selenium", "iodine", "other"]},
+    },
 }
 
 DEFAULT_SCORE_MAPPINGS = (
@@ -126,6 +134,11 @@ DEFAULT_SCORE_MAPPINGS = (
     ("fiber", "prebiotic_functions", "scfa_support", "q_scfa", 1.00, "sum"),
     ("fat", "fat_functions", "omega3", "omega3_support", 1.00, "sum"),
     ("fat", "fat_functions", "antioxidant_support", "antioxidant_support", 1.00, "sum"),
+    ("antioxidant", "antioxidant_type", "natural_vitamin", "antioxidant_support", 1.00, "sum"),
+    ("antioxidant", "antioxidant_type", "phytochemical", "antioxidant_support", 1.00, "sum"),
+    ("antioxidant", "antioxidant_type", "plant_extract", "antioxidant_support", 1.00, "sum"),
+    ("antioxidant", "antioxidant_type", "synthetic", "antioxidant_support", 1.00, "sum"),
+    ("antioxidant", "antioxidant_type", "other", "antioxidant_support", 1.00, "sum"),
 )
 
 IDENTITY_OWNED_DOMAIN_KEYS = {
