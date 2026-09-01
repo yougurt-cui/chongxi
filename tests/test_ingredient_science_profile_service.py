@@ -46,6 +46,13 @@ class IngredientScienceProfileTests(unittest.TestCase):
         self.assertEqual(result["nutrition_subtype"], "hydrolyzed")
         self.assertEqual(result["domain_attributes"]["protein_form"], "unknown")
 
+    def test_reviewed_mineral_role_overrides_protein_word_in_name(self):
+        result = suggest_science_profile(
+            ingredient("蛋白锌", "矿物质补充", "矿物质/电解质类", "synthetic")
+        )
+        self.assertEqual(result["nutrition_category"], "mineral")
+        self.assertEqual(result["nutrition_subtype"], "other")
+
     def test_domain_attributes_use_category_specific_enums(self):
         result = normalize_domain_attributes(
             "fiber",
