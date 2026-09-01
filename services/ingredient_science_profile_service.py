@@ -71,18 +71,18 @@ DOMAIN_ATTRIBUTE_DEFINITIONS = {
         "animal_source_category": {"kind": "single", "values": ["unknown", "none", "poultry", "livestock", "rabbit", "fish", "shellfish", "egg", "dairy", "other"]},
     },
     "carbohydrate": {
-        "starch_category": {"kind": "single", "values": ["unknown", "none", "legume", "grain", "tuber", "flour", "refined_starch"]},
+        "starch_category": {"kind": "single", "values": ["unknown", "none", "legume", "grain", "tuber", "flour", "refined_starch", "available_sugar"]},
     },
     "fiber": {
         "fiber_solubility": {"kind": "single", "values": ["unknown", "none", "insoluble", "mixed", "soluble"]},
         "fermentability": {"kind": "single", "values": ["unknown", "none", "low", "medium_low", "medium", "high"]},
-        "fiber_functions": {"kind": "multi", "values": ["forming", "bulk", "buffer"]},
+        "fiber_functions": {"kind": "multi", "values": ["forming", "bulk", "buffer", "gel_forming"]},
         "prebiotic_functions": {"kind": "multi", "values": ["microbiome_feed", "scfa_support"]},
     },
     "prebiotic": {
         "fiber_solubility": {"kind": "single", "values": ["unknown", "none", "insoluble", "mixed", "soluble"]},
         "fermentability": {"kind": "single", "values": ["unknown", "none", "low", "medium_low", "medium", "high"]},
-        "fiber_functions": {"kind": "multi", "values": ["forming", "bulk", "buffer"]},
+        "fiber_functions": {"kind": "multi", "values": ["forming", "bulk", "buffer", "gel_forming"]},
         "prebiotic_functions": {"kind": "multi", "values": ["microbiome_feed", "scfa_support"]},
     },
     "fat": {
@@ -104,6 +104,7 @@ DEFAULT_SCORE_MAPPINGS = (
     ("carbohydrate", "starch_category", "tuber", "starch_burden", 1.50, "sum"),
     ("carbohydrate", "starch_category", "flour", "starch_burden", 1.80, "sum"),
     ("carbohydrate", "starch_category", "refined_starch", "starch_burden", 2.00, "sum"),
+    ("carbohydrate", "starch_category", "available_sugar", "starch_burden", 2.00, "sum"),
     ("fiber", "fiber_solubility", "insoluble", "p_bulk", 0.80, "sum"),
     ("fiber", "fiber_solubility", "insoluble", "p_form", 0.20, "sum"),
     ("fiber", "fiber_solubility", "mixed", "p_form", 0.40, "sum"),
@@ -120,6 +121,7 @@ DEFAULT_SCORE_MAPPINGS = (
     ("fiber", "fiber_functions", "forming", "p_form", 1.00, "sum"),
     ("fiber", "fiber_functions", "bulk", "p_bulk", 1.00, "sum"),
     ("fiber", "fiber_functions", "buffer", "p_buffer", 1.00, "sum"),
+    ("fiber", "fiber_functions", "gel_forming", "p_form", 1.00, "sum"),
     ("fiber", "prebiotic_functions", "microbiome_feed", "q_feed", 1.00, "sum"),
     ("fiber", "prebiotic_functions", "scfa_support", "q_scfa", 1.00, "sum"),
     ("fat", "fat_functions", "omega3", "omega3_support", 1.00, "sum"),

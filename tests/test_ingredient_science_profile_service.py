@@ -65,6 +65,16 @@ class IngredientScienceProfileTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "枚举值无效"):
             normalize_domain_attributes("protein", {"plant_protein_form": "mild"})
 
+    def test_compact_carb_and_fiber_enums(self):
+        carb = normalize_domain_attributes(
+            "carbohydrate", {"starch_category": "available_sugar"}
+        )
+        self.assertEqual(carb["starch_category"], "available_sugar")
+        fiber = normalize_domain_attributes(
+            "fiber", {"fiber_functions": ["forming", "gel_forming"]}
+        )
+        self.assertEqual(fiber["fiber_functions"], ["forming", "gel_forming"])
+
     def test_identity_fields_are_inherited_not_stored_twice(self):
         inherited = inherited_domain_attributes(
             "protein", {"source_type": "animal", "animal_source": "鸡"}
