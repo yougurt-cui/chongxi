@@ -72,6 +72,7 @@ ANIMAL_SOURCE_LEVEL2_TO_LEVEL1 = {
     "猪": "红肉类",
     "鸡蛋": "蛋类",
     "鸭蛋": "蛋类",
+    "蛋": "蛋类",
 }
 FISH_SUBTYPE_ORDER = [
     "鲱鱼",
@@ -915,10 +916,11 @@ def _protein_labels_from_standard_items(
         if not (item.get("science_profile_active") and item.get("science_nutrition_category") == "protein")
     ]
     animal_sources = _join_unique([item.get("animal_source") for item in animal_items])
-    level1, level2 = _classify_animal_sources(
+    level1, _derived_level2 = _classify_animal_sources(
         animal_sources,
         _join_unique([item.get("raw_name") for item in animal_items]),
     )
+    level2 = animal_sources or _derived_level2
     primary_form, secondary_form, form_shares = _infer_protein_form_roles(
         animal_items, ingredient_contributions
     )
@@ -996,6 +998,8 @@ def _normalize_source_token(token: str) -> Optional[str]:
         return "鸡蛋"
     if "鸭蛋" in cleaned:
         return "鸭蛋"
+    if "蛋" in cleaned:
+        return "蛋"
 
     if "火鸡" in cleaned:
         return "火鸡"
@@ -1085,9 +1089,11 @@ def _classify_animal_sources(animal_sources: Any, protein_source_details: Any) -
     level1_set: set[str] = set()
     has_fish_generic = False
 
-    source_tokens = _split_source_tokens(protein_source_details)
+    # Confirmed ingredient identity is authoritative. Protein details are only
+    # a fallback for legacy rows without animal_source.
+    source_tokens = _split_source_tokens(animal_sources)
     if not source_tokens:
-        source_tokens = _split_source_tokens(animal_sources)
+        source_tokens = _split_source_tokens(protein_source_details)
 
     for raw_token in source_tokens:
         normalized = _normalize_source_token(raw_token)

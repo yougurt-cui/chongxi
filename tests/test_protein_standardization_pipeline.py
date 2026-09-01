@@ -297,6 +297,14 @@ class ProteinStandardizationPipelineTest(unittest.TestCase):
         ]
         self.assertEqual(protein_aggregate._infer_meat_source_complexity(items), "单一来源")
 
+    def test_level2_sources_use_confirmed_animal_identity(self):
+        level1, level2 = protein_aggregate._classify_animal_sources(
+            "鸭、鸡、蛋",
+            "鸭肉粉、鸡肉粉、蛋粉",
+        )
+        self.assertEqual(level1, "禽类、蛋类")
+        self.assertEqual(level2, "鸭、鸡、蛋")
+
     def test_main_protein_form_aggregates_declared_ratios_across_ingredients(self):
         rows = protein_aggregate.transform_rows(
             [{
