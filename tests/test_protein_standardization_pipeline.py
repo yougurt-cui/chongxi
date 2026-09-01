@@ -322,30 +322,15 @@ class ProteinStandardizationPipelineTest(unittest.TestCase):
             1.4375,
         )
 
-    def test_item_feature_tags_include_fat_fiber_and_starch_domains(self):
-        item_cases = {
-            "鱼油": {
-                "fat.fat_sources": "鱼油",
-                "fat.omega3_sources": "鱼油",
-                "fat.fat_source_types": "动物脂肪",
-            },
-            "甘薯粉": {
-                "starch.category": "薯类淀粉来源",
-                "starch.base_score": 1.5,
-            },
-            "胡萝卜粉": {
-                "fiber.standard_tag": "胡萝卜粉",
-                "fiber.category": "膳食纤维",
-                "fiber.fermentability": "中",
-            },
-        }
-        for raw_name, expected_features in item_cases.items():
+    def test_item_features_do_not_embed_legacy_fat_fiber_or_starch_rules(self):
+        for raw_name in ("鱼油", "甘薯粉", "胡萝卜粉"):
             with self.subTest(raw_name=raw_name):
                 features = feature_backfill._features_for_item(
                     {"raw_name": raw_name, "is_protein": False}
                 )
-                for key, expected_value in expected_features.items():
-                    self.assertEqual(features[key], expected_value)
+                self.assertFalse(any(
+                    key.startswith(("fat.", "fiber.", "starch.")) for key in features
+                ))
 
     def test_protein_rules_override_fallback_by_priority(self):
         items = protein_aggregate._standardize_ingredient_items(

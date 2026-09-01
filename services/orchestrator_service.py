@@ -222,11 +222,23 @@ PIPELINE_DEFINITIONS: dict[str, tuple[NodeDefinition, ...]] = {
             priority=25,
         ),
         NodeDefinition(
+            node_code="science_feature_materialize",
+            node_name="科学属性→配方特征物化",
+            callable_path="services.orchestrator_service.noop_node",
+            api=ApiRoute(
+                method="POST",
+                url="/api/catfood/standardization/formula-science/materialize",
+                timeout_seconds=600,
+            ),
+            depends_on=("ingredient_extract",),
+            priority=35,
+        ),
+        NodeDefinition(
             node_code="ingredient_standardize",
-            node_name="增量标签与分数物化",
+            node_name="增量评分物化",
             callable_path="services.orchestrator_service.noop_node",
             api=ApiRoute(method="POST", url="/api/catfood/standardization/formula-materialize", timeout_seconds=600),
-            depends_on=("ingredient_extract",),
+            depends_on=("science_feature_materialize",),
             priority=40,
         ),
         NodeDefinition(
@@ -1685,7 +1697,7 @@ def build_node_input(task: dict[str, Any], node_def: NodeDefinition) -> dict[str
                 "orchestrator_node_code": node_def.node_code,
                 "formula_id": formula_output.get("formula_id"),
             }
-        if node_def.node_code == "ingredient_standardize":
+        if node_def.node_code in {"science_feature_materialize", "ingredient_standardize"}:
             formula_input = _output_for(task, "formula_input_build")
             return {
                 "orchestrator_task_id": task["id"],
@@ -2048,6 +2060,8 @@ def _augment_node_output(task: dict[str, Any], node_code: str, output: dict[str,
 
     if node_code == "ingredient_extract":
         _merge_identity_fields(output, ocr_output)
+    elif node_code == "science_feature_materialize":
+        _merge_identity_fields(output, extract_output, ocr_output)
     elif node_code == "ingredient_standardize":
         _merge_identity_fields(output, extract_output, ocr_output)
     elif node_code == "formula_profile":

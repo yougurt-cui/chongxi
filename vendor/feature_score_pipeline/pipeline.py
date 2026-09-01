@@ -195,7 +195,13 @@ def command_fiber_import(args) -> None:
 
 
 def command_fiber_extract(args) -> None:
-    run_script("fiber_remark.py")
+    cmd = [
+        sys.executable,
+        str(PROJECT_ROOT.parents[1] / "scripts" / "rebuild_fiber_features_from_science.py"),
+        "--apply-target",
+    ]
+    print("+ " + " ".join(cmd), flush=True)
+    subprocess.run(cmd, cwd=str(PROJECT_ROOT.parents[1]), check=True)
 
 
 def command_fiber_score(args) -> None:
@@ -207,7 +213,13 @@ def command_fat_import(args) -> None:
 
 
 def command_fat_extract(args) -> None:
-    run_script("fat_material_remark.py")
+    cmd = [
+        sys.executable,
+        str(PROJECT_ROOT.parents[1] / "scripts" / "rebuild_fat_features_from_science.py"),
+        "--apply-target",
+    ]
+    print("+ " + " ".join(cmd), flush=True)
+    subprocess.run(cmd, cwd=str(PROJECT_ROOT.parents[1]), check=True)
 
 
 def command_fat_score(args) -> None:

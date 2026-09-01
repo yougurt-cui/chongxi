@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sys
 from datetime import datetime
@@ -97,14 +98,19 @@ def load_rows(formula_id: int | None = None) -> list[dict[str, Any]]:
                 SELECT fi.formula_id, fi.source_id, fi.brand, fi.product_name,
                        fi.nutrition_json, f.ingredient_fingerprint,
                        p.profile_version, p.input_hash,
-                       i.position, i.raw_name, i.standard_name, i.ingredient_family,
+                       i.position, i.raw_name, i.standard_ingredient_id, i.standard_name, i.ingredient_family,
                        i.source_type, i.animal_source, i.primary_nutrition_role,
-                       i.protein_form, i.is_protein, i.is_plant_protein, i.features_json
+                       i.protein_form, i.is_protein, i.is_plant_protein, i.features_json,
+                       sp.nutrition_category AS science_nutrition_category,
+                       sp.domain_attributes_json AS science_domain_attributes_json,
+                       sp.science_status, sp.profile_version AS science_profile_version
                 FROM catfood_formula_feature_input fi
                 JOIN catfood_standard_formula f ON f.formula_id=fi.formula_id
                 JOIN catfood_formula_feature_profile p ON p.formula_id=fi.formula_id
                 LEFT JOIN catfood_formula_ingredient_item i
                   ON i.formula_id=fi.formula_id AND i.is_ignored=0
+                LEFT JOIN catfood_ingredient_science_profile sp
+                  ON sp.standard_ingredient_id=i.standard_ingredient_id
                 WHERE p.overall_status='ready_for_rebuild'
                   AND (%s IS NULL OR fi.formula_id=%s)
                 ORDER BY fi.formula_id, i.position
@@ -133,26 +139,44 @@ def load_rows(formula_id: int | None = None) -> list[dict[str, Any]]:
     for formula_id, group in grouped.items():
         source = group["source"]
         items = group["items"]
-        protein_items = [item for item in items if bool(item.get("is_protein"))]
-        animal_items = [item for item in protein_items if not bool(item.get("is_plant_protein"))]
-        plant_items = [item for item in protein_items if bool(item.get("is_plant_protein"))]
+        protein_items = [
+            item for item in items
+            if item.get("science_status") == "active"
+            and item.get("science_nutrition_category") == "protein"
+        ]
+        missing_science = [
+            item for item in items
+            if (bool(item.get("is_protein")) or item.get("primary_nutrition_role") == "蛋白质供给")
+            and item not in protein_items
+        ]
+        for item in protein_items:
+            item["science_domain_attributes"] = _json(
+                item.get("science_domain_attributes_json"), {}
+            )
+        animal_items = [item for item in protein_items if item.get("source_type") != "plant"]
+        plant_items = [item for item in protein_items if item.get("source_type") == "plant"]
         animal_sources = list(dict.fromkeys(str(item.get("animal_source") or "").strip() for item in animal_items if str(item.get("animal_source") or "").strip()))
-        forms = [str(item.get("protein_form") or "").strip() for item in animal_items if str(item.get("protein_form") or "").strip()]
+        form_labels = {
+            "fresh": "鲜肉", "frozen": "冻肉", "meal": "肉粉",
+            "hydrolyzed": "水解蛋白", "concentrate": "浓缩蛋白",
+            "isolate": "分离蛋白", "other": "其他蛋白",
+        }
+        forms = [
+            form_labels.get(str(item["science_domain_attributes"].get("protein_form") or ""))
+            for item in animal_items
+        ]
+        forms = [form for form in forms if form]
         main_form = _main_form(forms)
         secondary_forms = list(dict.fromkeys(forms[1:]))
-        plant_levels = []
-        for item in plant_items:
-            features = _json(item.get("features_json"), {})
-            plant_levels.append(str(
-                features.get("protein.plant_protein_level")
-                or features.get("protein.ingredient_plant_protein_class")
-                or ""
-            ))
+        plant_forms = [
+            str(item["science_domain_attributes"].get("plant_protein_form") or "")
+            for item in plant_items
+        ]
         if not plant_items:
             plant_interference = "无植物蛋白"
         elif len(plant_items) > 1:
             plant_interference = "3级｜多源植物蛋白补强型"
-        elif any("高浓缩" in level for level in plant_levels):
+        elif any(form in {"concentrate", "isolate"} for form in plant_forms):
             plant_interference = "2级｜单一高浓缩型植物蛋白"
         else:
             plant_interference = "1级｜单一温和型植物蛋白"
@@ -183,10 +207,13 @@ def load_rows(formula_id: int | None = None) -> list[dict[str, Any]]:
                 "main_protein_position_weight": animal_weights[0] if animal_weights else unknown_weight,
                 "secondary_protein_position_weight": sum(animal_weights[1:]) / len(animal_weights[1:]) if len(animal_weights) > 1 else unknown_weight,
                 "plant_protein_position_weight": sum(plant_weights) / len(plant_weights) if plant_weights else unknown_weight,
-                "profile_status": "ready",
-                "profile_version": source.get("profile_version"),
+                "profile_status": "needs_review" if missing_science else "ready",
+                "profile_version": "science-v1",
                 "guarantee_crude_protein_value": metric_value,
-                "source_fingerprint": source.get("ingredient_fingerprint"),
+                "source_fingerprint": hashlib.sha256(json.dumps(sorted(
+                    (str(item.get("standard_ingredient_id") or ""), item.get("science_profile_version"))
+                    for item in protein_items
+                ), ensure_ascii=False, default=str).encode("utf-8")).hexdigest(),
             }
         )
     return rows

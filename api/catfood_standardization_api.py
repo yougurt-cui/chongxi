@@ -26,6 +26,7 @@ from services.catfood_standardization_service import (
 )
 from services.formula_incremental_service import (
     build_formula_profile,
+    materialize_formula_science_features,
     materialize_formula_risks,
     materialize_formula_scores,
 )
@@ -353,6 +354,18 @@ def standardization_formula_materialize():
     try:
         payload = request.get_json(silent=True) or {}
         result = materialize_formula_scores(formula_id=int(payload["formula_id"]), batch_id=payload.get("batch_id"))
+        return jsonify(result), 200 if result.get("ok") else 409
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+
+
+@catfood_standardization_api.post("/formula-science/materialize")
+def standardization_formula_science_materialize():
+    try:
+        payload = request.get_json(silent=True) or {}
+        result = materialize_formula_science_features(
+            formula_id=int(payload["formula_id"]), batch_id=payload.get("batch_id")
+        )
         return jsonify(result), 200 if result.get("ok") else 409
     except Exception as exc:
         return jsonify({"ok": False, "error": str(exc)}), 400

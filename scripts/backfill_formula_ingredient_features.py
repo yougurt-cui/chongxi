@@ -30,8 +30,6 @@ from scripts.initialize_ingredient_feature_tables import (  # noqa: E402
     ensure_tables,
 )
 from vendor.feature_score_pipeline.scripts import rebuild_protein_source_aggregate as protein_aggregate  # noqa: E402
-from vendor.feature_score_pipeline.scripts import fat_material_remark  # noqa: E402
-from vendor.feature_score_pipeline.scripts import fiber_remark  # noqa: E402
 from services.fiber_science_materialization_service import build_science_payload  # noqa: E402
 from services.fat_science_materialization_service import build_science_features  # noqa: E402
 
@@ -87,26 +85,6 @@ def _features_for_item(item: dict[str, Any]) -> dict[str, Any]:
             features["protein.animal_source"] = item["animal_source"]
     if item.get("protein_rule_ids"):
         features["protein.rule_ids"] = item["protein_rule_ids"]
-    raw_name = str(item.get("raw_name") or "")
-    fat_features = fat_material_remark.parse_material_features(raw_name)
-    for key in ("fat_sources", "fat_source_types", "omega3_sources", "omega6_sources"):
-        if fat_features.get(key):
-            features[f"fat.{key}"] = fat_features[key]
-    normalized_name = fiber_remark.normalize_ingredient_name(raw_name)
-    matched_fiber = fiber_remark.match_tagged_ingredient(normalized_name)
-    if matched_fiber:
-        std_name, rule = matched_fiber
-        features["fiber.standard_tag"] = std_name
-        features["fiber.category"] = rule.get("ingredient_category")
-        features["fiber.solubility"] = rule.get("fiber_solubility")
-        features["fiber.fermentability"] = rule.get("fermentability")
-        features["fiber.functions"] = rule.get("fiber_functions")
-        features["fiber.prebiotic_functions"] = rule.get("prebiotic_functions")
-    starch_info = fiber_remark.classify_starch_ingredient(raw_name)
-    if starch_info:
-        features["starch.category"] = starch_info.get("category")
-        features["starch.base_score"] = starch_info.get("base_score")
-        features["starch.matched_keywords"] = starch_info.get("matched_keywords")
     return features
 
 
@@ -343,7 +321,9 @@ def _upsert_candidate(cursor, *, raw_name: str, context: str) -> None:
     )
 
 
-def backfill_formula(formula_id: int, *, apply: bool) -> dict[str, Any]:
+def backfill_formula(
+    formula_id: int, *, apply: bool, materialize_science_features: bool = True
+) -> dict[str, Any]:
     engine = _engine()
     standard_lookup = protein_aggregate._load_standard_ingredient_lookup(
         engine,
@@ -412,11 +392,10 @@ def backfill_formula(formula_id: int, *, apply: bool) -> dict[str, Any]:
             )
             effective_items = [item for item in items if not item.get("is_ignored")]
             status_payload = _domain_status_for_unmatched(effective_items)
-            science_profiles = _load_science_profiles(cursor, effective_items)
-            fat_features = build_science_features(effective_items, science_profiles)
-            fiber_payload = build_science_payload(effective_items, science_profiles)
-            fiber_feature_json = fiber_payload["ingredient_feature_json"]
-            starch_ingredients = fiber_payload["starch_ingredients_json"]
+            if materialize_science_features:
+                science_profiles = _load_science_profiles(cursor, effective_items)
+                fat_features = build_science_features(effective_items, science_profiles)
+                fiber_payload = build_science_payload(effective_items, science_profiles)
 
             cursor.execute(
                 f"DELETE FROM `{FORMULA_INGREDIENT_ITEM_TABLE}` WHERE formula_id = %s",
@@ -501,24 +480,25 @@ def backfill_formula(formula_id: int, *, apply: bool) -> dict[str, Any]:
                 else "partially_ready" if allowed_count
                 else "need_review"
             )
-            if gates["fat"]["status"] == "need_review":
-                fat_features["profile_status"] = "needs_review"
-            _upsert_fat_feature(
-                cursor,
-                formula=formula,
-                ingredient_text=main_ingredient_text,
-                features=fat_features,
-            )
-            _upsert_fiber_feature(
-                cursor,
-                formula=formula,
-                ingredient_text=main_ingredient_text,
-                feature_json=fiber_feature_json,
-                starch_ingredients=starch_ingredients,
-                profile_status=fiber_payload["profile_status"],
-                profile_version=fiber_payload["profile_version"],
-                source_fingerprint=fiber_payload["science_source_fingerprint"],
-            )
+            if materialize_science_features:
+                if gates["fat"]["status"] == "need_review":
+                    fat_features["profile_status"] = "needs_review"
+                _upsert_fat_feature(
+                    cursor,
+                    formula=formula,
+                    ingredient_text=main_ingredient_text,
+                    features=fat_features,
+                )
+                _upsert_fiber_feature(
+                    cursor,
+                    formula=formula,
+                    ingredient_text=main_ingredient_text,
+                    feature_json=fiber_payload["ingredient_feature_json"],
+                    starch_ingredients=fiber_payload["starch_ingredients_json"],
+                    profile_status=fiber_payload["profile_status"],
+                    profile_version=fiber_payload["profile_version"],
+                    source_fingerprint=fiber_payload["science_source_fingerprint"],
+                )
             ignored_count = len(items) - len(effective_items)
             coverage = matched / len(effective_items) if effective_items else 1.0
             quality = {
@@ -613,6 +593,59 @@ def backfill_formula(formula_id: int, *, apply: bool) -> dict[str, Any]:
         "meat_source_complexity": labels.get("meat_source_complexity"),
         "plant_protein_sources": labels.get("plant_protein_labels"),
         "protein_rule_count": len(protein_rules),
+        "science_features_materialized": bool(materialize_science_features),
+    }
+
+
+def materialize_formula_science_source_tables(
+    formula_id: int, *, apply: bool = True
+) -> dict[str, Any]:
+    """Write fat/fiber layer-4 sources from standardized items and active science profiles."""
+    with _connect() as conn:
+        with conn.cursor() as cursor:
+            _ensure_fat_target(cursor)
+            _ensure_fiber_target(cursor)
+            cursor.execute(
+                f"SELECT * FROM `{FORMULA_INPUT_TABLE}` WHERE formula_id=%s", (int(formula_id),)
+            )
+            formula = cursor.fetchone()
+            if not formula:
+                raise KeyError(f"formula_id 不存在: {formula_id}")
+            cursor.execute(
+                f"SELECT * FROM `{FORMULA_INGREDIENT_ITEM_TABLE}` "
+                "WHERE formula_id=%s ORDER BY position",
+                (int(formula_id),),
+            )
+            items = [item for item in cursor.fetchall() if not item.get("is_ignored")]
+            profiles = _load_science_profiles(cursor, items)
+            fat_features = build_science_features(items, profiles)
+            fiber_payload = build_science_payload(items, profiles)
+            ingredient_text = _strip_additives(formula.get("ingredient_composition") or "")
+            _upsert_fat_feature(
+                cursor, formula=formula, ingredient_text=ingredient_text, features=fat_features
+            )
+            _upsert_fiber_feature(
+                cursor,
+                formula=formula,
+                ingredient_text=ingredient_text,
+                feature_json=fiber_payload["ingredient_feature_json"],
+                starch_ingredients=fiber_payload["starch_ingredients_json"],
+                profile_status=fiber_payload["profile_status"],
+                profile_version=fiber_payload["profile_version"],
+                source_fingerprint=fiber_payload["science_source_fingerprint"],
+            )
+        if apply:
+            conn.commit()
+        else:
+            conn.rollback()
+    return {
+        "ok": True,
+        "applied": bool(apply),
+        "formula_id": int(formula_id),
+        "fat_profile_status": fat_features["profile_status"],
+        "fiber_profile_status": fiber_payload["profile_status"],
+        "fat_missing_science_count": len(fat_features["missing_science_profiles"]),
+        "fiber_missing_science_count": len(fiber_payload["missing_science_profiles"]),
     }
 
 

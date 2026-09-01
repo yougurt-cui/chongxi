@@ -11,7 +11,10 @@ from typing import Any
 import pymysql
 
 from app_config import get_feature_mysql_config, get_mysql_config
-from scripts.backfill_formula_ingredient_features import backfill_formula
+from scripts.backfill_formula_ingredient_features import (
+    backfill_formula,
+    materialize_formula_science_source_tables,
+)
 
 
 BASE_DIR = Path(__file__).resolve().parents[1]
@@ -19,9 +22,32 @@ FEATURE_DIR = BASE_DIR / "vendor" / "feature_score_pipeline"
 SCRIPT_DIR = FEATURE_DIR / "scripts"
 
 
+def _science_source_statuses(formula_id: int) -> dict[str, str | None]:
+    tables = {
+        "protein": "protein_source_aggregate",
+        "fat": "catfood_fat_material_features",
+        "fiber": "catfood_fiber_feature_json",
+    }
+    statuses: dict[str, str | None] = {}
+    with pymysql.connect(
+        **get_feature_mysql_config(), cursorclass=pymysql.cursors.DictCursor
+    ) as conn:
+        with conn.cursor() as cursor:
+            for domain, table in tables.items():
+                cursor.execute(
+                    f"SELECT profile_status FROM `{table}` WHERE formula_id=%s",
+                    (int(formula_id),),
+                )
+                row = cursor.fetchone()
+                statuses[domain] = row.get("profile_status") if row else None
+    return statuses
+
+
 def build_formula_profile(*, formula_id: int, apply: bool = True) -> dict[str, Any]:
     """Standardize ingredient items and rebuild the formula gate profile."""
-    result = backfill_formula(int(formula_id), apply=apply)
+    result = backfill_formula(
+        int(formula_id), apply=apply, materialize_science_features=False
+    )
     with pymysql.connect(**get_mysql_config(), cursorclass=pymysql.cursors.DictCursor) as conn:
         with conn.cursor() as cursor:
             cursor.execute(
@@ -82,15 +108,21 @@ def materialize_formula_scores(*, formula_id: int, batch_id: str | None = None) 
     if not profile or profile["overall_status"] != "ready_for_rebuild":
         return {"ok": False, "status": "need_review", "formula_id": formula_id, "overall_status": profile and profile["overall_status"]}
 
+    source_statuses = _science_source_statuses(formula_id)
+    if any(status != "ready" for status in source_statuses.values()):
+        return {
+            "ok": False,
+            "status": "science_features_not_ready",
+            "formula_id": formula_id,
+            "source_statuses": source_statuses,
+        }
+
     env = _env(formula_id, batch_id)
-    source_env = dict(env)
-    source_env["MYSQL_DATABASE"] = str(get_mysql_config()["database"])
     with pymysql.connect(**get_feature_mysql_config(), cursorclass=pymysql.cursors.DictCursor, autocommit=False) as conn:
         with conn.cursor() as cursor:
             cursor.execute("DELETE FROM catfood_fat_material_features_scored WHERE formula_id=%s", (formula_id,))
         conn.commit()
     steps = {
-        "protein_labels": _run([sys.executable, str(BASE_DIR / "scripts/rebuild_protein_source_from_profiles.py"), "--apply", "--formula-id", str(formula_id)], env=source_env),
         "protein_score": _run([sys.executable, str(SCRIPT_DIR / "protein_score1.py")], env=env, cwd=FEATURE_DIR),
         "fiber_score": _run([sys.executable, str(SCRIPT_DIR / "fiber_remark_score.py")], env=env, cwd=FEATURE_DIR),
         "fat_score": _run([sys.executable, str(SCRIPT_DIR / "fat_score1.py")], env=env, cwd=FEATURE_DIR),
@@ -98,6 +130,65 @@ def materialize_formula_scores(*, formula_id: int, batch_id: str | None = None) 
         "sku_feature": _run([sys.executable, str(SCRIPT_DIR / "build_sku_feature_input.py")], env=env, cwd=FEATURE_DIR),
     }
     return {"ok": True, "formula_id": formula_id, "batch_id": batch_id, "steps": steps}
+
+
+def materialize_formula_science_features(
+    *, formula_id: int, batch_id: str | None = None
+) -> dict[str, Any]:
+    """Materialize the three layer-4 source tables from active science profiles."""
+    formula_id = int(formula_id)
+    batch_id = batch_id or f"formula-{formula_id}"
+    with pymysql.connect(**get_mysql_config(), cursorclass=pymysql.cursors.DictCursor) as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                "SELECT overall_status FROM catfood_formula_feature_profile WHERE formula_id=%s",
+                (formula_id,),
+            )
+            profile = cursor.fetchone()
+    if not profile or profile["overall_status"] != "ready_for_rebuild":
+        return {
+            "ok": False,
+            "status": "need_review",
+            "formula_id": formula_id,
+            "overall_status": profile and profile["overall_status"],
+        }
+
+    env = _env(formula_id, batch_id)
+    source_env = dict(env)
+    source_env["MYSQL_DATABASE"] = str(get_mysql_config()["database"])
+    steps = {
+        "protein_source": _run(
+            [sys.executable, str(BASE_DIR / "scripts/rebuild_protein_source_from_profiles.py"),
+             "--apply", "--formula-id", str(formula_id)],
+            env=source_env,
+        ),
+    }
+    source_tables = materialize_formula_science_source_tables(formula_id, apply=True)
+    steps["fat_source"] = {
+        "ok": source_tables["fat_profile_status"] == "ready",
+        "profile_status": source_tables["fat_profile_status"],
+        "missing_science_count": source_tables["fat_missing_science_count"],
+    }
+    steps["fiber_source"] = {
+        "ok": source_tables["fiber_profile_status"] == "ready",
+        "profile_status": source_tables["fiber_profile_status"],
+        "missing_science_count": source_tables["fiber_missing_science_count"],
+    }
+    source_statuses = _science_source_statuses(formula_id)
+    ready = all(status == "ready" for status in source_statuses.values())
+    return {
+        "ok": ready,
+        "status": "materialized" if ready else "need_review",
+        "formula_id": formula_id,
+        "batch_id": batch_id,
+        "source_tables": {
+            "protein": "protein_source_aggregate",
+            "fat": "catfood_fat_material_features",
+            "fiber": "catfood_fiber_feature_json",
+        },
+        "source_statuses": source_statuses,
+        "steps": steps,
+    }
 
 
 def materialize_formula_risks(*, formula_id: int, batch_id: str | None = None) -> dict[str, Any]:
