@@ -90,6 +90,21 @@ def _complexity(animal_sources: list[str], protein_items: list[dict[str, Any]]) 
     return "跨类双源" if source_count == 2 else "跨类多源"
 
 
+def _is_missing_protein_science(item: dict[str, Any]) -> bool:
+    """Require protein science only when the standardized primary role says protein.
+
+    ``is_protein`` is a legacy name-derived flag and is intentionally ignored here:
+    legumes, organic minerals and palatability hydrolysates can carry that flag even
+    when their authoritative nutrition role and science category are not protein.
+    """
+    if item.get("primary_nutrition_role") != "蛋白质供给":
+        return False
+    return not (
+        item.get("science_status") == "active"
+        and item.get("science_nutrition_category") == "protein"
+    )
+
+
 def load_rows(formula_id: int | None = None) -> list[dict[str, Any]]:
     cfg = get_mysql_config()
     with pymysql.connect(**cfg, cursorclass=pymysql.cursors.DictCursor, autocommit=True) as conn:
@@ -146,8 +161,7 @@ def load_rows(formula_id: int | None = None) -> list[dict[str, Any]]:
         ]
         missing_science = [
             item for item in items
-            if (bool(item.get("is_protein")) or item.get("primary_nutrition_role") == "蛋白质供给")
-            and item not in protein_items
+            if _is_missing_protein_science(item)
         ]
         for item in protein_items:
             item["science_domain_attributes"] = _json(
@@ -322,7 +336,7 @@ def main() -> int:
         "row_count": len(rows),
         "profile_status": {
             status: sum(row.get("profile_status") == status for row in rows)
-            for status in ("ready", "ready_with_warnings", "blocked", None)
+            for status in ("ready", "needs_review", "ready_with_warnings", "blocked", None)
         },
         "with_crude_protein": sum(row.get("guarantee_crude_protein_value") is not None for row in rows),
         "missing_main_protein_form": sum(not row.get("primary_meat_source_type") for row in rows),
