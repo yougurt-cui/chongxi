@@ -43,9 +43,11 @@ git pull --ff-only origin "$REMOTE_BRANCH"
   services/catfood_standardization_service.py \
   services/business_analysis_service.py \
   services/formula_feature_link_service.py \
+  services/fiber_science_materialization_service.py \
   services/formula_incremental_service.py \
   services/consumer_analysis_service.py \
   services/orchestrator_service.py \
+  scripts/rebuild_fiber_features_from_science.py \
   services/cat_food_task_service.py \
   services/cat_food_product_catalog_service.py \
   services/miniprogram_content_review_service.py \

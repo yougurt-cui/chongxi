@@ -32,6 +32,7 @@ from scripts.initialize_ingredient_feature_tables import (  # noqa: E402
 from vendor.feature_score_pipeline.scripts import rebuild_protein_source_aggregate as protein_aggregate  # noqa: E402
 from vendor.feature_score_pipeline.scripts import fat_material_remark  # noqa: E402
 from vendor.feature_score_pipeline.scripts import fiber_remark  # noqa: E402
+from services.fiber_science_materialization_service import build_science_payload  # noqa: E402
 
 
 FORMULA_INPUT_TABLE = "catfood_formula_feature_input"
@@ -219,25 +220,19 @@ def _ensure_fat_target(cursor) -> None:
     )
 
 
-def _build_fiber_feature_payload(ingredient_text: str) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    normalized_text = fiber_remark.normalize_text(ingredient_text)
-    raw_ingredients = fiber_remark.split_ingredients(normalized_text)
-    matched_items = []
-    seen = set()
-    for raw_name in raw_ingredients:
-        normalized_name = fiber_remark.normalize_ingredient_name(raw_name)
-        matched = fiber_remark.match_tagged_ingredient(normalized_name)
-        if not matched:
-            continue
-        std_name, rule = matched
-        if std_name in seen:
-            continue
-        seen.add(std_name)
-        matched_items.append((std_name, rule))
-    return (
-        fiber_remark.build_feature_json(matched_items),
-        fiber_remark.calc_starch_ingredients(raw_ingredients),
+def _load_science_profiles(cursor, items: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    standard_ids = sorted(
+        {str(item["standard_ingredient_id"]) for item in items if item.get("standard_ingredient_id")}
     )
+    if not standard_ids:
+        return {}
+    cursor.execute(
+        "SELECT * FROM catfood_ingredient_science_profile WHERE standard_ingredient_id IN ("
+        + ",".join(["%s"] * len(standard_ids))
+        + ")",
+        standard_ids,
+    )
+    return {str(row["standard_ingredient_id"]): row for row in cursor.fetchall()}
 
 
 def _upsert_fat_feature(cursor, *, formula: dict[str, Any], ingredient_text: str, features: dict[str, Any]) -> None:
@@ -297,6 +292,9 @@ def _upsert_fiber_feature(
     ingredient_text: str,
     feature_json: dict[str, Any],
     starch_ingredients: list[dict[str, Any]],
+    profile_status: str = "ready",
+    profile_version: str = "science-v1",
+    source_fingerprint: str | None = None,
 ) -> None:
     cursor.execute(
         f"""
@@ -318,9 +316,9 @@ def _upsert_fiber_feature(
             ingredient_text,
             json.dumps(feature_json, ensure_ascii=False),
             json.dumps(starch_ingredients, ensure_ascii=False),
-            "ready",
-            "v1",
-            formula.get("ingredient_fingerprint"),
+            profile_status,
+            profile_version,
+            source_fingerprint or formula.get("ingredient_fingerprint"),
         ),
     )
 
@@ -414,7 +412,10 @@ def backfill_formula(formula_id: int, *, apply: bool) -> dict[str, Any]:
             effective_items = [item for item in items if not item.get("is_ignored")]
             status_payload = _domain_status_for_unmatched(effective_items)
             fat_features = fat_material_remark.parse_material_features(main_ingredient_text)
-            fiber_feature_json, starch_ingredients = _build_fiber_feature_payload(main_ingredient_text)
+            science_profiles = _load_science_profiles(cursor, effective_items)
+            fiber_payload = build_science_payload(effective_items, science_profiles)
+            fiber_feature_json = fiber_payload["ingredient_feature_json"]
+            starch_ingredients = fiber_payload["starch_ingredients_json"]
 
             cursor.execute(
                 f"DELETE FROM `{FORMULA_INGREDIENT_ITEM_TABLE}` WHERE formula_id = %s",
@@ -512,6 +513,9 @@ def backfill_formula(formula_id: int, *, apply: bool) -> dict[str, Any]:
                 ingredient_text=main_ingredient_text,
                 feature_json=fiber_feature_json,
                 starch_ingredients=starch_ingredients,
+                profile_status=fiber_payload["profile_status"],
+                profile_version=fiber_payload["profile_version"],
+                source_fingerprint=fiber_payload["science_source_fingerprint"],
             )
             ignored_count = len(items) - len(effective_items)
             coverage = matched / len(effective_items) if effective_items else 1.0
