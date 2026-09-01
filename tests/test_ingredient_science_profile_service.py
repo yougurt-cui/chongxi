@@ -33,6 +33,13 @@ class IngredientScienceProfileTests(unittest.TestCase):
         self.assertEqual(result["science_status"], "draft")
         self.assertEqual(set(result["function_attributes"].values()), {"unknown"})
 
+    def test_explicit_fat_role_wins_over_fiber_family(self):
+        result = suggest_science_profile(
+            ingredient("奇亚籽", "脂肪酸支持", "膳食纤维", "plant")
+        )
+        self.assertEqual(result["nutrition_category"], "fat")
+        self.assertEqual(result["nutrition_subtype"], "plant")
+
     def test_hydrolyzed_protein_suggestion(self):
         result = suggest_science_profile(ingredient("酶解牛肉粉", "蛋白质供给", "牛肉类", "animal"))
         self.assertEqual(result["nutrition_category"], "protein")

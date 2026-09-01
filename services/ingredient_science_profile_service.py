@@ -307,6 +307,16 @@ def suggest_science_profile(ingredient: dict[str, Any]) -> dict[str, Any]:
     elif "益生元" in text:
         category = "prebiotic"
         subtype = "inulin" if any(word in text for word in ("菊粉", "菊糖", "菊苣")) else "other"
+    elif "脂肪酸" in role or "脂肪供给" in role:
+        category = "fat"
+        if any(word in name for word in ("鱼油", "磷虾油", "藻油", "海洋")):
+            subtype = "marine"
+        elif source_type == "plant":
+            subtype = "plant"
+        elif source_type == "animal":
+            subtype = "animal"
+        else:
+            subtype = "other"
     elif "纤维" in text:
         category, subtype = "fiber", "other"
     elif "蛋白" in text or any(word in name for word in ("肉", "鱼粉", "蛋白")):
