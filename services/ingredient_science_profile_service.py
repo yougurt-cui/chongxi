@@ -56,6 +56,7 @@ FUNCTION_ATTRIBUTE_KEYS = (
     "scfa_support",
     "omega3_support",
     "antioxidant_support",
+    "micronutrient_support",
 )
 FUNCTION_STRENGTHS = {"unknown", "none", "weak", "medium", "strong"}
 SCIENCE_STATUSES = {"draft", "active", "excluded", "deprecated"}
@@ -69,6 +70,7 @@ DOMAIN_ATTRIBUTE_DEFINITIONS = {
         "animal_source": {"kind": "single", "values": ["unknown", "none", "chicken", "duck", "turkey", "fish", "beef", "lamb", "pork", "egg", "mixed", "other"]},
         "plant_protein_form": {"kind": "single", "values": ["none", "whole", "meal", "concentrate", "isolate", "hydrolyzed", "other", "unknown"]},
         "animal_source_category": {"kind": "single", "values": ["unknown", "none", "poultry", "livestock", "rabbit", "fish", "shellfish", "egg", "dairy", "other"]},
+        "micronutrient_source_type": {"kind": "single", "values": ["unknown", "none", "animal_organ", "animal_tissue", "egg"]},
     },
     "carbohydrate": {
         "starch_category": {"kind": "single", "values": ["unknown", "none", "legume", "grain", "tuber", "flour", "refined_starch", "available_sugar"]},
@@ -96,6 +98,7 @@ DOMAIN_ATTRIBUTE_DEFINITIONS = {
     "mineral": {
         "mineral_type": {"kind": "single", "values": ["unknown", "none", "inorganic_salt", "organic_salt", "chelated", "natural", "other"]},
         "mineral_elements": {"kind": "multi", "values": ["calcium", "phosphorus", "sodium", "potassium", "chloride", "magnesium", "iron", "zinc", "copper", "manganese", "selenium", "iodine", "other"]},
+        "micronutrient_source_type": {"kind": "single", "values": ["unknown", "none", "fortified", "mineral", "natural"]},
     },
 }
 

@@ -33,6 +33,7 @@ from vendor.feature_score_pipeline.scripts import rebuild_protein_source_aggrega
 from vendor.feature_score_pipeline.scripts import fat_material_remark  # noqa: E402
 from vendor.feature_score_pipeline.scripts import fiber_remark  # noqa: E402
 from services.fiber_science_materialization_service import build_science_payload  # noqa: E402
+from services.fat_science_materialization_service import build_science_features  # noqa: E402
 
 
 FORMULA_INPUT_TABLE = "catfood_formula_feature_input"
@@ -277,8 +278,8 @@ def _upsert_fat_feature(cursor, *, formula: dict[str, Any], ingredient_text: str
             features.get("omega6_sources"),
             features.get("omega3_sources"),
             features.get("profile_status") or "ready",
-            "v1",
-            formula.get("ingredient_fingerprint"),
+            features.get("profile_version") or "science-v1",
+            features.get("source_fingerprint") or formula.get("ingredient_fingerprint"),
             features.get("needs_review"),
             features.get("review_reason"),
         ),
@@ -411,8 +412,8 @@ def backfill_formula(formula_id: int, *, apply: bool) -> dict[str, Any]:
             )
             effective_items = [item for item in items if not item.get("is_ignored")]
             status_payload = _domain_status_for_unmatched(effective_items)
-            fat_features = fat_material_remark.parse_material_features(main_ingredient_text)
             science_profiles = _load_science_profiles(cursor, effective_items)
+            fat_features = build_science_features(effective_items, science_profiles)
             fiber_payload = build_science_payload(effective_items, science_profiles)
             fiber_feature_json = fiber_payload["ingredient_feature_json"]
             starch_ingredients = fiber_payload["starch_ingredients_json"]
@@ -500,7 +501,8 @@ def backfill_formula(formula_id: int, *, apply: bool) -> dict[str, Any]:
                 else "partially_ready" if allowed_count
                 else "need_review"
             )
-            fat_features["profile_status"] = gates["fat"]["status"]
+            if gates["fat"]["status"] == "need_review":
+                fat_features["profile_status"] = "needs_review"
             _upsert_fat_feature(
                 cursor,
                 formula=formula,

@@ -90,6 +90,18 @@ class IngredientScienceProfileTests(unittest.TestCase):
         )
         self.assertEqual(mineral["mineral_elements"], ["zinc", "copper"])
 
+    def test_secondary_micronutrient_attributes_are_compact(self):
+        protein = normalize_domain_attributes(
+            "protein", {"micronutrient_source_type": "animal_organ"}
+        )
+        self.assertEqual(protein["micronutrient_source_type"], "animal_organ")
+        mineral = normalize_domain_attributes(
+            "mineral", {"micronutrient_source_type": "fortified"}
+        )
+        self.assertEqual(mineral["micronutrient_source_type"], "fortified")
+        functions = normalize_function_attributes({"micronutrient_support": "strong"})
+        self.assertEqual(functions["micronutrient_support"], "strong")
+
     def test_identity_fields_are_inherited_not_stored_twice(self):
         inherited = inherited_domain_attributes(
             "protein", {"source_type": "animal", "animal_source": "鸡"}
