@@ -129,6 +129,22 @@ def materialize_formula_scores(*, formula_id: int, batch_id: str | None = None) 
         "wide": _run([sys.executable, str(SCRIPT_DIR / "build_catfood_score_wide_table.py")], env=env, cwd=FEATURE_DIR),
         "sku_feature": _run([sys.executable, str(SCRIPT_DIR / "build_sku_feature_input.py")], env=env, cwd=FEATURE_DIR),
     }
+    # The target table is keyed by formula/version, so an incremental upsert can
+    # reuse an older row.  Persist this run's batch explicitly: the following
+    # risk node selects its input by batch_id.
+    with pymysql.connect(
+        **get_feature_mysql_config(), autocommit=False
+    ) as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                UPDATE sku_feature_input
+                SET batch_id=%s
+                WHERE formula_id=%s AND feature_version IN ('v1', 'soft_v1')
+                """,
+                (batch_id, formula_id),
+            )
+        conn.commit()
     return {"ok": True, "formula_id": formula_id, "batch_id": batch_id, "steps": steps}
 
 
