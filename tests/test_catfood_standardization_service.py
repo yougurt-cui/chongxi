@@ -54,6 +54,20 @@ class CatfoodStandardizationServiceTest(unittest.TestCase):
         self.assertEqual(ocr[1], formula[1])
         self.assertEqual(ocr[2], formula[2])
 
+    def test_english_ingredient_heading_is_removed_only_at_start(self):
+        expected = normalize_ingredients("鲜鸡肉45%、鸡肉粉10%")
+        for value in (
+            "RAWMATERIALCOMPOSITION鲜鸡肉45%、鸡肉粉10%",
+            "RAW MATERIAL COMPOSITION: 鲜鸡肉45%、鸡肉粉10%",
+            "Ingredients Composition：鲜鸡肉45%、鸡肉粉10%",
+        ):
+            actual = normalize_ingredients(value)
+            self.assertEqual(actual[1], expected[1])
+            self.assertEqual(actual[2], expected[2])
+
+        _, ingredients, _ = normalize_ingredients("鲜鸡肉、Ingredients草本复合物")
+        self.assertEqual(ingredients[1], "Ingredients草本复合物")
+
     def test_ingredient_noise_pool_names_are_removed_before_fingerprinting(self):
         normalized, ingredients, fingerprint = normalize_ingredients(
             "鲜鸡肉、产品成份、鸡油",

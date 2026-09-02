@@ -2073,6 +2073,12 @@ INGREDIENT_OCR_PREFIX_NOISE = (
     "直播讲解",
 )
 
+INGREDIENT_SECTION_HEADING_RE = re.compile(
+    r"^(?:(?:RAW\s*MATERIAL\s*COMPOSITION)|(?:INGREDIENTS?(?:\s*COMPOSITION)?)|"
+    r"(?:原料组成)|(?:配料组成))\s*[:：]?\s*",
+    flags=re.IGNORECASE,
+)
+
 INGREDIENT_GROUP_MARKERS = (
     "及其制品",
     "等水生生物",
@@ -2150,7 +2156,7 @@ def normalize_ingredients(
 ) -> tuple[str, list[str], str]:
     text = _clean(value)
     text = re.split(r"添加剂组成|添加剂|产品成[分份]分析|营养分析|保证值", text, maxsplit=1)[0]
-    text = re.sub(r"^(?:原料组成|配料组成)\s*[:：]?", "", text)
+    text = INGREDIENT_SECTION_HEADING_RE.sub("", text, count=1)
     ingredients: list[str] = []
     for part in _split_top_level_ingredient_tokens(text):
         for item in _expand_grouped_ingredient_token(part):
