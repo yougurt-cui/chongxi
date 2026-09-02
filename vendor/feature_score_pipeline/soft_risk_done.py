@@ -386,7 +386,11 @@ def load_reference_pool(engine, reference_pool_version, feature_version):
          )
         LEFT JOIN {FAT_FEATURE_TABLE} ff
           ON f.formula_id = ff.formula_id
-          OR (f.formula_id IS NULL AND f.sku_id = ff.product_key)
+          OR (
+              f.formula_id IS NULL
+              AND f.sku_id COLLATE utf8mb4_unicode_ci
+                  = ff.product_key COLLATE utf8mb4_unicode_ci
+          )
         LEFT JOIN {FIBER_FEATURE_TABLE} fiber
           ON f.formula_id = fiber.formula_id
           OR (f.formula_id IS NULL AND f.sku_id = fiber.product_key)
