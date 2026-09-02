@@ -265,10 +265,15 @@ def build_sku_feature_sql(engine):
         FROM sku_feature_input s
         LEFT JOIN {FAT_FEATURE_TABLE} f
           ON s.formula_id = f.formula_id
-          OR (s.formula_id IS NULL AND s.sku_id = f.product_key)
+          OR (
+              s.formula_id IS NULL
+              AND s.sku_id COLLATE utf8mb4_unicode_ci
+                  = f.product_key COLLATE utf8mb4_unicode_ci
+          )
           OR (
               COALESCE(TRIM(s.sku_name), '') <> ''
-              AND COALESCE(TRIM(s.sku_name), '') = COALESCE(TRIM(f.product_name), '')
+              AND COALESCE(TRIM(s.sku_name), '') COLLATE utf8mb4_unicode_ci
+                  = COALESCE(TRIM(f.product_name), '') COLLATE utf8mb4_unicode_ci
           )
         LEFT JOIN {FIBER_FEATURE_TABLE} fiber
           ON s.formula_id = fiber.formula_id

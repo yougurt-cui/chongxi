@@ -173,12 +173,18 @@ def build_sku_feature_sql(engine):
                OR unique_name.product_name IS NOT NULL
         ) f
           ON s.formula_id = f.formula_id
-          OR (s.formula_id IS NULL AND s.sku_id = f.product_key)
+          OR (
+              s.formula_id IS NULL
+              AND s.sku_id COLLATE utf8mb4_unicode_ci
+                  = f.product_key COLLATE utf8mb4_unicode_ci
+          )
           OR (
               COALESCE(TRIM(s.sku_name), '') <> ''
-              AND f.product_key <> s.sku_id
+              AND f.product_key COLLATE utf8mb4_unicode_ci
+                  <> s.sku_id COLLATE utf8mb4_unicode_ci
               AND f.product_key IS NOT NULL
-              AND COALESCE(TRIM(s.sku_name), '') = COALESCE(TRIM(f.product_name), '')
+              AND COALESCE(TRIM(s.sku_name), '') COLLATE utf8mb4_unicode_ci
+                  = COALESCE(TRIM(f.product_name), '') COLLATE utf8mb4_unicode_ci
           )
         WHERE s.feature_version = :feature_version
         """
