@@ -53,6 +53,16 @@ class IngredientScienceProfileTests(unittest.TestCase):
         self.assertEqual(result["nutrition_category"], "mineral")
         self.assertEqual(result["nutrition_subtype"], "other")
 
+    def test_botanical_suggestion_is_compact_and_role_safe(self):
+        herb = suggest_science_profile(
+            ingredient("丝兰", "草本功能支持", "草本/植物功能原料类", "plant")
+        )
+        seaweed = suggest_science_profile(
+            ingredient("海带粉", "草本功能支持", "草本/植物功能原料类", "plant")
+        )
+        self.assertEqual((herb["nutrition_category"], herb["nutrition_subtype"]), ("botanical", "herb"))
+        self.assertEqual((seaweed["nutrition_category"], seaweed["nutrition_subtype"]), ("botanical", "seaweed"))
+
     def test_domain_attributes_use_category_specific_enums(self):
         result = normalize_domain_attributes(
             "fiber",

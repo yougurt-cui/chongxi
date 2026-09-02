@@ -29,6 +29,7 @@ NUTRITION_CATEGORIES = {
     "antioxidant",
     "mineral",
     "vitamin",
+    "botanical",
     "other",
 }
 
@@ -42,6 +43,7 @@ NUTRITION_SUBTYPES = {
     "antioxidant": {"other"},
     "mineral": {"other"},
     "vitamin": {"other"},
+    "botanical": {"herb", "plant_extract", "algae", "seaweed", "mushroom", "other"},
     "other": {"other"},
 }
 
@@ -99,6 +101,10 @@ DOMAIN_ATTRIBUTE_DEFINITIONS = {
         "mineral_type": {"kind": "single", "values": ["unknown", "none", "inorganic_salt", "organic_salt", "chelated", "natural", "other"]},
         "mineral_elements": {"kind": "multi", "values": ["calcium", "phosphorus", "sodium", "potassium", "chloride", "magnesium", "iron", "zinc", "copper", "manganese", "selenium", "iodine", "other"]},
         "micronutrient_source_type": {"kind": "single", "values": ["unknown", "none", "fortified", "mineral", "natural"]},
+    },
+    "botanical": {
+        "botanical_type": {"kind": "single", "values": ["unknown", "none", "herb", "plant_extract", "algae", "seaweed", "mushroom", "other"]},
+        "botanical_functions": {"kind": "multi", "values": ["antioxidant_support", "digestive_support", "stool_odor_support", "calming_support", "micronutrient_support", "other"]},
     },
 }
 
@@ -356,6 +362,8 @@ def suggest_science_profile(ingredient: dict[str, Any]) -> dict[str, Any]:
         category, subtype = "mineral", "other"
     elif "维生素" in text:
         category, subtype = "vitamin", "other"
+    elif _is_botanical(name, role, family):
+        category, subtype = "botanical", _suggest_botanical_subtype(name)
 
     return {
         "nutrition_category": category,
@@ -365,6 +373,41 @@ def suggest_science_profile(ingredient: dict[str, Any]) -> dict[str, Any]:
         "science_status": "draft",
         "evidence_level": "unknown",
     }
+
+
+def _is_botanical(name: str, role: str, family: str) -> bool:
+    text = " ".join((role, family, name))
+    herb_keywords = (
+        "丝兰", "黄芪", "白术", "茯苓", "山楂", "乌梅", "猫薄荷", "缬草", "百里香",
+        "柑橘", "万寿菊", "小麦苗", "大麦苗", "苜蓿", "蒲公英", "薄荷", "洋甘菊",
+        "薰衣草", "人参", "灵芝", "姬松茸", "蘑菇", "菌菇", "香菇", "猴头菇", "橘皮",
+        "丁香", "欧芹", "留兰香", "芦荟", "茜草", "菊花", "金银花", "马齿苋", "姜黄",
+        "绿茶", "迷迭香", "甘草", "卡卡杜李",
+    )
+    algae_keywords = (
+        "螺旋藻", "小球藻", "红藻", "褐藻", "绿藻", "雨生红球藻", "裂壶藻",
+        "海藻", "海带", "裙带菜", "紫菜", "石莼", "藻粉", "藻类",
+    )
+    extract_keywords = ("提取物", "萃取物", "精油", "香油")
+    if "抗氧化" in role or "益生元" in role or "益生菌" in text:
+        return False
+    if "纤维" in role and "果肉" not in name and "果渣" not in name:
+        return False
+    if "酵母" in name:
+        return False
+    return any(word in name for word in (*herb_keywords, *algae_keywords, *extract_keywords))
+
+
+def _suggest_botanical_subtype(name: str) -> str:
+    if any(word in name for word in ("海藻", "海带", "裙带菜", "紫菜", "石莼", "褐藻")):
+        return "seaweed"
+    if any(word in name for word in ("螺旋藻", "小球藻", "红藻", "绿藻", "雨生红球藻", "裂壶藻", "藻粉", "藻类")):
+        return "algae"
+    if any(word in name for word in ("灵芝", "姬松茸", "蘑菇", "菌菇", "香菇", "猴头菇")):
+        return "mushroom"
+    if any(word in name for word in ("提取物", "萃取物", "精油", "香油")):
+        return "plant_extract"
+    return "herb"
 
 
 def normalize_function_attributes(value: Any) -> dict[str, str]:
