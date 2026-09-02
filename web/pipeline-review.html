@@ -979,7 +979,9 @@
         <div id="scienceIdentitySnapshot" class="science-identity-snapshot"></div>
         <select id="scienceCategory" hidden></select>
         <select id="scienceSubtype" hidden></select>
-        <select id="scienceEvidence" hidden></select>
+        <div class="science-profile-grid metadata">
+          <label><span class="field-label">证据等级（生效必选）</span><select id="scienceEvidence" class="cell-input"></select></label>
+        </div>
         <select id="scienceStatus" hidden></select>
         <div class="science-domain-section">
           <div class="science-domain-fields"><div class="title" style="font-size:14px;">评分科学属性</div><div class="muted">记录原料事实；主蛋白、次蛋白等由产品配方动态判断。</div><div id="scienceDomainFields" class="science-domain-fields-grid"></div></div>
@@ -3393,6 +3395,11 @@
     scienceCategory.addEventListener("change", () => { syncScienceSubtypes(); renderScienceDomainFields(activeScienceProfile || {}, true); });
     scienceProfileSave.addEventListener("click", async () => {
       if (!activeScienceProfile) return;
+      if (!scienceEvidence.value || scienceEvidence.value === "unknown") {
+        showToast("保存并生效前，请先选择证据等级", "error");
+        scienceEvidence.focus();
+        return;
+      }
       const originalText = scienceProfileSave.textContent;
       scienceProfileSave.disabled = true;
       scienceProfileSave.textContent = "保存中...";
