@@ -2119,6 +2119,16 @@ def create_app() -> Flask:
             content_type=content_type,
             file_size=storage_path.stat().st_size,
         )
+        defer_ocr = str(request.form.get("defer_ocr") or "").strip().lower() in {
+            "1", "true", "yes", "on",
+        }
+        if defer_ocr:
+            return jsonify({
+                "task": task_store.get_task(task_id),
+                "image": image,
+                "deferred": True,
+                "orchestrator_task": None,
+            }), 201
         orchestrator_task = create_orchestrator_task(
             "catfood_image_analysis",
             {
@@ -2154,6 +2164,75 @@ def create_app() -> Flask:
             "image": image,
             "orchestrator_task": orchestrator_task,
         }), 202
+
+    @flask_app.post("/api/cat-food/tasks/<task_id>/images/finalize")
+    def finalize_cat_food_task_images(task_id: str):
+        """Combine staged mini-program uploads and create exactly one OCR task."""
+        task = task_store.get_task(task_id)
+        if not task:
+            return _json_error("任务不存在。", 404)
+        if task.get("status") in {"running", "success"}:
+            return _json_error("该组图片已经提交，请勿重复操作。", 409)
+
+        payload_input = request.get_json(silent=True) or request.form
+        brand_name = str(payload_input.get("brand_name") or "").strip()
+        product_name = str(payload_input.get("product_name") or "").strip()
+        if not brand_name:
+            return _json_error("请填写品牌名。")
+        if not product_name:
+            return _json_error("请填写产品名。")
+
+        image_summaries = list(task.get("images") or [])
+        if not 1 <= len(image_summaries) <= 3:
+            return _json_error("请先上传 1～3 张产品图片。")
+        images = [task_store.get_image(str(item["id"])) for item in image_summaries]
+        if any(not image for image in images):
+            return _json_error("暂存图片记录不完整，请重新上传。", 400)
+        storage_paths = [Path(str(image["storage_path"])) for image in images if image]
+        if any(not path.is_file() for path in storage_paths):
+            return _json_error("暂存图片文件不存在，请重新上传。", 400)
+
+        image_dir = task_store.UPLOAD_DIR / _cat_food_upload_date_dir()
+        image_dir.mkdir(parents=True, exist_ok=True)
+        evidence_path = _dedupe_storage_path(
+            image_dir / f"{_safe_filename_stem(product_name)}_OCR_{datetime.now():%m%d%H%M%S}.jpg"
+        )
+        try:
+            _build_ocr_evidence_image(storage_paths, evidence_path)
+            image_ids = [str(image["id"]) for image in images if image]
+            payload = {
+                "cat_food_task_id": task_id,
+                "image_id": image_ids[0],
+                "image_ids": image_ids,
+                "image_count": len(image_ids),
+                "brand_name": brand_name,
+                "product_name": product_name,
+                "image_path": str(evidence_path),
+                "original_filename": "、".join(str(image["original_filename"]) for image in images if image),
+                "content_type": "image/jpeg",
+                "file_size": evidence_path.stat().st_size,
+                "sha256": task_store.file_sha256(evidence_path),
+            }
+            orchestrator_task = create_orchestrator_task("catfood_image_analysis", payload)
+            orchestrator_task = apply_orchestrator_node_result(
+                orchestrator_task["id"], "upload_check", call_status="success", output=payload,
+            )
+            for image in images:
+                if image:
+                    _cat_food_task_executor.submit(_parse_uploaded_image_task, task_id, image["id"])
+            return jsonify({
+                "task": task_store.get_task(task_id),
+                "images": images,
+                "evidence": {
+                    "image_path": str(evidence_path),
+                    "image_count": len(image_ids),
+                    "sha256": payload["sha256"],
+                },
+                "orchestrator_task": orchestrator_task,
+            }), 202
+        except Exception as exc:
+            evidence_path.unlink(missing_ok=True)
+            return _json_error(f"图片合并提交失败：{exc}", 400)
 
     @flask_app.post("/api/cat-food/tasks/<task_id>/image-batch")
     def upload_cat_food_task_image_batch(task_id: str):
