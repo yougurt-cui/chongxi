@@ -39,3 +39,41 @@ def test_manual_ocr_edit_preserves_original_structured_output(monkeypatch):
     assert captured["nutrition_values"] == original_output["nutrition_values"]
     assert captured["ocr_text"].startswith("配料：")
     assert captured["manual_review"] is True
+
+
+def test_repair_incomplete_brand_standardize_output(monkeypatch):
+    task = {
+        "id": "task-1",
+        "task_type": "catfood_image_analysis",
+        "payload": {},
+        "outputs": {
+            "ocr_formula": {
+                "source_id": 463,
+                "parsed_row_id": 577,
+                "brand": "安诺",
+            }
+        },
+    }
+
+    def fake_call_node(called_task, node_def):
+        assert called_task is task
+        assert node_def.node_code == "brand_standardize"
+        return {
+            "ok": True,
+            "source_id": 463,
+            "brand_id": 12,
+            "brand_status": "matched",
+            "standard_brand_name": "安诺",
+        }
+
+    monkeypatch.setattr(service, "_call_node", fake_call_node)
+
+    repaired = service._repair_incomplete_standardization_output(
+        task,
+        "brand_standardize",
+        {"source_id": 463, "product_key": ""},
+    )
+
+    assert repaired["brand_status"] == "matched"
+    assert repaired["brand_id"] == 12
+    assert repaired["source_id"] == 463
