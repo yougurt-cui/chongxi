@@ -258,7 +258,7 @@ def _upsert_fat_feature(cursor, *, formula: dict[str, Any], ingredient_text: str
             features.get("profile_status") or "ready",
             features.get("profile_version") or "science-v1",
             features.get("source_fingerprint") or formula.get("ingredient_fingerprint"),
-            features.get("needs_review"),
+            int(features.get("needs_review") or features.get("profile_status") == "needs_review"),
             features.get("review_reason"),
         ),
     )

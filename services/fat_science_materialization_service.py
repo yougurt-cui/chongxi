@@ -155,6 +155,7 @@ def build_science_features(
     result = {key: _joined(value) for key, value in fields.items()}
     result.update({
         "profile_status": "ready" if not missing else "needs_review",
+        "needs_review": 1 if missing else 0,
         "profile_version": SCIENCE_PROFILE_VERSION,
         "source_fingerprint": fingerprint,
         "missing_science_profiles": missing,
