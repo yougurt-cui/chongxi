@@ -80,6 +80,13 @@
   .market-ranking-board b { color:#172033; }
   .market-ranking-board small { color:#94a3b8; margin-left:6px; }
   .market-ranking-note { padding:14px 16px; border-radius:10px; background:#f8fafc; color:#64748b; font-size:12px; line-height:1.7; }
+  .market-ranking-tabs { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:18px; }
+  .market-ranking-tab { border:1px solid #dfe5eb; border-radius:999px; background:#fff; color:#526071; padding:9px 15px; font-weight:700; cursor:pointer; }
+  .market-ranking-tab.active { border-color:#9bd7bd; background:#eafaf4; color:#087a59; }
+  .function-ranking-product b { display:block; margin-bottom:5px; color:#172033; }
+  .function-ranking-product span { display:block; color:#64748b; font-size:12px; line-height:1.55; }
+  .prescription-tag { display:inline-block; padding:4px 8px; border-radius:999px; background:#fff1f1; color:#c43d3d; font-size:11px; font-weight:750; }
+  .source-link { color:#2376e5; text-decoration:none; font-weight:650; }
   .page { display:none; padding:28px 30px 48px; max-width:1500px; margin:auto; }
   .page.active { display:block; }
   .hero {
@@ -1359,6 +1366,7 @@ td b{color:var(--cx-text)!important}
     </div>
     <div class="actions"><button class="btn" id="marketRankingRefresh">刷新排行</button></div>
   </div>
+  <div id="marketRankingTabs" class="market-ranking-tabs"></div>
   <div id="marketRankingDashboard" class="market-ranking-dashboard">
     <div class="card"><div class="empty-state">正在加载市场 SKU 排行…</div></div>
   </div>
@@ -1498,14 +1506,52 @@ td b{color:var(--cx-text)!important}
       <tbody>${items.map(item => `<tr><td><span class="market-ranking-medal ${item.overall_rank <= 3 ? 'top' : ''}">${item.overall_rank}</span></td><td><div class="market-ranking-product"><b>${escapeHtml(item.brand)}／${escapeHtml(item.product_name)}</b><span>标准产品 ID：${item.product_id}</span></div></td><td><span class="market-ranking-score">${Number(item.score).toFixed(4)}</span></td><td><span class="market-ranking-best">第${item.best_rank}名</span></td><td>${item.boards.map(board => `<div class="market-ranking-board"><b>${escapeHtml(board.name)}第${board.rank}名</b><small>${escapeHtml(board.period)}</small></div>`).join('')}</td><td><span class="tag ${item.match_confidence === '明确' ? 'good' : ''}">${escapeHtml(item.match_confidence)}</span></td></tr>`).join('')}</tbody></table></div>
     <div class="market-ranking-note"><b>计算口径：</b>${escapeHtml(data.method)}<br><b>数据范围：</b>${escapeHtml(data.scope_note)}</div>`;
   }
+  let marketRankingData = null;
+  let functionRankingData = null;
+  let activeMarketRankingTab = '综合排行';
+
+  function renderMarketRankingTabs() {
+    const categories = functionRankingData?.categories || [];
+    const tabs = [{name:'综合排行'}, ...categories];
+    document.getElementById('marketRankingTabs').innerHTML = tabs.map(tab =>
+      `<button class="market-ranking-tab ${tab.name === activeMarketRankingTab ? 'active' : ''}" data-market-tab="${escapeHtml(tab.name)}">${escapeHtml(tab.name)}${tab.count == null ? '' : `（${tab.count}）`}</button>`
+    ).join('');
+    document.querySelectorAll('[data-market-tab]').forEach(button => button.addEventListener('click', () => {
+      activeMarketRankingTab = button.dataset.marketTab;
+      renderMarketRankingTabs();
+      if (activeMarketRankingTab === '综合排行') renderMarketRanking(marketRankingData || {summary:{},items:[]});
+      else renderFunctionRanking(activeMarketRankingTab);
+    }));
+  }
+
+  function renderFunctionRanking(category) {
+    const root = document.getElementById('marketRankingDashboard');
+    const items = (functionRankingData?.items || []).filter(item => item.effect_category === category);
+    const summary = functionRankingData?.summary || {};
+    root.innerHTML = `<div class="market-ranking-summary">
+      <div class="market-ranking-stat"><span>${escapeHtml(category)} SKU</span><b>${formatNumber(items.length)}</b></div>
+      <div class="market-ranking-stat"><span>其中处方粮</span><b>${formatNumber(items.filter(item=>item.is_prescription).length)}</b></div>
+      <div class="market-ranking-stat"><span>数据日期</span><b style="font-size:20px">${escapeHtml(summary.captured_date || '-')}</b></div>
+    </div>
+    <div class="market-ranking-table-wrap"><table class="market-ranking-table"><thead><tr><th>序号</th><th>品牌／SKU</th><th>热度量级</th><th>功效证据</th><th>排名性质</th><th>类型</th><th>来源</th></tr></thead><tbody>
+      ${items.map(item=>`<tr><td><span class="market-ranking-medal ${item.rank_in_list<=3?'top':''}">${item.rank_in_list}</span></td><td><div class="function-ranking-product"><b>${escapeHtml(item.brand)}</b><span>${escapeHtml(item.product_name)}</span></div></td><td><b>${escapeHtml(item.heat_level||'-')}</b></td><td>${escapeHtml(item.effect_evidence)}</td><td>${escapeHtml(item.ranking_nature)}</td><td>${item.is_prescription?'<span class="prescription-tag">处方粮</span>':'普通功能粮'}</td><td><a class="source-link" href="${escapeHtml(item.source_url)}" target="_blank" rel="noopener">${escapeHtml(item.platform)}来源</a></td></tr>`).join('')}
+    </tbody></table></div><div class="market-ranking-note"><b>数据说明：</b>${escapeHtml(functionRankingData?.scope_note||'')}</div>`;
+  }
   async function loadMarketRanking() {
     const root = document.getElementById('marketRankingDashboard');
     root.innerHTML = '<div class="card"><div class="empty-state">正在加载市场 SKU 排行…</div></div>';
     try {
-      const response = await fetch('/api/brand-growth-engine/sku-market-ranking', {cache:'no-store'});
-      const data = await response.json();
-      if (!response.ok || !data.ok) throw new Error(data.error || '请求失败');
-      renderMarketRanking(data);
+      const [rankingResponse, functionResponse] = await Promise.all([
+        fetch('/api/brand-growth-engine/sku-market-ranking', {cache:'no-store'}),
+        fetch('/api/brand-growth-engine/function-sku-rankings', {cache:'no-store'})
+      ]);
+      marketRankingData = await rankingResponse.json();
+      functionRankingData = await functionResponse.json();
+      if (!rankingResponse.ok || !marketRankingData.ok) throw new Error(marketRankingData.error || '综合排行请求失败');
+      if (!functionResponse.ok || !functionRankingData.ok) throw new Error(functionRankingData.error || '功效排行请求失败');
+      renderMarketRankingTabs();
+      if (activeMarketRankingTab === '综合排行') renderMarketRanking(marketRankingData);
+      else renderFunctionRanking(activeMarketRankingTab);
     } catch (error) {
       root.innerHTML = `<div class="dashboard-error">市场 SKU 排行加载失败：${escapeHtml(error.message)}</div>`;
     }

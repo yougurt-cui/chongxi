@@ -160,6 +160,35 @@ def build_sku_market_ranking() -> dict[str, Any]:
     }
 
 
+def build_function_sku_rankings() -> dict[str, Any]:
+    """Return JD functional-SKU candidate rankings grouped for the market tabs."""
+    conn = _experience_connect()
+    try:
+        rows = _rows(conn, """
+            SELECT id, effect_category, rank_in_list, brand, product_name,
+                   heat_level, effect_evidence, is_prescription, ranking_nature,
+                   platform, source_url, captured_date, notes
+            FROM catfood_function_sku_ranking
+            ORDER BY FIELD(effect_category, '肠胃软便','美毛','泌尿','化毛','低敏','控重'),
+                     rank_in_list, id
+        """)
+    finally:
+        conn.close()
+    category_order = ["肠胃软便", "美毛", "泌尿", "化毛", "低敏", "控重"]
+    counts = Counter(row["effect_category"] for row in rows)
+    return {
+        "ok": True,
+        "categories": [{"name": name, "count": counts.get(name, 0)} for name in category_order],
+        "items": rows,
+        "summary": {
+            "total_count": len(rows),
+            "prescription_count": sum(1 for row in rows if row["is_prescription"]),
+            "captured_date": str(max((row["captured_date"] for row in rows), default="")),
+        },
+        "scope_note": "公网京东榜单与类目页候选；排名仅代表抓取当时的页面展示顺序，不等同于跨平台销量排名。",
+    }
+
+
 def build_demand_dashboard() -> dict[str, Any]:
     # Need / Decision / Switch are comment-label tables in csv_labeling.
     # Other brand-growth aggregates below remain in the feature database.

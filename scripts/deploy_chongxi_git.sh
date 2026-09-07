@@ -53,6 +53,7 @@ git pull --ff-only origin "$REMOTE_BRANCH"
   scripts/rebuild_fiber_features_from_science.py \
   scripts/rebuild_fat_features_from_science.py \
   scripts/activate_secondary_micronutrient_attributes.py \
+  scripts/import_catfood_function_rankings.py \
   services/cat_food_task_service.py \
   services/cat_food_product_catalog_service.py \
   services/miniprogram_content_review_service.py \
