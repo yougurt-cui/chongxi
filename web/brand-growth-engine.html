@@ -60,6 +60,26 @@
   .account-dropdown .logout { color:#cf4141; }
   #food-compare { max-width:none; padding:0; }
   .food-compare-frame { display:block; width:100%; height:calc(100vh - 66px); border:0; background:#f8faff; }
+  .market-ranking-dashboard { display:grid; gap:18px; }
+  .market-ranking-summary { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:14px; }
+  .market-ranking-stat { background:#fff; border:1px solid #e5eaf1; border-radius:14px; padding:18px; }
+  .market-ranking-stat span { display:block; color:#64748b; font-size:12px; margin-bottom:8px; }
+  .market-ranking-stat b { font-size:27px; }
+  .market-ranking-table-wrap { overflow:auto; background:#fff; border:1px solid #e5eaf1; border-radius:14px; }
+  .market-ranking-table { min-width:1040px; }
+  .market-ranking-table th,.market-ranking-table td { vertical-align:top; }
+  .market-ranking-table th:first-child,.market-ranking-table td:first-child { text-align:center; width:76px; }
+  .market-ranking-medal { display:inline-grid; place-items:center; width:30px; height:30px; border-radius:9px; background:#eef2f7; font-weight:800; }
+  .market-ranking-medal.top { background:#fff1c7; color:#9a6700; }
+  .market-ranking-product b { display:block; margin-bottom:4px; }
+  .market-ranking-product span { color:#64748b; font-size:11px; }
+  .market-ranking-score { color:#087a59; font-weight:800; }
+  .market-ranking-best { display:inline-block; min-width:54px; padding:5px 9px; border-radius:999px; background:#eafaf4; color:#087a59; font-weight:750; text-align:center; }
+  .market-ranking-board { margin-bottom:6px; line-height:1.45; }
+  .market-ranking-board:last-child { margin-bottom:0; }
+  .market-ranking-board b { color:#172033; }
+  .market-ranking-board small { color:#94a3b8; margin-left:6px; }
+  .market-ranking-note { padding:14px 16px; border-radius:10px; background:#f8fafc; color:#64748b; font-size:12px; line-height:1.7; }
   .page { display:none; padding:28px 30px 48px; max-width:1500px; margin:auto; }
   .page.active { display:block; }
   .hero {
@@ -158,6 +178,7 @@
     .hero { flex-direction:column; }
     .page { padding:20px 14px 36px; }
     .form-row { grid-template-columns:1fr; gap:6px; }
+    .market-ranking-summary { grid-template-columns:1fr; }
   }
 </style>
 
@@ -775,20 +796,21 @@ td b{color:var(--cx-text)!important}
       <p>宠物食品品牌增长引擎</p>
     </div>
     <div class="nav">
-      <button class="active" data-page="demand-inventory">01 用户需求盘点</button>
-      <button data-page="opportunity">02 增长机会洞察</button>
-      <button data-page="competitor">03 竞品增长拆解</button>
-      <button data-page="ingredients">04 产品机会地图</button>
-      <button data-page="diagnosis">05 SKU 风险预测</button>
-      <button data-page="portrait">06 全网产品画像</button>
-      <button data-page="food-compare">07 宠物食品对比</button>
+      <button class="active" data-page="market-ranking">01 市场 SKU 排行</button>
+      <button data-page="demand-inventory">02 用户需求盘点</button>
+      <button data-page="opportunity">03 增长机会洞察</button>
+      <button data-page="competitor">04 竞品增长拆解</button>
+      <button data-page="ingredients">05 产品机会地图</button>
+      <button data-page="diagnosis">06 SKU 风险预测</button>
+      <button data-page="portrait">07 全网产品画像</button>
+      <button data-page="food-compare">08 宠物食品对比</button>
     </div>
     <div class="sidebar-bottom">PROFESSIONAL WORKSPACE<br>用户反馈 · SKU · 配方 · 原料</div>
   </aside>
 
   <main>
     <div class="topbar">
-      <strong id="topTitle">用户需求盘点</strong>
+      <strong id="topTitle">市场 SKU 排行</strong>
       <div class="account-tools">
         <div id="subscriptionAlert" class="subscription-alert">正在验证企业登录状态…</div>
         <div class="user"><span id="dataUpdatedAt">数据更新：—</span></div>
@@ -802,7 +824,7 @@ td b{color:var(--cx-text)!important}
       </div>
     </div>
 
-    <section class="page active" id="demand-inventory">
+    <section class="page" id="demand-inventory">
       <div class="hero">
         <div>
           <h2>用户需求盘点</h2>
@@ -1329,6 +1351,19 @@ td b{color:var(--cx-text)!important}
   <iframe class="food-compare-frame" src="/cat-food-compare.html?embed=1" title="宠物食品对比" loading="lazy"></iframe>
 </section>
 
+<section class="page active" id="market-ranking">
+  <div class="hero">
+    <div>
+      <h2>市场 SKU 交叉排行</h2>
+      <p>将外部榜单 SKU 映射至本地标准产品，跨榜单汇总产品的上榜强度与最佳名次。</p>
+    </div>
+    <div class="actions"><button class="btn" id="marketRankingRefresh">刷新排行</button></div>
+  </div>
+  <div id="marketRankingDashboard" class="market-ranking-dashboard">
+    <div class="card"><div class="empty-state">正在加载市场 SKU 排行…</div></div>
+  </div>
+</section>
+
 
 
 
@@ -1426,7 +1461,8 @@ td b{color:var(--cx-text)!important}
     ingredients:'产品机会地图',
     diagnosis:'SKU 风险预测',
     portrait:'全网产品画像',
-    'food-compare':'宠物食品对比'
+    'food-compare':'宠物食品对比',
+    'market-ranking':'市场 SKU 排行'
   };
   document.querySelectorAll('.nav button').forEach(btn => {
     btn.addEventListener('click', () => {
@@ -1450,6 +1486,32 @@ td b{color:var(--cx-text)!important}
     const pad = part => String(part).padStart(2, '0');
     return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
   };
+  function renderMarketRanking(data) {
+    const root = document.getElementById('marketRankingDashboard');
+    const summary = data.summary || {}, items = data.items || [];
+    root.innerHTML = `<div class="market-ranking-summary">
+      <div class="market-ranking-stat"><span>纳入标准产品</span><b>${formatNumber(summary.ranked_product_count)}</b></div>
+      <div class="market-ranking-stat"><span>有效映射 SKU</span><b>${formatNumber(summary.mapped_sku_count)}</b></div>
+      <div class="market-ranking-stat"><span>覆盖榜单</span><b>${formatNumber(summary.list_count)}</b></div>
+    </div>
+    <div class="market-ranking-table-wrap"><table class="market-ranking-table"><thead><tr><th>综合排名</th><th>本地标准 SKU</th><th>综合积分</th><th>最好名次</th><th>榜单名称及原始名次</th><th>匹配等级</th></tr></thead>
+      <tbody>${items.map(item => `<tr><td><span class="market-ranking-medal ${item.overall_rank <= 3 ? 'top' : ''}">${item.overall_rank}</span></td><td><div class="market-ranking-product"><b>${escapeHtml(item.brand)}／${escapeHtml(item.product_name)}</b><span>标准产品 ID：${item.product_id}</span></div></td><td><span class="market-ranking-score">${Number(item.score).toFixed(4)}</span></td><td><span class="market-ranking-best">第${item.best_rank}名</span></td><td>${item.boards.map(board => `<div class="market-ranking-board"><b>${escapeHtml(board.name)}第${board.rank}名</b><small>${escapeHtml(board.period)}</small></div>`).join('')}</td><td><span class="tag ${item.match_confidence === '明确' ? 'good' : ''}">${escapeHtml(item.match_confidence)}</span></td></tr>`).join('')}</tbody></table></div>
+    <div class="market-ranking-note"><b>计算口径：</b>${escapeHtml(data.method)}<br><b>数据范围：</b>${escapeHtml(data.scope_note)}</div>`;
+  }
+  async function loadMarketRanking() {
+    const root = document.getElementById('marketRankingDashboard');
+    root.innerHTML = '<div class="card"><div class="empty-state">正在加载市场 SKU 排行…</div></div>';
+    try {
+      const response = await fetch('/api/brand-growth-engine/sku-market-ranking', {cache:'no-store'});
+      const data = await response.json();
+      if (!response.ok || !data.ok) throw new Error(data.error || '请求失败');
+      renderMarketRanking(data);
+    } catch (error) {
+      root.innerHTML = `<div class="dashboard-error">市场 SKU 排行加载失败：${escapeHtml(error.message)}</div>`;
+    }
+  }
+  document.getElementById('marketRankingRefresh')?.addEventListener('click', loadMarketRanking);
+  loadMarketRanking();
   const dateNode = document.getElementById('dataUpdatedAt');
   if (dateNode) dateNode.textContent = `数据更新：${formatDate(new Date())}`;
   const renderBars = (items, color = 'var(--cx-green)') => {

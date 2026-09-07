@@ -2028,6 +2028,14 @@ def create_app() -> Flask:
         except Exception as exc:
             return _json_error(f"Experience 用户洞察加载失败：{exc}", 500)
 
+    @flask_app.get("/api/brand-growth-engine/sku-market-ranking")
+    def brand_growth_engine_sku_market_ranking():
+        try:
+            from services.brand_growth_engine_service import build_sku_market_ranking
+            return jsonify(build_sku_market_ranking())
+        except Exception as exc:
+            return _json_error(f"SKU 市场排行加载失败：{exc}", 500)
+
     @flask_app.get("/business/workbench.html")
     def business_workbench_html():
         host = request.host.split(":", 1)[0]

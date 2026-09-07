@@ -11,6 +11,28 @@ import pymysql
 from app_config import get_mysql_config
 
 
+# 已人工复核的排行 SKU → 本地标准产品映射。系列级疑似匹配不在此列表中。
+SKU_RANKING_PRODUCT_MAP = {
+    "SKU0002": (91, "明确"),
+    "SKU0015": (111, "明确"), "SKU0016": (111, "明确"),
+    "SKU0019": (109, "明确"), "SKU0020": (109, "明确"),
+    "SKU0025": (106, "明确"), "SKU0026": (16, "较强"),
+    "SKU0027": (40, "明确"), "SKU0028": (16, "较强"),
+    "SKU0033": (141, "明确"), "SKU0034": (139, "明确"),
+    "SKU0037": (138, "明确"), "SKU0038": (139, "明确"),
+    "SKU0040": (143, "明确"), "SKU0045": (112, "较强"),
+    "SKU0047": (8, "明确"), "SKU0048": (8, "明确"),
+    "SKU0052": (5, "明确"), "SKU0054": (5, "明确"),
+    "SKU0057": (114, "较强"), "SKU0058": (114, "较强"),
+    "SKU0059": (116, "明确"),
+    "SKU0060": (24, "较强"), "SKU0061": (24, "较强"),
+    "SKU0063": (24, "较强"),
+    "SKU0064": (2, "明确"), "SKU0065": (2, "明确"),
+    "SKU0066": (22, "明确"), "SKU0068": (22, "明确"),
+    "SKU0069": (22, "明确"),
+}
+
+
 def _split(value: Any) -> list[str]:
     return [part.strip() for part in str(value or "").split("|") if part.strip()]
 
@@ -38,6 +60,99 @@ def _top(counter: Counter, limit: int = 10) -> list[dict[str, Any]]:
         {"name": name, "count": count, "share": round(count * 100 / total, 1)}
         for name, count in counter.most_common(limit)
     ]
+
+
+def build_sku_market_ranking() -> dict[str, Any]:
+    """Build the reviewed cross-list ranking shown in the growth engine."""
+    sku_ids = list(SKU_RANKING_PRODUCT_MAP)
+    placeholders = ",".join(["%s"] * len(sku_ids))
+    conn = _experience_connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"""
+                SELECT sku_id, product_name, ranking_source, statistical_period,
+                       rank_in_list, updated_at
+                FROM catfood_sku_ranking
+                WHERE sku_id IN ({placeholders})
+                  AND statistical_period LIKE '2026%%'
+                  AND rank_in_list IS NOT NULL
+                """,
+                sku_ids,
+            )
+            ranking_rows = list(cur.fetchall())
+            product_ids = sorted({value[0] for value in SKU_RANKING_PRODUCT_MAP.values()})
+            product_placeholders = ",".join(["%s"] * len(product_ids))
+            cur.execute(
+                f"""
+                SELECT p.product_id, b.standard_brand_name, p.standard_product_name
+                FROM catfood_standard_product p
+                JOIN catfood_standard_brand b ON b.brand_id = p.brand_id
+                WHERE p.product_id IN ({product_placeholders})
+                """,
+                product_ids,
+            )
+            products = {row["product_id"]: row for row in cur.fetchall()}
+    finally:
+        conn.close()
+
+    best_by_list: dict[tuple[int, str, str], dict[str, Any]] = {}
+    for row in ranking_rows:
+        product_id, confidence = SKU_RANKING_PRODUCT_MAP[row["sku_id"]]
+        key = (product_id, row["ranking_source"], row["statistical_period"])
+        current = best_by_list.get(key)
+        if current is None or row["rank_in_list"] < current["rank_in_list"]:
+            best_by_list[key] = {**row, "product_id": product_id, "confidence": confidence}
+
+    grouped: dict[int, list[dict[str, Any]]] = {}
+    for row in best_by_list.values():
+        grouped.setdefault(row["product_id"], []).append(row)
+
+    items = []
+    confidence_weight = {"明确": 2, "较强": 1}
+    for product_id, appearances in grouped.items():
+        product = products.get(product_id)
+        if not product:
+            continue
+        appearances.sort(key=lambda row: (row["rank_in_list"], row["ranking_source"]))
+        score = sum(1 / int(row["rank_in_list"]) for row in appearances)
+        items.append({
+            "product_id": product_id,
+            "brand": product["standard_brand_name"],
+            "product_name": product["standard_product_name"],
+            "score": round(score, 4),
+            "best_rank": min(int(row["rank_in_list"]) for row in appearances),
+            "list_count": len(appearances),
+            "match_confidence": min(
+                (row["confidence"] for row in appearances),
+                key=lambda value: confidence_weight[value],
+            ),
+            "boards": [
+                {"name": row["ranking_source"], "rank": int(row["rank_in_list"]),
+                 "period": row["statistical_period"]}
+                for row in appearances
+            ],
+        })
+
+    items.sort(key=lambda row: (
+        -row["score"], row["best_rank"],
+        -confidence_weight[row["match_confidence"]], -row["list_count"], row["product_id"],
+    ))
+    for index, item in enumerate(items, 1):
+        item["overall_rank"] = index
+
+    return {
+        "ok": True,
+        "items": items,
+        "summary": {
+            "ranked_product_count": len(items),
+            "mapped_sku_count": len(ranking_rows),
+            "list_count": len({row["ranking_source"] for row in ranking_rows}),
+            "period": "2026",
+        },
+        "method": "同一标准产品在同榜单同周期去重取最好名次；跨榜积分为各榜单 1÷榜内排名之和。",
+        "scope_note": "仅纳入人工复核为“明确”或“较强”的映射；系列级疑似匹配与 2022 年历史记录已排除。",
+    }
 
 
 def build_demand_dashboard() -> dict[str, Any]:
