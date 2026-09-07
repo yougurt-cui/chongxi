@@ -5,11 +5,13 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import re
 import sys
 from pathlib import Path
+from xml.etree import ElementTree as ET
+from zipfile import ZipFile
 
 import pymysql
-from openpyxl import load_workbook
 
 BASE_DIR = Path(__file__).resolve().parents[1]
 if str(BASE_DIR) not in sys.path:
@@ -23,46 +25,96 @@ HEADERS = (
     "序号", "品牌", "SKU/商品名", "评论/热度量级", "功效证据", "处方粮",
     "排名性质", "平台", "来源URL", "抓取日期", "备注",
 )
+MAIN_NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+REL_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
 
 
 def _text(value: object) -> str:
     return str(value or "").strip()
 
 
+def _column_index(cell_ref: str) -> int:
+    match = re.match(r"[A-Z]+", cell_ref)
+    if not match:
+        raise ValueError(f"无效单元格坐标：{cell_ref}")
+    result = 0
+    for char in match.group(0):
+        result = result * 26 + ord(char) - 64
+    return result - 1
+
+
+def _sheet_matrices(workbook_path: Path) -> dict[str, list[list[str]]]:
+    with ZipFile(workbook_path) as archive:
+        shared_strings: list[str] = []
+        if "xl/sharedStrings.xml" in archive.namelist():
+            shared_root = ET.fromstring(archive.read("xl/sharedStrings.xml"))
+            shared_strings = [
+                "".join(node.text or "" for node in item.iter(f"{{{MAIN_NS}}}t"))
+                for item in shared_root.findall(f"{{{MAIN_NS}}}si")
+            ]
+        workbook = ET.fromstring(archive.read("xl/workbook.xml"))
+        relationships = ET.fromstring(archive.read("xl/_rels/workbook.xml.rels"))
+        targets = {item.attrib["Id"]: item.attrib["Target"] for item in relationships}
+        matrices: dict[str, list[list[str]]] = {}
+        for sheet in workbook.find(f"{{{MAIN_NS}}}sheets") or []:
+            name = sheet.attrib["name"]
+            target = targets[sheet.attrib[f"{{{REL_NS}}}id"]]
+            if target.startswith("/"):
+                xml_path = target.lstrip("/")
+            elif target.startswith("xl/"):
+                xml_path = target
+            else:
+                xml_path = f"xl/{target}"
+            root = ET.fromstring(archive.read(xml_path))
+            matrix: list[list[str]] = []
+            for row in root.findall(f".//{{{MAIN_NS}}}sheetData/{{{MAIN_NS}}}row"):
+                values: list[str] = []
+                for cell in row.findall(f"{{{MAIN_NS}}}c"):
+                    index = _column_index(cell.attrib["r"])
+                    while len(values) <= index:
+                        values.append("")
+                    value_node = cell.find(f"{{{MAIN_NS}}}v")
+                    value = "" if value_node is None else value_node.text or ""
+                    if cell.attrib.get("t") == "s" and value:
+                        value = shared_strings[int(value)]
+                    values[index] = value.strip()
+                matrix.append(values)
+            matrices[name] = matrix
+        return matrices
+
+
 def read_rows(workbook_path: Path) -> list[dict[str, object]]:
-    workbook = load_workbook(workbook_path, read_only=True, data_only=True)
+    matrices = _sheet_matrices(workbook_path)
     rows: list[dict[str, object]] = []
-    try:
-        for category in CATEGORIES:
-            if category not in workbook.sheetnames:
-                raise ValueError(f"缺少工作表：{category}")
-            sheet = workbook[category]
-            headers = tuple(_text(cell.value) for cell in next(sheet.iter_rows(min_row=1, max_row=1)))
-            if headers[: len(HEADERS)] != HEADERS:
-                raise ValueError(f"工作表 {category} 字段与预期不一致")
-            for values in sheet.iter_rows(min_row=2, values_only=True):
-                if not any(value is not None and _text(value) for value in values):
-                    continue
-                row = dict(zip(HEADERS, values[: len(HEADERS)]))
-                rank = int(row["序号"])
-                key_text = "|".join((category, str(rank), _text(row["品牌"]), _text(row["SKU/商品名"]), _text(row["抓取日期"])))
-                rows.append({
-                    "source_row_key": hashlib.sha256(key_text.encode("utf-8")).hexdigest(),
-                    "effect_category": category,
-                    "rank_in_list": rank,
-                    "brand": _text(row["品牌"]),
-                    "product_name": _text(row["SKU/商品名"]),
-                    "heat_level": _text(row["评论/热度量级"]) or None,
-                    "effect_evidence": _text(row["功效证据"]),
-                    "is_prescription": 1 if _text(row["处方粮"]) == "是" else 0,
-                    "ranking_nature": _text(row["排名性质"]),
-                    "platform": _text(row["平台"]),
-                    "source_url": _text(row["来源URL"]),
-                    "captured_date": row["抓取日期"],
-                    "notes": _text(row["备注"]) or None,
-                })
-    finally:
-        workbook.close()
+    for category in CATEGORIES:
+        if category not in matrices:
+            raise ValueError(f"缺少工作表：{category}")
+        matrix = matrices[category]
+        headers = tuple(_text(value) for value in matrix[0])
+        if headers[: len(HEADERS)] != HEADERS:
+            raise ValueError(f"工作表 {category} 字段与预期不一致")
+        for values in matrix[1:]:
+            if not any(_text(value) for value in values):
+                continue
+            padded = values[: len(HEADERS)] + [""] * max(0, len(HEADERS) - len(values))
+            row = dict(zip(HEADERS, padded))
+            rank = int(row["序号"])
+            key_text = "|".join((category, str(rank), _text(row["品牌"]), _text(row["SKU/商品名"]), _text(row["抓取日期"])))
+            rows.append({
+                "source_row_key": hashlib.sha256(key_text.encode("utf-8")).hexdigest(),
+                "effect_category": category,
+                "rank_in_list": rank,
+                "brand": _text(row["品牌"]),
+                "product_name": _text(row["SKU/商品名"]),
+                "heat_level": _text(row["评论/热度量级"]) or None,
+                "effect_evidence": _text(row["功效证据"]),
+                "is_prescription": 1 if _text(row["处方粮"]) == "是" else 0,
+                "ranking_nature": _text(row["排名性质"]),
+                "platform": _text(row["平台"]),
+                "source_url": _text(row["来源URL"]),
+                "captured_date": _text(row["抓取日期"]),
+                "notes": _text(row["备注"]) or None,
+            })
     return rows
 
 
