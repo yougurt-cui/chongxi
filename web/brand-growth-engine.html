@@ -1520,8 +1520,8 @@ td b{color:var(--cx-text)!important}
   function renderFunctionRanking(category) {
     const root = document.getElementById('marketRankingDashboard');
     const items = (functionRankingData?.items || []).filter(item => item.effect_category === category);
-    root.innerHTML = `<div class="market-ranking-table-wrap"><table class="market-ranking-table"><thead><tr><th>序号</th><th>品牌／SKU</th><th>热度量级</th><th>功效证据</th><th>排名性质</th><th>类型</th></tr></thead><tbody>
-      ${items.map(item=>`<tr><td><span class="market-ranking-medal ${item.rank_in_list<=3?'top':''}">${item.rank_in_list}</span></td><td><div class="function-ranking-product"><b>${escapeHtml(item.brand)}</b><span>${escapeHtml(item.product_name)}</span></div></td><td><b>${escapeHtml(item.heat_level||'-')}</b></td><td>${escapeHtml(item.effect_evidence)}</td><td>${escapeHtml(item.ranking_nature)}</td><td>${item.is_prescription?'<span class="prescription-tag">处方粮</span>':'普通功能粮'}</td></tr>`).join('')}
+    root.innerHTML = `<div class="market-ranking-table-wrap"><table class="market-ranking-table"><thead><tr><th>序号</th><th>品牌／SKU</th><th>热度量级</th><th>功效证据</th><th>类型</th></tr></thead><tbody>
+      ${items.map(item=>`<tr><td><span class="market-ranking-medal ${item.rank_in_list<=3?'top':''}">${item.rank_in_list}</span></td><td><div class="function-ranking-product"><b>${escapeHtml(item.brand)}</b><span>${escapeHtml(item.product_name)}</span></div></td><td><b>${escapeHtml(item.heat_level||'-')}</b></td><td>${escapeHtml(item.effect_evidence)}</td><td>${item.is_prescription?'<span class="prescription-tag">处方粮</span>':'普通功能粮'}</td></tr>`).join('')}
     </tbody></table></div>`;
   }
   async function loadMarketRanking() {
