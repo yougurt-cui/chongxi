@@ -79,7 +79,6 @@
   .market-ranking-board:last-child { margin-bottom:0; }
   .market-ranking-board b { color:#172033; }
   .market-ranking-board small { color:#94a3b8; margin-left:6px; }
-  .market-ranking-note { padding:14px 16px; border-radius:10px; background:#f8fafc; color:#64748b; font-size:12px; line-height:1.7; }
   .market-ranking-tabs { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:18px; }
   .market-ranking-tab { border:1px solid #dfe5eb; border-radius:999px; background:#fff; color:#526071; padding:9px 15px; font-weight:700; cursor:pointer; }
   .market-ranking-tab.active { border-color:#9bd7bd; background:#eafaf4; color:#087a59; }
@@ -1498,8 +1497,7 @@ td b{color:var(--cx-text)!important}
     const root = document.getElementById('marketRankingDashboard');
     const items = data.items || [];
     root.innerHTML = `<div class="market-ranking-table-wrap"><table class="market-ranking-table"><thead><tr><th>综合排名</th><th>本地标准 SKU</th><th>综合积分</th><th>最好名次</th><th>榜单名称及原始名次</th><th>匹配等级</th></tr></thead>
-      <tbody>${items.map(item => `<tr><td><span class="market-ranking-medal ${item.overall_rank <= 3 ? 'top' : ''}">${item.overall_rank}</span></td><td><div class="market-ranking-product"><b>${escapeHtml(item.brand)}／${escapeHtml(item.product_name)}</b><span>标准产品 ID：${item.product_id}</span></div></td><td><span class="market-ranking-score">${Number(item.score).toFixed(4)}</span></td><td><span class="market-ranking-best">第${item.best_rank}名</span></td><td>${item.boards.map(board => `<div class="market-ranking-board"><b>${escapeHtml(board.name)}第${board.rank}名</b><small>${escapeHtml(board.period)}</small></div>`).join('')}</td><td><span class="tag ${item.match_confidence === '明确' ? 'good' : ''}">${escapeHtml(item.match_confidence)}</span></td></tr>`).join('')}</tbody></table></div>
-    <div class="market-ranking-note"><b>计算口径：</b>${escapeHtml(data.method)}<br><b>数据范围：</b>${escapeHtml(data.scope_note)}</div>`;
+      <tbody>${items.map(item => `<tr><td><span class="market-ranking-medal ${item.overall_rank <= 3 ? 'top' : ''}">${item.overall_rank}</span></td><td><div class="market-ranking-product"><b>${escapeHtml(item.brand)}／${escapeHtml(item.product_name)}</b><span>标准产品 ID：${item.product_id}</span></div></td><td><span class="market-ranking-score">${Number(item.score).toFixed(4)}</span></td><td><span class="market-ranking-best">第${item.best_rank}名</span></td><td>${item.boards.map(board => `<div class="market-ranking-board"><b>${escapeHtml(board.name)}第${board.rank}名</b><small>${escapeHtml(board.period)}</small></div>`).join('')}</td><td><span class="tag ${item.match_confidence === '明确' ? 'good' : ''}">${escapeHtml(item.match_confidence)}</span></td></tr>`).join('')}</tbody></table></div>`;
   }
   let marketRankingData = null;
   let functionRankingData = null;
@@ -1524,7 +1522,7 @@ td b{color:var(--cx-text)!important}
     const items = (functionRankingData?.items || []).filter(item => item.effect_category === category);
     root.innerHTML = `<div class="market-ranking-table-wrap"><table class="market-ranking-table"><thead><tr><th>序号</th><th>品牌／SKU</th><th>热度量级</th><th>功效证据</th><th>排名性质</th><th>类型</th></tr></thead><tbody>
       ${items.map(item=>`<tr><td><span class="market-ranking-medal ${item.rank_in_list<=3?'top':''}">${item.rank_in_list}</span></td><td><div class="function-ranking-product"><b>${escapeHtml(item.brand)}</b><span>${escapeHtml(item.product_name)}</span></div></td><td><b>${escapeHtml(item.heat_level||'-')}</b></td><td>${escapeHtml(item.effect_evidence)}</td><td>${escapeHtml(item.ranking_nature)}</td><td>${item.is_prescription?'<span class="prescription-tag">处方粮</span>':'普通功能粮'}</td></tr>`).join('')}
-    </tbody></table></div><div class="market-ranking-note"><b>数据说明：</b>${escapeHtml(functionRankingData?.scope_note||'')}</div>`;
+    </tbody></table></div>`;
   }
   async function loadMarketRanking() {
     const root = document.getElementById('marketRankingDashboard');
