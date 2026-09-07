@@ -1628,6 +1628,7 @@ def build_node_input(task: dict[str, Any], node_def: NodeDefinition) -> dict[str
                 "original_filename": payload.get("original_filename"),
                 "sha256": payload.get("sha256"),
                 "incremental_only": True,
+                "reparse_current_upload": True,
                 "move_success_images": False,
             }
         if node_def.node_code == "ingredient_extract":

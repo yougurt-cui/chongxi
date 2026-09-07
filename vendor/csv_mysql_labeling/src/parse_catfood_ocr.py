@@ -1397,6 +1397,7 @@ def parse_catfood_ingredient_ocr_json(
     target_table: str = "catfood_ingredient_ocr_parsed",
     limit: int = 500,
     incremental_only: bool = True,
+    source_id: Optional[int] = None,
 ) -> ParseSummary:
     source_table = _safe_table(source_table)
     target_table = _safe_table(target_table)
@@ -1404,7 +1405,14 @@ def parse_catfood_ingredient_ocr_json(
     sync_parsed_source_identity(engine, source_table=source_table, target_table=target_table)
 
     lim = max(1, int(limit))
-    if incremental_only:
+    if source_id is not None:
+        fetch_sql = f"""
+        SELECT s.id, s.image_path, s.image_name, s.file_sha256, s.ocr_json
+        FROM `{source_table}` s
+        WHERE s.id = :source_id
+        LIMIT 1
+        """
+    elif incremental_only:
         fetch_sql = f"""
         SELECT s.id, s.image_path, s.image_name, s.file_sha256, s.ocr_json
         FROM `{source_table}` s
@@ -1434,8 +1442,9 @@ def parse_catfood_ingredient_ocr_json(
         ORDER BY s.id DESC
         LIMIT :lim
         """
+    query_params = {"source_id": int(source_id)} if source_id is not None else {"lim": lim}
     with engine.begin() as conn:
-        rows = conn.execute(text(fetch_sql), {"lim": lim}).mappings().all()
+        rows = conn.execute(text(fetch_sql), query_params).mappings().all()
 
     batch_id = uuid.uuid4().hex[:12]
     if not rows:

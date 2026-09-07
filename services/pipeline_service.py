@@ -131,6 +131,7 @@ def ingest_catfood_ingredients(payload: Dict[str, Any]) -> Dict[str, Any]:
     parse_limit = int(payload.get("parse_limit") or 500)
     guarantee_limit = int(payload.get("guarantee_limit") or 200)
     incremental_only = bool(payload.get("incremental_only", True))
+    reparse_current_upload = bool(payload.get("reparse_current_upload", False))
     move_success_images = bool(payload.get("move_success_images", True))
     sleep_seconds = float(payload.get("sleep_seconds", 1.5))
 
@@ -173,12 +174,27 @@ def ingest_catfood_ingredients(payload: Dict[str, Any]) -> Dict[str, Any]:
         )
 
     if "parse_ocr_json" in steps:
+        current_source_id = None
+        if reparse_current_upload:
+            file_sha256 = payload.get("file_sha256") or payload.get("sha256") or _first_success_sha(result)
+            if not file_sha256:
+                raise RuntimeError("本次上传缺少文件指纹，无法执行定向 OCR 解析")
+            current_context = fetch_ocr_context_by_sha256(
+                db_config=db_config,
+                file_sha256=str(file_sha256),
+                ocr_table=ocr_table,
+                parsed_table=parsed_table,
+            )
+            current_source_id = current_context.get("source_id")
+            if current_source_id is None:
+                raise RuntimeError("本次上传未找到 OCR 源记录，无法执行定向 OCR 解析")
         result["results"]["parse_ocr_json"] = parse_ingredient_ocr(
             db_config=db_config,
             source_table=ocr_table,
             target_table=parsed_table,
             limit=parse_limit,
             incremental_only=incremental_only,
+            source_id=int(current_source_id) if current_source_id is not None else None,
         )
 
     if "parse_guarantee" in steps:

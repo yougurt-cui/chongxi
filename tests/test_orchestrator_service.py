@@ -1,6 +1,28 @@
 from services import orchestrator_service as service
 
 
+def test_image_upload_forces_reparse_of_current_source():
+    task = {
+        "id": "task-1",
+        "task_type": "catfood_image_analysis",
+        "payload": {
+            "image_path": "/tmp/example.jpg",
+            "sha256": "abc123",
+        },
+        "outputs": {},
+    }
+    node = next(
+        item for item in service.get_pipeline_definition("catfood_image_analysis")
+        if item.node_code == "ocr_formula"
+    )
+
+    payload = service.build_node_input(task, node)
+
+    assert payload["incremental_only"] is True
+    assert payload["reparse_current_upload"] is True
+    assert payload["sha256"] == "abc123"
+
+
 def test_ocr_formula_accepts_ingredient_list_without_heading():
     result = service._check_ocr_formula(
         {

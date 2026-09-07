@@ -231,6 +231,7 @@ def parse_ingredient_ocr(
     target_table: str = DEFAULT_PARSED_TABLE,
     limit: int = 500,
     incremental_only: bool = True,
+    source_id: Optional[int] = None,
 ) -> Dict[str, Any]:
     engine = make_engine(db_config)
     try:
@@ -240,6 +241,7 @@ def parse_ingredient_ocr(
             target_table=target_table,
             limit=limit,
             incremental_only=incremental_only,
+            source_id=source_id,
         )
         return {
             "scanned": result.scanned,
