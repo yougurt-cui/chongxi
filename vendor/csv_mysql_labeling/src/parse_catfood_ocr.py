@@ -54,6 +54,7 @@ INGREDIENT_TAIL_LABELS = [
     "换粮步骤", "换粮建议", "产品信息", "PRODUCT INFORMATION",
     "88VIP", "顶部", "店铺", "客服", "加入购物车", "立即购买",
     "guaranteed analysis", "feeding guide", "feeding guidelines", "calorie content",
+    "analytical constituents",
 ]
 INGREDIENT_HEAD_LABELS = sorted(
     set(INGREDIENT_LABELS + ["成分表", "原料表", "配方成分"] + INGREDIENT_LABELS_FALLBACK),
@@ -810,6 +811,11 @@ def _extract_multiline(lines: Sequence[str], labels: Sequence[str]) -> Optional[
         line = _normalize(raw)
         if not line:
             continue
+        # “添加剂组成”包含通用配料关键词“组成”。它是明确的排除区块，
+        # 不能因为子串命中而抢在后面的“主要原料”之前成为配料候选。
+        additive_heading = re.sub(r"[\s【】\[\]()（）]+", "", line).lower()
+        if additive_heading.startswith(("添加剂组成", "营养添加剂")):
+            continue
         lower_line = line.lower()
         hit = None
         for label in labels:
@@ -854,12 +860,17 @@ def _extract_block_from_full_text(full_text: str, labels: Sequence[str]) -> Opti
 
     end_label_re = "|".join(re.escape(x) for x in END_SECTION_LABELS + INGREDIENT_TAIL_LABELS)
     for label in labels:
-        m = re.search(
+        matches = re.finditer(
             rf"{re.escape(label)}(?:\s*[（(][^）)]*[）)])?\s*[:：]?\s*(.+?)(?=(?:\n\s*(?:{end_label_re})(?:\s*[:：])?)|$)",
             text,
             flags=re.IGNORECASE | re.DOTALL,
         )
-        if m:
+        for m in matches:
+            heading_window = re.sub(
+                r"[\s【】\[\]()（）]+", "", text[max(0, m.start() - 12):m.end()]
+            ).lower()
+            if "添加剂组成" in heading_window or "营养添加剂" in heading_window:
+                continue
             cand = _normalize(m.group(1))
             if cand:
                 return cand
