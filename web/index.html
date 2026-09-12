@@ -80,7 +80,7 @@
       font-size: 13px;
     }
 
-    .status {
+    .account {
       display: inline-flex;
       align-items: center;
       gap: 8px;
@@ -94,12 +94,35 @@
       box-shadow: var(--shadow);
     }
 
-    .status-dot {
+    .account-dot {
       width: 8px;
       height: 8px;
       border-radius: 50%;
       background: var(--accent);
     }
+
+    .account-button {
+      border: 0;
+      background: none;
+      color: var(--primary);
+      cursor: pointer;
+      font: inherit;
+      font-weight: 800;
+      padding: 0;
+    }
+
+    .account-name { color: #344054; }
+
+    .entry.is-locked {
+      position: relative;
+      border-color: #e5e7eb;
+      background: #fcfcfd;
+    }
+
+    .entry.is-locked .entry-action { background: #98a2b3; }
+    .entry.is-locked .entry-icon { background: #f2f4f7; color: #667085; }
+    .access-note { margin-top: 10px; color: #b54708; font-size: 12px; font-weight: 700; }
+    .access-note:empty { display: none; }
 
     .hero {
       background: var(--panel);
@@ -264,7 +287,7 @@
           <p>Chongxi product, data and business consoles</p>
         </div>
       </div>
-      <div class="status"><span class="status-dot"></span>本地入口 127.0.0.1:8000</div>
+      <div class="account" id="account-area" aria-live="polite"></div>
     </header>
 
     <section class="hero">
@@ -291,7 +314,7 @@
         <span class="entry-action">进入官网</span>
       </a>
 
-      <a class="entry" href="/pipeline-review.html">
+      <a class="entry" href="/pipeline-review.html" data-roles="data_admin">
         <div>
           <div class="entry-top">
             <div>
@@ -304,11 +327,12 @@
             <span class="chip">人工确认</span>
             <span class="chip">生产线</span>
           </div>
+          <div class="access-note"></div>
         </div>
         <span class="entry-action">进入生产线</span>
       </a>
 
-      <a class="entry" href="/consumer-portal.html">
+      <a class="entry" href="/consumer-portal.html" data-roles="personal,clinic,business,data_admin">
         <div>
           <div class="entry-top">
             <div>
@@ -321,11 +345,12 @@
             <span class="chip">8501 / 8502</span>
             <span class="chip">C端</span>
           </div>
+          <div class="access-note"></div>
         </div>
         <span class="entry-action">选择 C 端功能</span>
       </a>
 
-      <a class="entry" href="/formula-clue-analysis.html">
+      <a class="entry" href="/formula-clue-analysis.html" data-roles="clinic,data_admin">
         <div>
           <div class="entry-top">
             <div>
@@ -338,11 +363,12 @@
             <span class="chip">医院版</span>
             <span class="chip">饮食分析</span>
           </div>
+          <div class="access-note"></div>
         </div>
         <span class="entry-action">进入分析页</span>
       </a>
 
-      <a class="entry" href="/business/workbench.html">
+      <a class="entry" href="/business/workbench.html" data-roles="business,data_admin">
         <div>
           <div class="entry-top">
             <div>
@@ -355,11 +381,12 @@
             <span class="chip">8503</span>
             <span class="chip">B端</span>
           </div>
+          <div class="access-note"></div>
         </div>
         <span class="entry-action">进入 B 端</span>
       </a>
 
-      <a class="entry" href="/enterprise-portal.html#login">
+      <a class="entry" href="/enterprise-portal.html#login" data-roles="business,data_admin">
         <div>
           <div class="entry-top">
             <div>
@@ -372,6 +399,7 @@
             <span class="chip">品牌增长</span>
             <span class="chip">策略工作台</span>
           </div>
+          <div class="access-note"></div>
         </div>
         <span class="entry-action">进入增长引擎</span>
       </a>
@@ -379,5 +407,40 @@
 
     <div class="footer">宠析工作台 · 多模块统一入口</div>
   </main>
+  <script>
+    const accountArea = document.querySelector('#account-area');
+    const protectedEntries = [...document.querySelectorAll('.entry[data-roles]')];
+
+    function goToLogin(returnTo = location.pathname + location.search + location.hash) {
+      location.assign(`/login?return_to=${encodeURIComponent(returnTo)}`);
+    }
+
+    function renderAccount(user) {
+      if (!user) {
+        accountArea.innerHTML = '<span class="account-dot"></span><span>未登录</span><button class="account-button" id="login-button">登录宠析</button>';
+        document.querySelector('#login-button').addEventListener('click', () => goToLogin('/workbench.html'));
+        return;
+      }
+      accountArea.innerHTML = `<span class="account-dot"></span><span class="account-name">${user.name}</span><span>· ${user.role_label}</span><button class="account-button" id="logout-button">退出</button>`;
+      document.querySelector('#logout-button').addEventListener('click', async () => { await fetch('/api/workbench-auth/logout', { method: 'POST' }); location.reload(); });
+    }
+
+    function applyAccess(user) {
+      protectedEntries.forEach((entry) => {
+        const roles = entry.dataset.roles.split(',');
+        const allowed = user && roles.includes(user.role);
+        const note = entry.querySelector('.access-note');
+        entry.classList.toggle('is-locked', !allowed);
+        note.textContent = allowed ? '' : (!user ? '需要管理员登录' : '当前账号无权访问');
+        entry.addEventListener('click', (event) => {
+          if (allowed) return;
+          event.preventDefault();
+          goToLogin(entry.getAttribute('href'));
+        });
+      });
+    }
+
+    fetch('/api/workbench-auth/me').then(response => response.json()).then(({ user }) => { renderAccount(user); applyAccess(user); }).catch(() => { renderAccount(null); applyAccess(null); });
+  </script>
 </body>
 </html>

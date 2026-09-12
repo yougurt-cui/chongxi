@@ -14,8 +14,10 @@ from typing import Any
 
 from PIL import Image, ImageOps
 
-from flask import Flask, Response, jsonify, redirect, request, send_file, send_from_directory
+from flask import Flask, Response, jsonify, redirect, request, send_file, send_from_directory, session
+from werkzeug.security import check_password_hash
 from werkzeug.utils import secure_filename
+from urllib.parse import urlencode
 import yaml
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -1921,6 +1923,14 @@ def _build_recommendation_response(payload: dict[str, Any]) -> dict[str, Any]:
 
 def create_app() -> Flask:
     flask_app = Flask(__name__)
+    session_secret = os.environ.get("CHONGXI_SESSION_SECRET")
+    if not session_secret:
+        raise RuntimeError("必须配置 CHONGXI_SESSION_SECRET，工作台登录不会使用代码内置密钥。")
+    flask_app.config.update(
+        SECRET_KEY=session_secret,
+        SESSION_COOKIE_HTTPONLY=True,
+        SESSION_COOKIE_SAMESITE="Lax",
+    )
     flask_app.register_blueprint(consumer_api)
     flask_app.register_blueprint(business_api)
     flask_app.register_blueprint(catfood_standardization_api)
@@ -1968,16 +1978,87 @@ def create_app() -> Flask:
     def workbench_html():
         return send_from_directory(WEB_DIR, "index.html")
 
+    def _safe_return_to(value: str | None) -> str:
+        """Only allow redirects back to a local page after sign-in."""
+        value = (value or "/workbench.html").strip()
+        if not value.startswith("/") or value.startswith("//") or "://" in value:
+            return "/workbench.html"
+        return value
+
+    def _workbench_login_required() -> Response | None:
+        """Prevent direct URL access to a protected workbench page."""
+        if session.get("workbench_user", {}).get("role") == "data_admin":
+            return None
+        return redirect(f"/login?{urlencode({'return_to': request.full_path.rstrip('?')})}")
+
+    @flask_app.get("/login")
+    def login_page():
+        return send_from_directory(WEB_DIR, "login.html")
+
+    @flask_app.get("/api/workbench-auth/me")
+    def current_user():
+        user = session.get("workbench_user")
+        return jsonify({"user": user}), 200
+
+    @flask_app.post("/api/workbench-auth/login")
+    def login():
+        payload = request.get_json(silent=True) or {}
+        username = str(payload.get("username", "")).strip()
+        password = str(payload.get("password", ""))
+        accounts = (
+            {
+                "username": (os.environ.get("WORKBENCH_ADMIN_USERNAME") or "").strip(),
+                "password_hash": (os.environ.get("WORKBENCH_ADMIN_PASSWORD_HASH") or "").strip(),
+                "name": "管理员",
+                "role_label": "数据管理员",
+            },
+            {
+                "username": (os.environ.get("WORKBENCH_MEMBER_USERNAME") or "").strip(),
+                "password_hash": (os.environ.get("WORKBENCH_MEMBER_PASSWORD_HASH") or "").strip(),
+                "name": "成员",
+                "role_label": "工作台成员",
+            },
+        )
+        matched_account = None
+        for account in accounts:
+            if not account["username"] or username != account["username"]:
+                continue
+            try:
+                if check_password_hash(account["password_hash"], password):
+                    matched_account = account
+            except ValueError:
+                pass
+            break
+        if matched_account is None:
+            return jsonify({"error": "账号或密码错误。"}), 401
+        session.clear()
+        session["workbench_user"] = {
+            "username": matched_account["username"],
+            "name": matched_account["name"],
+            "role": "data_admin",
+            "role_label": matched_account["role_label"],
+        }
+        return jsonify({"user": session["workbench_user"], "return_to": _safe_return_to(payload.get("return_to"))})
+
+    @flask_app.post("/api/workbench-auth/logout")
+    def logout():
+        session.pop("workbench_user", None)
+        return jsonify({"ok": True})
+
     @flask_app.get("/official-site.html")
     def official_site_html():
         return send_from_directory(WEB_DIR, "official-site.html")
 
     @flask_app.get("/consumer-portal.html")
     def consumer_portal_html():
+        if response := _workbench_login_required():
+            return response
         return send_from_directory(WEB_DIR, "consumer-portal.html")
 
     @flask_app.get("/pipeline-review.html")
     def pipeline_review_html():
+        if response := _workbench_login_required():
+            return response
         response = send_from_directory(WEB_DIR, "pipeline-review.html")
         response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
         response.headers["Pragma"] = "no-cache"
@@ -1986,10 +2067,14 @@ def create_app() -> Flask:
 
     @flask_app.get("/formula-clue-analysis.html")
     def formula_clue_analysis_html():
+        if response := _workbench_login_required():
+            return response
         return send_from_directory(WEB_DIR, "formula-clue-analysis.html")
 
     @flask_app.get("/brand-growth-engine.html")
     def brand_growth_engine_html():
+        if response := _workbench_login_required():
+            return response
         return send_from_directory(WEB_DIR, "brand-growth-engine.html")
 
     @flask_app.get("/enterprise-portal.html")
@@ -2046,6 +2131,8 @@ def create_app() -> Flask:
 
     @flask_app.get("/business/workbench.html")
     def business_workbench_html():
+        if response := _workbench_login_required():
+            return response
         host = request.host.split(":", 1)[0]
         if host in {"127.0.0.1", "localhost", "0.0.0.0"}:
             return redirect(f"http://{host}:8503/business/order-analysis/", code=302)
