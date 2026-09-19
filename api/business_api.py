@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from flask import Blueprint, jsonify, request
+from functools import wraps
+
+from flask import Blueprint, jsonify, request, session
 
 from services.business_analysis_service import (
     get_business_product_options,
@@ -21,7 +23,21 @@ from services.competitor_growth_service import (
 business_api = Blueprint("business_api", __name__, url_prefix="/api/business")
 
 
+def business_access_required(handler):
+    """Limit business analysis data to its two owning workbench roles."""
+    @wraps(handler)
+    def wrapped(*args, **kwargs):
+        user = session.get("workbench_user") or {}
+        if not user:
+            return jsonify({"ok": False, "error": "请先登录。"}), 401
+        if user.get("role") not in {"data_admin", "brand_growth"}:
+            return jsonify({"ok": False, "error": "当前账号无权访问该功能。"}), 403
+        return handler(*args, **kwargs)
+    return wrapped
+
+
 @business_api.get("/summary")
+@business_access_required
 def business_summary():
     try:
         return jsonify(get_business_summary()), 200
@@ -30,6 +46,7 @@ def business_summary():
 
 
 @business_api.get("/product-options")
+@business_access_required
 def business_product_options():
     try:
         return jsonify(
@@ -47,6 +64,7 @@ def business_product_options():
 
 
 @business_api.post("/product-positioning")
+@business_access_required
 def business_product_positioning():
     payload = request.get_json(silent=True) or {}
     try:
@@ -57,6 +75,7 @@ def business_product_positioning():
 
 
 @business_api.get("/competitor-breakdown/options")
+@business_access_required
 def competitor_breakdown_options():
     try:
         symptom = request.args.get("symptom", "").strip()
@@ -77,6 +96,7 @@ def competitor_breakdown_options():
 
 
 @business_api.post("/competitor-breakdown/analyze")
+@business_access_required
 def competitor_breakdown_analyze():
     try:
         return jsonify(build_competitor_breakdown(request.get_json(silent=True) or {})), 200
@@ -85,6 +105,7 @@ def competitor_breakdown_analyze():
 
 
 @business_api.post("/sku-risk-summary")
+@business_access_required
 def sku_risk_summary():
     try:
         return jsonify(build_sku_risk_summary(request.get_json(silent=True) or {})), 200
@@ -93,6 +114,7 @@ def sku_risk_summary():
 
 
 @business_api.get("/product-portrait")
+@business_access_required
 def product_portrait():
     try:
         return jsonify(build_product_portrait(

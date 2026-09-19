@@ -32,8 +32,10 @@ _SSH_KEY_PATH = os.getenv(
 
 # ---- Remote MySQL (accessed through tunnel) ----
 _REMOTE_MYSQL_USER = os.getenv("DB_SYNC_REMOTE_MYSQL_USER", "root")
-_REMOTE_MYSQL_PASSWORD = os.getenv(
-    "DB_SYNC_REMOTE_MYSQL_PASSWORD", os.getenv("MYSQL_PASSWORD", "")
+_REMOTE_MYSQL_PASSWORD = (
+    os.getenv("DB_SYNC_REMOTE_MYSQL_PASSWORD")
+    or os.getenv("MYSQL_PASSWORD")
+    or str(get_mysql_config().get("password") or "")
 )
 _REMOTE_MYSQL_DB = os.getenv("DB_SYNC_REMOTE_MYSQL_DATABASE", "csv_labeling")
 

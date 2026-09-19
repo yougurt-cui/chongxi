@@ -1991,6 +1991,22 @@ def create_app() -> Flask:
             return None
         return redirect(f"/login?{urlencode({'return_to': request.full_path.rstrip('?')})}")
 
+    def _role_login_required(*allowed_roles: str) -> Response | None:
+        """Require a signed-in workbench user with one of the supplied roles."""
+        user = session.get("workbench_user") or {}
+        if user.get("role") in allowed_roles:
+            return None
+        return redirect(f"/login?{urlencode({'return_to': request.full_path.rstrip('?')})}")
+
+    def _role_api_required(*allowed_roles: str) -> Response | None:
+        """Return a JSON auth error for protected workbench APIs."""
+        user = session.get("workbench_user") or {}
+        if not user:
+            return jsonify({"error": "请先登录。"}), 401
+        if user.get("role") not in allowed_roles:
+            return jsonify({"error": "当前账号无权访问该功能。"}), 403
+        return None
+
     @flask_app.get("/login")
     def login_page():
         return send_from_directory(WEB_DIR, "login.html")
@@ -2029,6 +2045,33 @@ def create_app() -> Flask:
             except ValueError:
                 pass
             break
+        if matched_account is None:
+            # Enterprise accounts are also valid identities at the outer
+            # workbench.  They map to a deliberately narrow role rather than
+            # inheriting the administrator's access.
+            from services import enterprise_service
+
+            try:
+                enterprise_result = enterprise_service.login_enterprise(username, password)
+            except Exception:
+                # Do not disclose database/configuration details through the
+                # public login endpoint.
+                enterprise_result = {"ok": False}
+            if enterprise_result.get("ok"):
+                company = enterprise_result["company"]
+                session.clear()
+                session["workbench_user"] = {
+                    "username": company["contact_phone"],
+                    "name": company["company_name"],
+                    "role": "brand_growth",
+                    "role_label": "宠物食品增长引擎",
+                    "company_id": company["id"],
+                    "company": company,
+                }
+                return jsonify({
+                    "user": session["workbench_user"],
+                    "return_to": _safe_return_to(payload.get("return_to")),
+                })
         if matched_account is None:
             return jsonify({"error": "账号或密码错误。"}), 401
         session.clear()
@@ -2073,7 +2116,7 @@ def create_app() -> Flask:
 
     @flask_app.get("/brand-growth-engine.html")
     def brand_growth_engine_html():
-        if response := _workbench_login_required():
+        if response := _role_login_required("data_admin", "brand_growth"):
             return response
         return send_from_directory(WEB_DIR, "brand-growth-engine.html")
 
@@ -2083,6 +2126,8 @@ def create_app() -> Flask:
 
     @flask_app.get("/api/brand-growth-engine/demand-dashboard")
     def brand_growth_engine_demand_dashboard():
+        if response := _role_api_required("data_admin", "brand_growth"):
+            return response
         try:
             from services.brand_growth_engine_service import build_demand_dashboard
             return jsonify(build_demand_dashboard())
@@ -2091,6 +2136,8 @@ def create_app() -> Flask:
 
     @flask_app.get("/api/brand-growth-engine/cross-analysis")
     def brand_growth_engine_cross_analysis():
+        if response := _role_api_required("data_admin", "brand_growth"):
+            return response
         try:
             from services.brand_growth_engine_service import build_cross_demand_analysis
             return jsonify(build_cross_demand_analysis())
@@ -2099,6 +2146,8 @@ def create_app() -> Flask:
 
     @flask_app.get("/api/brand-growth-engine/disease-representatives")
     def brand_growth_engine_disease_representatives():
+        if response := _role_api_required("data_admin", "brand_growth"):
+            return response
         try:
             from services.brand_growth_engine_service import build_disease_representatives
             return jsonify(build_disease_representatives(request.args.get("symptom")))
@@ -2107,6 +2156,8 @@ def create_app() -> Flask:
 
     @flask_app.get("/api/brand-growth-engine/experience-insight")
     def brand_growth_engine_experience_insight():
+        if response := _role_api_required("data_admin", "brand_growth"):
+            return response
         try:
             from services.brand_growth_engine_service import build_experience_demand_insight
             return jsonify(build_experience_demand_insight(request.args.get("symptom")))
@@ -2115,6 +2166,8 @@ def create_app() -> Flask:
 
     @flask_app.get("/api/brand-growth-engine/sku-market-ranking")
     def brand_growth_engine_sku_market_ranking():
+        if response := _role_api_required("data_admin", "brand_growth"):
+            return response
         try:
             from services.brand_growth_engine_service import build_sku_market_ranking
             return jsonify(build_sku_market_ranking())
@@ -2123,6 +2176,8 @@ def create_app() -> Flask:
 
     @flask_app.get("/api/brand-growth-engine/function-sku-rankings")
     def brand_growth_engine_function_sku_rankings():
+        if response := _role_api_required("data_admin", "brand_growth"):
+            return response
         try:
             from services.brand_growth_engine_service import build_function_sku_rankings
             return jsonify(build_function_sku_rankings())

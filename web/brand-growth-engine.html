@@ -1391,9 +1391,6 @@ td b{color:var(--cx-text)!important}
     window.open(`/enterprise-portal.html${params}#purchase`, '_blank', 'noopener');
   };
   const redirectToPortal = (page = 'login') => window.location.replace(portalUrl(page));
-  const cachedCompany = enterpriseSession.getCompany();
-  if (!enterpriseSession.getCompanyId() || !cachedCompany) redirectToPortal('login');
-
   const accountTrigger = document.getElementById('accountTrigger');
   const accountDropdown = document.getElementById('accountDropdown');
   accountTrigger?.addEventListener('click', () => {
@@ -1404,9 +1401,10 @@ td b{color:var(--cx-text)!important}
     if (!event.target.closest('.account-menu') && accountDropdown) accountDropdown.hidden = true;
   });
   document.getElementById('accountPurchase')?.addEventListener('click', openPurchasePage);
-  document.getElementById('accountLogout')?.addEventListener('click', () => {
+  document.getElementById('accountLogout')?.addEventListener('click', async () => {
+    await fetch('/api/workbench-auth/logout', { method: 'POST' }).catch(() => {});
     enterpriseSession.clear();
-    redirectToPortal('login');
+    window.location.replace('/login?return_to=%2Fworkbench.html');
   });
 
   function renderEnterpriseAccount(company, remainingDays) {
@@ -1458,7 +1456,19 @@ td b{color:var(--cx-text)!important}
       redirectToPortal('login');
     }
   }
-  verifyEnterpriseAccess();
+  async function bootstrapEnterpriseAccess() {
+    try {
+      const response = await fetch('/api/workbench-auth/me', { cache: 'no-store' });
+      const data = await response.json();
+      const mappedCompany = data.user?.company;
+      if (mappedCompany?.id) enterpriseSession.saveCompany(mappedCompany);
+    } catch (_) {}
+    if (!enterpriseSession.getCompanyId() || !enterpriseSession.getCompany()) {
+      return redirectToPortal('login');
+    }
+    return verifyEnterpriseAccess();
+  }
+  bootstrapEnterpriseAccess();
 
   const titles = {
     'demand-inventory':'用户需求盘点',

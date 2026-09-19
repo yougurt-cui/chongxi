@@ -6,7 +6,7 @@ import hmac
 import os
 from functools import wraps
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, jsonify, request, session
 
 from services import enterprise_service as svc
 
@@ -90,6 +90,17 @@ def login_enterprise():
     if not contact_phone or not password:
         return jsonify({"ok": False, "message": "请输入手机号和密码"}), 400
     result = svc.login_enterprise(contact_phone, password)
+    if result["ok"]:
+        company = result["company"]
+        session.clear()
+        session["workbench_user"] = {
+            "username": company["contact_phone"],
+            "name": company["company_name"],
+            "role": "brand_growth",
+            "role_label": "宠物食品增长引擎",
+            "company_id": company["id"],
+            "company": company,
+        }
     return jsonify(result), 200 if result["ok"] else 400
 
 
