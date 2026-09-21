@@ -16,6 +16,13 @@ from services.miniprogram_cat_profile_service import (
     list_cat_profiles,
     update_cat_profile,
 )
+from services.miniprogram_chat_service import (
+    create_conversation as create_chat_conversation,
+    delete_conversation as delete_chat_conversation,
+    handle_message as handle_chat_message,
+    list_conversations as list_chat_conversations,
+    list_messages as list_chat_messages,
+)
 from services.miniprogram_food_change_service import (
     analyze_and_store,
     get_catalog_product_ingredients,
@@ -257,6 +264,79 @@ def delete_cat_profile_endpoint(profile_id: str):
         return jsonify({"ok": False, "error": str(exc)}), 404
     except ValueError as exc:
         return jsonify({"ok": False, "error": str(exc)}), 400
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@miniprogram_api.post("/chat/conversations")
+def create_chat_conversation_endpoint():
+    try:
+        return jsonify(create_chat_conversation(
+            _user_id_from_request(required=True), _json_payload(),
+        )), 201
+    except PermissionError as exc:
+        return _auth_error_response(exc)
+    except LookupError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 404
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@miniprogram_api.get("/chat/conversations")
+def list_chat_conversations_endpoint():
+    try:
+        return jsonify(list_chat_conversations(
+            _user_id_from_request(required=True), limit=request.args.get("limit") or 50,
+        )), 200
+    except PermissionError as exc:
+        return _auth_error_response(exc)
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@miniprogram_api.post("/chat/conversations/<conversation_id>/messages")
+def send_chat_message_endpoint(conversation_id: str):
+    try:
+        return jsonify(handle_chat_message(
+            _user_id_from_request(required=True), conversation_id, _json_payload(),
+        )), 200
+    except PermissionError as exc:
+        return _auth_error_response(exc)
+    except LookupError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 404
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@miniprogram_api.get("/chat/conversations/<conversation_id>/messages")
+def list_chat_messages_endpoint(conversation_id: str):
+    try:
+        return jsonify(list_chat_messages(
+            _user_id_from_request(required=True), conversation_id,
+            limit=request.args.get("limit") or 100,
+        )), 200
+    except PermissionError as exc:
+        return _auth_error_response(exc)
+    except LookupError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 404
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@miniprogram_api.delete("/chat/conversations/<conversation_id>")
+def delete_chat_conversation_endpoint(conversation_id: str):
+    try:
+        return jsonify(delete_chat_conversation(
+            _user_id_from_request(required=True), conversation_id,
+        )), 200
+    except PermissionError as exc:
+        return _auth_error_response(exc)
+    except LookupError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 404
     except Exception as exc:
         return jsonify({"ok": False, "error": str(exc)}), 500
 
