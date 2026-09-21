@@ -3,6 +3,8 @@
 
 from flask import Blueprint, jsonify, request
 
+from api.enterprise_api import admin_required
+
 from services.miniprogram_content_review_service import list_content_reviews, review_content
 from services.miniprogram_moment_report_service import list_moment_reports, review_moment_report
 from services.miniprogram_idea_service import (
@@ -13,9 +15,40 @@ from services.miniprogram_idea_service import (
     update_idea,
 )
 from services.pipeline_service import ingest_catfood_ingredients
+from services.miniprogram_food_submission_service import (
+    list_food_submissions_admin,
+    review_food_submission,
+)
 
 
 pipeline_api = Blueprint("pipeline_api", __name__, url_prefix="/api")
+
+
+@pipeline_api.get("/pipeline/food-submissions")
+@admin_required
+def pipeline_food_submissions():
+    try:
+        return jsonify(list_food_submissions_admin(
+            review_status=request.args.get("review_status") or "pending",
+            limit=request.args.get("limit") or 100,
+        )), 200
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@pipeline_api.post("/pipeline/food-submissions/<submission_id>/<action>")
+@admin_required
+def pipeline_food_submission_review(submission_id: str, action: str):
+    try:
+        return jsonify(review_food_submission(
+            submission_id, request.get_json(silent=True) or {}, action=action,
+        )), 200
+    except LookupError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 404
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
 
 
 @pipeline_api.post("/catfood/ingredients/ingest")

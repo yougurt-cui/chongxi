@@ -138,6 +138,11 @@ def _normalize_payload(payload: dict[str, Any], *, partial: bool = False) -> dic
         normalized["name"] = name
     if "breed" in payload or not partial:
         normalized["breed"] = _clean(payload.get("breed"), 64)
+    if "animal_type" in payload or not partial:
+        animal_type = _clean(payload.get("animal_type"), 16).lower()
+        if animal_type and animal_type not in {"cat", "dog", "unknown"}:
+            raise ValueError("animal_type 仅支持 cat/dog/unknown")
+        normalized["animal_type"] = animal_type or "cat"
     if "sex" in payload or not partial:
         sex = _clean(payload.get("sex"), 16)
         if sex and sex not in {"male", "female", "unknown", "公", "母", "未知"}:
@@ -166,6 +171,26 @@ def _normalize_payload(payload: dict[str, Any], *, partial: bool = False) -> dic
         normalized["diseases"] = _clean_list(payload.get("diseases"), "diseases")
     if "symptoms" in payload or not partial:
         normalized["symptoms"] = _clean_list(payload.get("symptoms"), "symptoms")
+    if "health_status" in payload or not partial:
+        normalized["health_status"] = _clean_list(payload.get("health_status"), "health_status")
+    if "avatar_image_id" in payload or not partial:
+        normalized["avatar_image_id"] = _clean(payload.get("avatar_image_id"), 32)
+    diet = payload.get("diet")
+    if diet is not None and not isinstance(diet, dict):
+        raise ValueError("diet 必须是对象")
+    diet = diet or {}
+    if "food_brand" in payload or "brand" in diet or not partial:
+        normalized["food_brand"] = _clean(
+            payload.get("food_brand") if "food_brand" in payload else diet.get("brand"),
+            128,
+        )
+    if "food_product" in payload or "product" in diet or "product_name" in diet or not partial:
+        normalized["food_product"] = _clean(
+            payload.get("food_product")
+            if "food_product" in payload
+            else diet.get("product", diet.get("product_name")),
+            512,
+        )
     if "notes" in payload or not partial:
         normalized["notes"] = _clean(payload.get("notes"), 1000)
     if "is_default" in payload or not partial:
@@ -174,10 +199,17 @@ def _normalize_payload(payload: dict[str, Any], *, partial: bool = False) -> dic
 
 
 def _serialize(row: dict[str, Any]) -> dict[str, Any]:
+    food_brand = row.get("food_brand") or ""
+    food_product = row.get("food_product") or ""
+    avatar_image_id = row.get("avatar_image_id") or ""
+    avatar_url = row.get("avatar_url") or ""
+    if avatar_image_id:
+        avatar_url = f"/api/miniprogram/pet-images/{avatar_image_id}"
     return {
         "id": row.get("id"),
         "user_id": row.get("user_id"),
         "name": row.get("name") or "",
+        "animal_type": row.get("animal_type") or "cat",
         "breed": row.get("breed") or "",
         "sex": row.get("sex") or "",
         "neutered": None if row.get("neutered") is None else bool(row.get("neutered")),
@@ -185,10 +217,15 @@ def _serialize(row: dict[str, Any]) -> dict[str, Any]:
         "age_text": row.get("age_text") or "",
         "age_months": row.get("age_months"),
         "weight_kg": None if row.get("weight_kg") is None else float(row.get("weight_kg")),
-        "avatar_url": row.get("avatar_url") or "",
+        "avatar_url": avatar_url,
         "allergies": _json_loads(row.get("allergies_json"), []),
         "diseases": _json_loads(row.get("diseases_json"), []),
         "symptoms": _json_loads(row.get("symptoms_json"), []),
+        "health_status": _json_loads(row.get("health_status_json"), []),
+        "avatar_image_id": avatar_image_id,
+        "food_brand": food_brand,
+        "food_product": food_product,
+        "diet": {"brand": food_brand, "product": food_product},
         "notes": row.get("notes") or "",
         "is_default": bool(row.get("is_default")),
         "created_at": str(row.get("created_at") or ""),
@@ -205,6 +242,7 @@ def init_miniprogram_cat_profile_tables() -> None:
                     id CHAR(32) NOT NULL,
                     user_id VARCHAR(128) NOT NULL,
                     name VARCHAR(64) NOT NULL,
+                    animal_type VARCHAR(16) NOT NULL DEFAULT 'cat',
                     breed VARCHAR(64) NULL,
                     sex VARCHAR(16) NULL,
                     neutered TINYINT NULL,
@@ -216,6 +254,10 @@ def init_miniprogram_cat_profile_tables() -> None:
                     allergies_json LONGTEXT NULL,
                     diseases_json LONGTEXT NULL,
                     symptoms_json LONGTEXT NULL,
+                    health_status_json LONGTEXT NULL,
+                    avatar_image_id CHAR(32) NULL,
+                    food_brand VARCHAR(128) NULL,
+                    food_product VARCHAR(512) NULL,
                     notes TEXT NULL,
                     is_default TINYINT NOT NULL DEFAULT 0,
                     status VARCHAR(16) NOT NULL DEFAULT 'active',
@@ -227,6 +269,28 @@ def init_miniprogram_cat_profile_tables() -> None:
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
                 """
             )
+            cursor.execute(f"SHOW COLUMNS FROM {TABLE_NAME}")
+            existing_columns = {str(row["Field"]) for row in cursor.fetchall() or []}
+            if "food_brand" not in existing_columns:
+                cursor.execute(
+                    f"ALTER TABLE {TABLE_NAME} ADD COLUMN food_brand VARCHAR(128) NULL AFTER symptoms_json"
+                )
+            if "food_product" not in existing_columns:
+                cursor.execute(
+                    f"ALTER TABLE {TABLE_NAME} ADD COLUMN food_product VARCHAR(512) NULL AFTER food_brand"
+                )
+            if "animal_type" not in existing_columns:
+                cursor.execute(
+                    f"ALTER TABLE {TABLE_NAME} ADD COLUMN animal_type VARCHAR(16) NOT NULL DEFAULT 'cat' AFTER name"
+                )
+            if "health_status_json" not in existing_columns:
+                cursor.execute(
+                    f"ALTER TABLE {TABLE_NAME} ADD COLUMN health_status_json LONGTEXT NULL AFTER symptoms_json"
+                )
+            if "avatar_image_id" not in existing_columns:
+                cursor.execute(
+                    f"ALTER TABLE {TABLE_NAME} ADD COLUMN avatar_image_id CHAR(32) NULL AFTER health_status_json"
+                )
         conn.commit()
 
 
@@ -241,6 +305,10 @@ def _unset_other_defaults(cursor, user_id: str, profile_id: str | None = None) -
 
 def create_cat_profile(payload: dict[str, Any]) -> dict[str, Any]:
     data = _normalize_payload(payload)
+    if data["avatar_image_id"]:
+        from services.miniprogram_pet_image_service import validate_pet_image_owner
+
+        validate_pet_image_owner(data["avatar_image_id"], data["user_id"])
     init_miniprogram_cat_profile_tables()
     profile_id = uuid.uuid4().hex
     now = _now()
@@ -251,19 +319,27 @@ def create_cat_profile(payload: dict[str, Any]) -> dict[str, Any]:
             cursor.execute(
                 f"""
                 INSERT INTO {TABLE_NAME} (
-                    id,user_id,name,breed,sex,neutered,birthday,age_text,age_months,weight_kg,
-                    avatar_url,allergies_json,diseases_json,symptoms_json,notes,is_default,status,created_at,updated_at
-                ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'active',%s,%s)
+                    id,user_id,name,animal_type,breed,sex,neutered,birthday,age_text,age_months,weight_kg,
+                    avatar_url,allergies_json,diseases_json,symptoms_json,health_status_json,avatar_image_id,
+                    food_brand,food_product,notes,is_default,status,created_at,updated_at
+                ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'active',%s,%s)
                 """,
                 (
-                    profile_id, data["user_id"], data["name"], data["breed"] or None, data["sex"] or None,
+                    profile_id, data["user_id"], data["name"], data["animal_type"],
+                    data["breed"] or None, data["sex"] or None,
                     data["neutered"], data["birthday"], data["age_text"] or None, data["age_months"],
                     data["weight_kg"], data["avatar_url"] or None, _json_dumps(data["allergies"]),
-                    _json_dumps(data["diseases"]), _json_dumps(data["symptoms"]), data["notes"] or None,
-                    data["is_default"], now, now,
+                    _json_dumps(data["diseases"]), _json_dumps(data["symptoms"]),
+                    _json_dumps(data["health_status"]), data["avatar_image_id"] or None,
+                    data["food_brand"] or None, data["food_product"] or None,
+                    data["notes"] or None, data["is_default"], now, now,
                 ),
             )
         conn.commit()
+    if data["avatar_image_id"]:
+        from services.miniprogram_pet_image_service import bind_pet_image
+
+        bind_pet_image(data["avatar_image_id"], user_id=data["user_id"], profile_id=profile_id)
     item = get_cat_profile(data["user_id"], profile_id)
     return {"ok": True, "item": item}
 
@@ -314,8 +390,13 @@ def update_cat_profile(user_id: Any, profile_id: Any, payload: dict[str, Any]) -
     if not data:
         raise ValueError("没有可更新字段")
     init_miniprogram_cat_profile_tables()
+    if data.get("avatar_image_id"):
+        from services.miniprogram_pet_image_service import validate_pet_image_owner
+
+        validate_pet_image_owner(data["avatar_image_id"], cleaned_user_id)
     column_map = {
         "name": "name",
+        "animal_type": "animal_type",
         "breed": "breed",
         "sex": "sex",
         "neutered": "neutered",
@@ -327,6 +408,10 @@ def update_cat_profile(user_id: Any, profile_id: Any, payload: dict[str, Any]) -
         "allergies": "allergies_json",
         "diseases": "diseases_json",
         "symptoms": "symptoms_json",
+        "health_status": "health_status_json",
+        "avatar_image_id": "avatar_image_id",
+        "food_brand": "food_brand",
+        "food_product": "food_product",
         "notes": "notes",
         "is_default": "is_default",
     }
@@ -335,7 +420,7 @@ def update_cat_profile(user_id: Any, profile_id: Any, payload: dict[str, Any]) -
     for key, value in data.items():
         column = column_map[key]
         assignments.append(f"{column}=%s")
-        if key in {"allergies", "diseases", "symptoms"}:
+        if key in {"allergies", "diseases", "symptoms", "health_status"}:
             params.append(_json_dumps(value))
         else:
             params.append(value if value != "" else None)
@@ -353,6 +438,10 @@ def update_cat_profile(user_id: Any, profile_id: Any, payload: dict[str, Any]) -
             if cursor.rowcount == 0:
                 raise LookupError("猫咪档案不存在")
         conn.commit()
+    if data.get("avatar_image_id"):
+        from services.miniprogram_pet_image_service import bind_pet_image
+
+        bind_pet_image(data["avatar_image_id"], user_id=cleaned_user_id, profile_id=cleaned_profile_id)
     return {"ok": True, "item": get_cat_profile(cleaned_user_id, cleaned_profile_id)}
 
 

@@ -21,6 +21,13 @@ from services.miniprogram_food_change_service import (
     get_catalog_product_ingredients,
     list_catalog_products_by_brand,
 )
+from services.miniprogram_food_submission_service import (
+    cancel_food_submission,
+    create_food_submission,
+    get_food_submission,
+    get_submission_image,
+    list_food_submissions,
+)
 from services.miniprogram_moment_service import (
     create_moment_comment,
     create_moment,
@@ -36,6 +43,7 @@ from services.miniprogram_moment_image_service import (
     get_moment_image,
     upload_moment_image,
 )
+from services.miniprogram_pet_image_service import get_pet_image, upload_and_recognize_pet
 from services.miniprogram_content_review_service import handle_wechat_safety_callback
 from services.miniprogram_moment_report_service import (
     create_moment_report,
@@ -484,6 +492,55 @@ def get_moment_image_endpoint(file_id: str):
         return jsonify({"ok": False, "error": str(exc)}), 500
 
 
+@miniprogram_api.post("/pet-images/recognize")
+def recognize_pet_image_endpoint():
+    """Store one private pet photo and return AI suggestions for profile fields."""
+    try:
+        image_file = request.files.get("image") or request.files.get("file")
+        return jsonify(upload_and_recognize_pet(
+            image_file,
+            user_id=_user_id_from_request(required=True),
+        )), 201
+    except PermissionError as exc:
+        return _auth_error_response(exc)
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@miniprogram_api.get("/pet-images/<image_id>")
+def get_pet_image_endpoint(image_id: str):
+    """Read a private pet photo owned by the authenticated user."""
+    try:
+        image = get_pet_image(image_id, user_id=_user_id_from_request(required=True))
+        if image.get("redirect_url"):
+            with urllib.request.urlopen(image["redirect_url"], timeout=15) as response:
+                image_bytes = response.read()
+            return Response(
+                image_bytes,
+                mimetype=image.get("content_type") or "image/jpeg",
+                headers={
+                    "Cache-Control": "private, max-age=3600",
+                    "ETag": image.get("sha256") or "",
+                },
+            )
+        return send_file(
+            image["storage_path"],
+            mimetype=image.get("content_type") or "image/jpeg",
+            conditional=True,
+            max_age=3600,
+        )
+    except PermissionError as exc:
+        return _auth_error_response(exc)
+    except LookupError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 404
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
 @miniprogram_api.post("/food-change/intent")
 def food_change_intent():
     try:
@@ -523,6 +580,89 @@ def product_ingredients():
         return jsonify(get_catalog_product_ingredients(payload)), 200
     except ValueError as exc:
         return jsonify({"ok": False, "error": str(exc)}), 400
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@miniprogram_api.post("/food-submissions")
+def create_food_submission_endpoint():
+    try:
+        result = create_food_submission(
+            user_id=_user_id_from_request(required=True),
+            brand_name=request.form.get("brand_name") or request.form.get("brand"),
+            product_name=request.form.get("product_name"),
+            remark=request.form.get("remark"),
+            image_files=request.files.getlist("images") or request.files.getlist("image"),
+        )
+        return jsonify(result), 202
+    except PermissionError as exc:
+        return _auth_error_response(exc)
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@miniprogram_api.get("/food-submissions")
+def list_food_submissions_endpoint():
+    try:
+        return jsonify(list_food_submissions(
+            _user_id_from_request(required=True), limit=request.args.get("limit") or 50,
+        )), 200
+    except PermissionError as exc:
+        return _auth_error_response(exc)
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@miniprogram_api.get("/food-submissions/<submission_id>")
+def get_food_submission_endpoint(submission_id: str):
+    try:
+        return jsonify(get_food_submission(
+            _user_id_from_request(required=True), submission_id,
+        )), 200
+    except PermissionError as exc:
+        return _auth_error_response(exc)
+    except LookupError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 404
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@miniprogram_api.get("/food-submissions/<submission_id>/images/<image_id>")
+def get_food_submission_image_endpoint(submission_id: str, image_id: str):
+    try:
+        image = get_submission_image(
+            _user_id_from_request(required=True), submission_id, image_id,
+        )
+        response = send_file(
+            image["storage_path"], mimetype=image.get("content_type") or "image/jpeg",
+            conditional=True, max_age=3600,
+        )
+        response.headers["Cache-Control"] = "private, max-age=3600"
+        return response
+    except PermissionError as exc:
+        return _auth_error_response(exc)
+    except LookupError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 404
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@miniprogram_api.delete("/food-submissions/<submission_id>")
+def cancel_food_submission_endpoint(submission_id: str):
+    try:
+        return jsonify(cancel_food_submission(
+            _user_id_from_request(required=True), submission_id,
+        )), 200
+    except PermissionError as exc:
+        return _auth_error_response(exc)
+    except LookupError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 404
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 409
     except Exception as exc:
         return jsonify({"ok": False, "error": str(exc)}), 500
 
