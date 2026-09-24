@@ -98,6 +98,11 @@ class MiniProgramChatServiceTest(unittest.TestCase):
         self.assertEqual(records[0]["water_ml"], 180)
         self.assertEqual(records[0]["stool_notes"][0]["shape"], "软")
 
+    def test_plain_text_clarification_has_no_selection_interaction(self):
+        question = service.SLOT_QUESTIONS["warning_signs"]
+        self.assertEqual(question["response_type"], "text")
+        self.assertFalse(question["options"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -533,8 +533,16 @@ def handle_message(user_id: Any, conversation_id: Any, payload: dict[str, Any]) 
             state["current_step"] = flow["next_slot"]
             state["followup_count"] += 1
             question = flow.get("question") or {}
-            reply = {"response_type":question.get("response_type","text"),"reply":question.get("text","还需要补充一些信息。"),
-                     "interaction":{"slot":flow["next_slot"],"options":question.get("options",[])}}
+            response_type = question.get("response_type", "text")
+            options = question.get("options", [])
+            reply = {
+                "response_type": response_type,
+                "reply": question.get("text", "还需要补充一些信息。"),
+                "interaction": (
+                    {"slot": flow["next_slot"], "options": options}
+                    if response_type != "text" or options else None
+                ),
+            }
         elif flow["status"] == "risk_interrupt":
             state["current_step"], state["risk_level"] = None, "high"
             reply = {"response_type":"risk_alert","reply":(
