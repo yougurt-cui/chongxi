@@ -308,6 +308,12 @@ def _fallback_extraction(message: str, state: dict[str, Any]) -> dict[str, Any]:
     return {"primary_intent": state.get("primary_intent") or "general_pet_qa", "secondary_intent": None, "slots": {"topic": message[:100]}, "confidence": 0.5}
 
 
+def _provider_options(cfg: dict[str, str]) -> dict[str, Any]:
+    if cfg.get("provider") == "deepseek":
+        return {"extra_body": {"thinking": {"type": "disabled"}}}
+    return {}
+
+
 def _extract_intent(message: str, state: dict[str, Any]) -> tuple[dict[str, Any], str | None]:
     cfg = get_chat_model_config()
     if not cfg["api_key"]:
@@ -320,7 +326,7 @@ def _extract_intent(message: str, state: dict[str, Any]) -> tuple[dict[str, Any]
             model=cfg["model"], temperature=0, response_format={"type":"json_object"}, messages=[
                 {"role":"system","content":"你是宠物咨询的意图与信息抽取模块。只提取用户明确表达的信息，不回答问题，只输出JSON。"},
                 {"role":"user","content":_json_dumps(prompt)},
-            ])
+            ], **_provider_options(cfg))
         parsed = _parse_model_json(response.choices[0].message.content or "")
         intent = parsed.get("primary_intent")
         if intent not in VALID_INTENTS:
@@ -392,7 +398,7 @@ def _generate_answer(message: str, state: dict[str, Any], context: dict[str, Any
             model=cfg["model"], temperature=0.2, messages=[
                 {"role":"system","content":"你是宠物管家。只依据提供的数据给出简洁、安全、可执行的建议；不得编造产品、配料、评分或诊断疾病。涉及健康问题时明确不能替代兽医诊断。"},
                 {"role":"user","content":_json_dumps(payload)},
-            ])
+            ], **_provider_options(cfg))
         return _clean(response.choices[0].message.content, 4000) or fallback, cfg["model"]
     except Exception:
         return fallback, None

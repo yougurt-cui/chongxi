@@ -14,6 +14,13 @@ class MiniProgramChatServiceTest(unittest.TestCase):
         self.assertEqual(config["model"], "deepseek-flash")
         self.assertEqual(config["api_key"], "test-key")
 
+    def test_deepseek_disables_thinking_for_chat(self):
+        self.assertEqual(
+            service._provider_options({"provider": "deepseek"}),
+            {"extra_body": {"thinking": {"type": "disabled"}}},
+        )
+        self.assertEqual(service._provider_options({"provider": "qwen"}), {})
+
     def test_fallback_extracts_symptom_and_secondary_food_switch(self):
         result = service._fallback_extraction("最近软便，想了解换粮", service._default_state("c1"))
         self.assertEqual(result["primary_intent"], "symptom_consult")
