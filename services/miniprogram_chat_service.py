@@ -18,7 +18,7 @@ from services.miniprogram_food_change_service import (
     get_catalog_product_ingredients,
     list_standard_product_candidates,
 )
-from services.miniprogram_food_submission_service import get_food_submission
+from services.miniprogram_food_submission_service import get_food_submission, list_food_submissions
 
 
 CONVERSATION_TABLE = "miniprogram_chat_conversation"
@@ -62,13 +62,8 @@ FLOW_CONFIG = {
 
 SLOT_QUESTIONS = {
     "warning_signs": {
-        "text": "听起来它现在有点不舒服，我先陪你一起理一理。除了刚才说的情况，还有没有呕吐、便血、精神明显变差或不太想吃东西呢？", "response_type": "multi_select",
-        "options": [
-            {"label": "没有", "value": "none"}, {"label": "呕吐", "value": "vomiting"},
-            {"label": "便血", "value": "blood_in_stool"},
-            {"label": "精神明显变差", "value": "poor_mental_status"},
-            {"label": "食欲明显下降", "value": "poor_appetite"},
-        ],
+        "text": "听起来它现在有点不舒服，我先陪你一起理一理。除了刚才说的情况，还有没有呕吐、便血、精神明显变差或不太想吃东西呢？", "response_type": "text",
+        "options": [],
     },
     "severity": {
         "text": "我再确认一下，它现在看起来是轻微不舒服、比较明显，还是已经很严重了呢？", "response_type": "single_select",
@@ -82,7 +77,7 @@ SLOT_QUESTIONS = {
         "text": "最近有没有刚换粮、加罐头，或者吃新的零食呀？", "response_type": "single_select",
         "options": [{"label": "没有", "value": False}, {"label": "有", "value": True}],
     },
-    "symptom_context": {"text": "好的，我们再确认最后一点：这种情况大概持续多久了？最近有没有刚换粮、加罐头或者吃新的零食呀？", "response_type": "text", "options": []},
+    "symptom_context": {"text": "好的，了解了。这种情况大概持续多久了？最近有没有刚换粮、加罐头或者吃新的零食呀？", "response_type": "text", "options": []},
     "current_food": {"text": "可以告诉我它现在主要吃哪一款食品吗？", "response_type": "food_select", "options": []},
     "switch_reason": {
         "text": "想给它换得更合适一些，对吧？这次主要是因为肠胃、皮肤、体重，还是单纯想换一款呢？", "response_type": "single_select",
@@ -338,13 +333,68 @@ def _extract_intent(message: str, state: dict[str, Any]) -> tuple[dict[str, Any]
         return _fallback_extraction(message, state), None
 
 
-def _build_context(user_id: str, conversation: dict[str, Any], state: dict[str, Any], attachments: list[dict[str, Any]]) -> dict[str, Any]:
+def _warning_signs_from_text(message: str) -> list[str]:
+    text = _clean(message)
+    if any(word in text for word in ("都没有", "没有这些", "没有", "无")) and not any(
+        word in text for word in ("便血", "血便", "呕吐", "吐了", "没精神", "精神差", "不吃", "食欲差")
+    ):
+        return ["none"]
+    mapping = {
+        "vomiting": ("呕吐", "吐了", "吐过"),
+        "blood_in_stool": ("便血", "血便", "带血"),
+        "poor_mental_status": ("没精神", "精神差", "精神不好", "精神变差"),
+        "poor_appetite": ("不吃", "食欲差", "食欲下降", "没胃口"),
+    }
+    found = [code for code, words in mapping.items() if any(word in text for word in words)]
+    return found or ["unclear"]
+
+
+def _normalize_daily_records(value: Any) -> list[dict[str, Any]]:
+    records = value if isinstance(value, list) else []
+    result = []
+    for item in records[:7]:
+        if not isinstance(item, dict):
+            continue
+        notes = item.get("litter_notes") if isinstance(item.get("litter_notes"), list) else []
+        result.append({
+            "day": _clean(item.get("day"), 10),
+            "water_ml": item.get("water_ml"),
+            "food_g": item.get("food_g"),
+            "stool_count": item.get("stool_count"),
+            "stool_notes": [
+                {"time": _clean(note.get("time"), 5), "count": note.get("count"), "shape": _clean(note.get("shape"), 60)}
+                for note in notes[:10] if isinstance(note, dict)
+            ],
+        })
+    return result
+
+
+def _build_context(user_id: str, conversation: dict[str, Any], state: dict[str, Any],
+                   attachments: list[dict[str, Any]], client_context: dict[str, Any] | None = None) -> dict[str, Any]:
     pet = get_cat_profile(user_id, conversation["pet_id"]) if conversation.get("pet_id") else None
-    context: dict[str, Any] = {"pet_profile": pet, "current_food": None, "food_candidates": [], "food_analysis": None, "food_submission": None}
+    context: dict[str, Any] = {
+        "pet_profile": pet, "current_food": None, "food_list": [], "recent_daily_records": [],
+        "food_candidates": [], "food_analysis": None, "food_submission": None,
+    }
+    supplied_context = client_context if isinstance(client_context, dict) else {}
+    context["recent_daily_records"] = _normalize_daily_records(supplied_context.get("recent_daily_records"))
     if pet and (pet.get("food_brand") or pet.get("food_product")):
         context["current_food"] = {"brand":pet.get("food_brand"),"product_name":pet.get("food_product")}
         if not state["slots"].get("current_food"):
             state["slots"]["current_food"] = " ".join(filter(None,[pet.get("food_brand"),pet.get("food_product")]))
+    try:
+        foods = list_food_submissions(user_id, limit=20).get("items") or []
+        context["food_list"] = [
+            {
+                "brand": item.get("recognized_brand") or item.get("claimed_brand") or "",
+                "product_name": item.get("recognized_product_name") or item.get("claimed_product_name") or "",
+                "recognition_status": item.get("recognition_status"),
+                "catalog_key": item.get("catalog_key") or "",
+            }
+            for item in foods if item.get("status") != "cancelled"
+        ][:20]
+    except Exception:
+        context["food_list"] = []
     slots = state.get("slots") or {}
     food_name = _clean(slots.get("food_name") or slots.get("target_food"))
     if food_name:
@@ -422,6 +472,8 @@ def _generate_answer(message: str, state: dict[str, Any], context: dict[str, Any
                 {"role":"system","content":(
                     "你是温柔、耐心、专业的女性宠物护理助手，语气像一位亲切的护士。"
                     "只依据提供的数据回答，不得编造产品、配料、评分或疾病结论。"
+                    "回答前综合pet_profile、current_food、food_list和recent_daily_records；明确区分没有记录与数值为零，"
+                    "有饮水、进食、排便次数或便便形态记录时应优先结合其近期变化，但不要虚构正常参考值。"
                     "只输出合法JSON，且必须正好包含context、care、watch三个字符串字段。"
                     "context用一两句话解释少量原理或背景，care给出最重要且可执行的做法，watch说明观察重点和需要联系宠物医院的情况。"
                     "每个字段40到70个汉字，总体简洁；不要使用“判断”“建议”“诊断结果”等机械措辞，不要添加标题、编号或JSON以外内容。"
@@ -441,6 +493,7 @@ def handle_message(user_id: Any, conversation_id: Any, payload: dict[str, Any]) 
     message = _clean(payload.get("message"), MAX_MESSAGE_LENGTH)
     interaction = payload.get("interaction") if isinstance(payload.get("interaction"),dict) else None
     attachments = payload.get("attachments") if isinstance(payload.get("attachments"),list) else []
+    client_context = payload.get("client_context") if isinstance(payload.get("client_context"),dict) else {}
     if not message and not interaction and not attachments:
         raise ValueError("message、interaction、attachments 至少提供一项")
     _save_message(conversation_id=conversation_id,user_id=user_id,role="user",content=message,
@@ -461,12 +514,14 @@ def handle_message(user_id: Any, conversation_id: Any, payload: dict[str, Any]) 
         state["primary_intent"] = extraction["primary_intent"]
         state["secondary_intent"] = extraction.get("secondary_intent")
         state["slots"].update(extraction.get("slots") or {})
+        if pending_step == "warning_signs" and message and not state["slots"].get("warning_signs"):
+            state["slots"]["warning_signs"] = _warning_signs_from_text(message)
         if pending_step == "symptom_context" and message:
             state["slots"]["symptom_context"] = message
         state["turn_count"] += 1
     if attachments and not state.get("primary_intent"):
         state["primary_intent"] = "ingredient_analysis"
-    context = _build_context(user_id, conversation, state, attachments)
+    context = _build_context(user_id, conversation, state, attachments, client_context)
     submission = context.get("food_submission")
     if submission and submission.get("recognition_status") in {"pending","processing"}:
         reply = {"response_type":"processing","reply":"配料表正在识别，完成后我会继续分析。",

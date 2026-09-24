@@ -34,7 +34,8 @@ class MiniProgramChatServiceTest(unittest.TestCase):
         flow = service._evaluate_flow(state, {})
         self.assertEqual(flow["status"], "need_more_info")
         self.assertEqual(flow["next_slot"], "warning_signs")
-        self.assertEqual(flow["question"]["response_type"], "multi_select")
+        self.assertEqual(flow["question"]["response_type"], "text")
+        self.assertEqual(flow["question"]["options"], [])
         self.assertIn("陪你一起理一理", flow["question"]["text"])
 
     def test_symptom_flow_uses_two_combined_clarification_rounds(self):
@@ -45,6 +46,7 @@ class MiniProgramChatServiceTest(unittest.TestCase):
         flow = service._evaluate_flow(state, {})
         self.assertEqual(flow["status"], "need_more_info")
         self.assertEqual(flow["next_slot"], "symptom_context")
+        self.assertTrue(flow["question"]["text"].startswith("好的，了解了。"))
         self.assertIn("持续多久", flow["question"]["text"])
         self.assertIn("换粮", flow["question"]["text"])
 
@@ -80,6 +82,21 @@ class MiniProgramChatServiceTest(unittest.TestCase):
         self.assertEqual(len(text.splitlines()), 3)
         self.assertNotIn("建议", text)
         self.assertTrue(text.startswith("1. "))
+
+    def test_warning_signs_are_understood_from_natural_text(self):
+        self.assertEqual(service._warning_signs_from_text("没有这些情况，精神挺好的"), ["none"])
+        self.assertEqual(
+            service._warning_signs_from_text("今天吐了，而且有点没精神"),
+            ["vomiting", "poor_mental_status"],
+        )
+
+    def test_daily_records_are_limited_and_normalized(self):
+        records = service._normalize_daily_records([{
+            "day": "2026-09-24", "water_ml": 180, "food_g": 60, "stool_count": 2,
+            "litter_notes": [{"time": "08:30", "count": 1, "shape": "软"}],
+        }])
+        self.assertEqual(records[0]["water_ml"], 180)
+        self.assertEqual(records[0]["stool_notes"][0]["shape"], "软")
 
 
 if __name__ == "__main__":
