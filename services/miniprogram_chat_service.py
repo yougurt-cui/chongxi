@@ -36,7 +36,7 @@ INTENT_SLOTS = {
     "symptom_consult": {
         "symptom", "duration_days", "frequency_per_day", "severity", "vomiting",
         "blood_in_stool", "mental_status", "appetite_status", "warning_signs",
-        "recent_food_change",
+        "recent_food_change", "symptom_context",
     },
     "food_switch": {"current_food", "switch_reason", "target_food", "target_requirement", "recent_symptom"},
     "food_analysis": {"food_name", "catalog_key"},
@@ -46,23 +46,23 @@ INTENT_SLOTS = {
 
 FLOW_CONFIG = {
     "symptom_consult": {
-        "required": ["symptom", "warning_signs", "severity", "duration_days", "recent_food_change"],
-        "priority": ["warning_signs", "severity", "duration_days", "recent_food_change"],
-        "max_followups": 3,
+        "required": ["symptom", "warning_signs", "symptom_context"],
+        "priority": ["warning_signs", "symptom_context"],
+        "max_followups": 2,
     },
     "food_switch": {
         "required": ["current_food", "switch_reason", "target_requirement"],
         "priority": ["switch_reason", "target_requirement", "current_food"],
-        "max_followups": 3,
+        "max_followups": 2,
     },
     "food_analysis": {"required": ["food_name"], "priority": ["food_name"], "max_followups": 1},
     "ingredient_analysis": {"required": ["ingredient_source"], "priority": ["ingredient_source"], "max_followups": 1},
-    "general_pet_qa": {"required": [], "priority": [], "max_followups": 1},
+    "general_pet_qa": {"required": [], "priority": [], "max_followups": 0},
 }
 
 SLOT_QUESTIONS = {
     "warning_signs": {
-        "text": "有没有同时出现下面这些情况？", "response_type": "multi_select",
+        "text": "听起来它现在有点不舒服，我先陪你一起理一理。除了刚才说的情况，还有没有呕吐、便血、精神明显变差或不太想吃东西呢？", "response_type": "multi_select",
         "options": [
             {"label": "没有", "value": "none"}, {"label": "呕吐", "value": "vomiting"},
             {"label": "便血", "value": "blood_in_stool"},
@@ -71,29 +71,30 @@ SLOT_QUESTIONS = {
         ],
     },
     "severity": {
-        "text": "目前症状大概是什么程度？", "response_type": "single_select",
+        "text": "我再确认一下，它现在看起来是轻微不舒服、比较明显，还是已经很严重了呢？", "response_type": "single_select",
         "options": [{"label": "轻微", "value": "mild"}, {"label": "比较明显", "value": "moderate"}, {"label": "很严重", "value": "severe"}],
     },
     "duration_days": {
-        "text": "这种情况大概持续多久了？", "response_type": "single_select",
+        "text": "这种情况大概持续多久了呢？", "response_type": "single_select",
         "options": [{"label": "今天开始", "value": 1}, {"label": "2～3天", "value": 3}, {"label": "超过3天", "value": 4}],
     },
     "recent_food_change": {
-        "text": "最近有没有换粮、加零食，或者明显调整饮食？", "response_type": "single_select",
+        "text": "最近有没有刚换粮、加罐头，或者吃新的零食呀？", "response_type": "single_select",
         "options": [{"label": "没有", "value": False}, {"label": "有", "value": True}],
     },
-    "current_food": {"text": "它现在主要吃的是哪一款食品？", "response_type": "food_select", "options": []},
+    "symptom_context": {"text": "好的，我们再确认最后一点：这种情况大概持续多久了？最近有没有刚换粮、加罐头或者吃新的零食呀？", "response_type": "text", "options": []},
+    "current_food": {"text": "可以告诉我它现在主要吃哪一款食品吗？", "response_type": "food_select", "options": []},
     "switch_reason": {
-        "text": "你这次主要为什么想换粮？", "response_type": "single_select",
+        "text": "想给它换得更合适一些，对吧？这次主要是因为肠胃、皮肤、体重，还是单纯想换一款呢？", "response_type": "single_select",
         "options": [
             {"label": "软便/肠胃问题", "value": "digestive"}, {"label": "皮肤/掉毛", "value": "skin"},
             {"label": "体重管理", "value": "weight"}, {"label": "怀疑食物不耐受", "value": "intolerance"},
             {"label": "单纯想换一款", "value": "general"},
         ],
     },
-    "target_requirement": {"text": "你更希望下一款粮解决什么问题？", "response_type": "text_or_select", "options": []},
-    "food_name": {"text": "你想分析的是哪一款食品？", "response_type": "food_select", "options": []},
-    "ingredient_source": {"text": "请选择食品，或者上传配料表照片。", "response_type": "ingredient_source", "options": []},
+    "target_requirement": {"text": "明白啦，那你更希望下一款粮在哪方面更贴合它呢？", "response_type": "text_or_select", "options": []},
+    "food_name": {"text": "可以呀，把食品名称告诉我就好；如果手边有配料表照片，也可以直接发给我。", "response_type": "food_select", "options": []},
+    "ingredient_source": {"text": "可以把食品名称告诉我，或者直接上传配料表照片，我来帮你一起看看。", "response_type": "ingredient_source", "options": []},
 }
 
 
@@ -386,20 +387,50 @@ def _evaluate_flow(state: dict[str, Any], context: dict[str, Any]) -> dict[str, 
     return {"status":"need_more_info","next_slot":next_slot,"missing_slots":missing,"question":SLOT_QUESTIONS.get(next_slot)}
 
 
+def _three_point_text(data: dict[str, Any]) -> str:
+    points = []
+    for key in ("context", "care", "watch"):
+        value = _clean(data.get(key), 90)
+        if not value:
+            raise ValueError(f"模型结果缺少 {key}")
+        value = value.replace("初步判断", "目前看").replace("判断", "看起来")
+        value = value.replace("我的建议是", "现在可以").replace("建议", "可以考虑")
+        points.append(value)
+    return "\n".join(f"{index}. {value}" for index, value in enumerate(points, 1))
+
+
 def _generate_answer(message: str, state: dict[str, Any], context: dict[str, Any], limited: bool) -> tuple[str, str | None]:
     cfg = get_chat_model_config()
-    fallback = "已结合宠物档案和当前信息完成初步分析。请持续观察宠物状态；如症状持续、加重或出现便血、频繁呕吐、精神明显变差，请及时联系兽医。"
+    fallback = (
+        "1. 从目前的信息看，常见的饮食变化、环境变化或短暂不适都可能带来这种表现。\n"
+        "2. 这两天可以先让饮食和作息保持稳定，保证饮水，并记录精神、食欲和排便变化。\n"
+        "3. 如果一直没有缓解，或出现便血、频繁呕吐、精神明显变差，请尽快联系宠物医院。"
+    )
     if not cfg["api_key"]:
         return fallback, None
-    payload = {"latest_message":message,"intent":state.get("primary_intent"),"slots":state.get("slots"),
-               "context":context,"limited_information":limited}
+    payload = {
+        "latest_message": message,
+        "intent": state.get("primary_intent"),
+        "slots": state.get("slots"),
+        "context": context,
+        "limited_information": limited,
+        "output": {"context": "少量原因或背景", "care": "现在可以怎么照顾", "watch": "接下来留意什么"},
+    }
     try:
         response = OpenAI(api_key=cfg["api_key"], base_url=cfg["base_url"], timeout=60).chat.completions.create(
-            model=cfg["model"], temperature=0.2, messages=[
-                {"role":"system","content":"你是宠物管家。只依据提供的数据给出简洁、安全、可执行的建议；不得编造产品、配料、评分或诊断疾病。涉及健康问题时明确不能替代兽医诊断。"},
+            model=cfg["model"], temperature=0.2, response_format={"type":"json_object"}, messages=[
+                {"role":"system","content":(
+                    "你是温柔、耐心、专业的女性宠物护理助手，语气像一位亲切的护士。"
+                    "只依据提供的数据回答，不得编造产品、配料、评分或疾病结论。"
+                    "只输出合法JSON，且必须正好包含context、care、watch三个字符串字段。"
+                    "context用一两句话解释少量原理或背景，care给出最重要且可执行的做法，watch说明观察重点和需要联系宠物医院的情况。"
+                    "每个字段40到70个汉字，总体简洁；不要使用“判断”“建议”“诊断结果”等机械措辞，不要添加标题、编号或JSON以外内容。"
+                    "可以自然使用一处“呀、呢、哦”，但不要称呼用户为亲、宝子或主人。"
+                )},
                 {"role":"user","content":_json_dumps(payload)},
             ], **_provider_options(cfg))
-        return _clean(response.choices[0].message.content, 4000) or fallback, cfg["model"]
+        parsed = _parse_model_json(response.choices[0].message.content or "")
+        return _three_point_text(parsed), cfg["model"]
     except Exception:
         return fallback, None
 
@@ -425,10 +456,13 @@ def handle_message(user_id: Any, conversation_id: Any, payload: dict[str, Any]) 
         state["primary_intent"] = "ingredient_analysis"
         state["turn_count"] += 1
     else:
+        pending_step = state.get("current_step")
         extraction, model_name = _extract_intent(message, state)
         state["primary_intent"] = extraction["primary_intent"]
         state["secondary_intent"] = extraction.get("secondary_intent")
         state["slots"].update(extraction.get("slots") or {})
+        if pending_step == "symptom_context" and message:
+            state["slots"]["symptom_context"] = message
         state["turn_count"] += 1
     if attachments and not state.get("primary_intent"):
         state["primary_intent"] = "ingredient_analysis"
@@ -448,7 +482,11 @@ def handle_message(user_id: Any, conversation_id: Any, payload: dict[str, Any]) 
                      "interaction":{"slot":flow["next_slot"],"options":question.get("options",[])}}
         elif flow["status"] == "risk_interrupt":
             state["current_step"], state["risk_level"] = None, "high"
-            reply = {"response_type":"risk_alert","reply":"目前存在需要优先关注的风险信号，建议尽快联系宠物医院进行评估。",
+            reply = {"response_type":"risk_alert","reply":(
+                        "1. 现在已经出现需要优先留意的风险信号，先不要继续观察等待。\n"
+                        "2. 请尽快联系附近的宠物医院，并按医生安排就诊。\n"
+                        "3. 出发前记录症状开始时间、饮食变化和排泄情况，途中注意保暖与安静。"
+                    ),
                      "result":{"risk":flow["risk"],"disclaimer":"AI内容仅供参考，不能替代兽医诊断"}}
         else:
             state["current_step"], state["risk_level"] = None, "low"

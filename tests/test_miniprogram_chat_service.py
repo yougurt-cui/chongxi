@@ -35,6 +35,22 @@ class MiniProgramChatServiceTest(unittest.TestCase):
         self.assertEqual(flow["status"], "need_more_info")
         self.assertEqual(flow["next_slot"], "warning_signs")
         self.assertEqual(flow["question"]["response_type"], "multi_select")
+        self.assertIn("陪你一起理一理", flow["question"]["text"])
+
+    def test_symptom_flow_uses_two_combined_clarification_rounds(self):
+        state = service._default_state("c1")
+        state["primary_intent"] = "symptom_consult"
+        state["slots"] = {"symptom": "软便", "warning_signs": ["none"]}
+        state["followup_count"] = 1
+        flow = service._evaluate_flow(state, {})
+        self.assertEqual(flow["status"], "need_more_info")
+        self.assertEqual(flow["next_slot"], "symptom_context")
+        self.assertIn("持续多久", flow["question"]["text"])
+        self.assertIn("换粮", flow["question"]["text"])
+
+        state["followup_count"] = 2
+        flow = service._evaluate_flow(state, {})
+        self.assertEqual(flow["status"], "answer_with_limited_info")
 
     def test_risk_interrupt_precedes_followup(self):
         state = service._default_state("c1")
@@ -54,6 +70,16 @@ class MiniProgramChatServiceTest(unittest.TestCase):
     def test_model_json_accepts_fenced_output(self):
         result = service._parse_model_json('```json\n{"primary_intent":"food_switch"}\n```')
         self.assertEqual(result["primary_intent"], "food_switch")
+
+    def test_three_point_answer_has_exactly_three_short_lines(self):
+        text = service._three_point_text({
+            "context": "最近换粮可能让肠胃暂时不适应。",
+            "care": "建议先暂停新零食，让饮食保持稳定。",
+            "watch": "如果出现便血或精神变差，请联系宠物医院。",
+        })
+        self.assertEqual(len(text.splitlines()), 3)
+        self.assertNotIn("建议", text)
+        self.assertTrue(text.startswith("1. "))
 
 
 if __name__ == "__main__":
