@@ -12,7 +12,7 @@ from typing import Any
 import pymysql
 from openai import OpenAI
 
-from app_config import get_mysql_config, get_qwen_config
+from app_config import get_chat_model_config, get_mysql_config
 from services.miniprogram_cat_profile_service import get_cat_profile, list_cat_profiles
 from services.miniprogram_food_change_service import (
     get_catalog_product_ingredients,
@@ -309,7 +309,7 @@ def _fallback_extraction(message: str, state: dict[str, Any]) -> dict[str, Any]:
 
 
 def _extract_intent(message: str, state: dict[str, Any]) -> tuple[dict[str, Any], str | None]:
-    cfg = get_qwen_config()
+    cfg = get_chat_model_config()
     if not cfg["api_key"]:
         return _fallback_extraction(message, state), None
     prompt = {"allowed_intents": sorted(VALID_INTENTS), "current_intent": state.get("primary_intent"),
@@ -381,7 +381,7 @@ def _evaluate_flow(state: dict[str, Any], context: dict[str, Any]) -> dict[str, 
 
 
 def _generate_answer(message: str, state: dict[str, Any], context: dict[str, Any], limited: bool) -> tuple[str, str | None]:
-    cfg = get_qwen_config()
+    cfg = get_chat_model_config()
     fallback = "已结合宠物档案和当前信息完成初步分析。请持续观察宠物状态；如症状持续、加重或出现便血、频繁呕吐、精神明显变差，请及时联系兽医。"
     if not cfg["api_key"]:
         return fallback, None

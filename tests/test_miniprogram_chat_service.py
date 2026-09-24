@@ -1,9 +1,19 @@
 import unittest
+from unittest.mock import patch
 
+from app_config import get_chat_model_config
 from services import miniprogram_chat_service as service
 
 
 class MiniProgramChatServiceTest(unittest.TestCase):
+    @patch.dict("os.environ", {"CHAT_MODEL_PROVIDER": "deepseek", "DEEPSEEK_API_KEY": "test-key"}, clear=False)
+    def test_deepseek_chat_config(self):
+        config = get_chat_model_config()
+        self.assertEqual(config["provider"], "deepseek")
+        self.assertEqual(config["base_url"], "https://api.deepseek.com")
+        self.assertEqual(config["model"], "deepseek-flash")
+        self.assertEqual(config["api_key"], "test-key")
+
     def test_fallback_extracts_symptom_and_secondary_food_switch(self):
         result = service._fallback_extraction("最近软便，想了解换粮", service._default_state("c1"))
         self.assertEqual(result["primary_intent"], "symptom_consult")

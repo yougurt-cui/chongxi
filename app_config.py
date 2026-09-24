@@ -99,6 +99,40 @@ def get_qwen_config(payload: Dict[str, Any] | None = None) -> Dict[str, str]:
     }
 
 
+def get_chat_model_config(payload: Dict[str, Any] | None = None) -> Dict[str, str]:
+    """Return the text-chat model config without changing Qwen vision/OCR settings."""
+    payload = dict(payload or {})
+    provider = str(
+        payload.get("provider")
+        or os.getenv("CHAT_MODEL_PROVIDER")
+        or ("deepseek" if os.getenv("DEEPSEEK_API_KEY") else "qwen")
+    ).strip().lower()
+
+    if provider == "deepseek":
+        api_key = payload.get("api_key") or os.getenv("DEEPSEEK_API_KEY")
+        base_url = (
+            payload.get("base_url")
+            or os.getenv("DEEPSEEK_BASE_URL")
+            or "https://api.deepseek.com"
+        )
+        model = (
+            payload.get("model")
+            or os.getenv("DEEPSEEK_MODEL")
+            or "deepseek-flash"
+        )
+        return {
+            "provider": provider,
+            "api_key": str(api_key or "").strip(),
+            "base_url": normalize_openai_base_url(
+                str(base_url or ""), default="https://api.deepseek.com"
+            ),
+            "model": str(model or "deepseek-flash").strip(),
+        }
+
+    qwen = get_qwen_config(payload)
+    return {"provider": "qwen", **qwen}
+
+
 def get_pipeline_paths() -> Dict[str, Any]:
     settings = load_settings()
     return dict((settings.pipeline or {}).get("paths") or {})
