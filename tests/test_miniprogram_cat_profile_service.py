@@ -1,5 +1,6 @@
 import unittest
 from decimal import Decimal
+from unittest.mock import patch
 
 from services import miniprogram_cat_profile_service as service
 
@@ -85,6 +86,91 @@ class MiniProgramCatProfileServiceTest(unittest.TestCase):
     def test_animal_type_is_validated(self):
         with self.assertRaisesRegex(ValueError, "animal_type 仅支持"):
             service._normalize_payload({"animal_type": "rabbit"}, partial=True)
+
+    def test_delete_profile_marks_record_deleted_and_promotes_new_default(self):
+        class Cursor:
+            def __init__(self):
+                self.statements = []
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return None
+
+            def execute(self, sql, params):
+                self.statements.append((" ".join(sql.split()), params))
+
+            def fetchone(self):
+                return {"is_default": 1}
+
+        class Connection:
+            def __init__(self):
+                self.cursor_instance = Cursor()
+                self.committed = False
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return None
+
+            def cursor(self):
+                return self.cursor_instance
+
+            def commit(self):
+                self.committed = True
+
+        connection = Connection()
+        with (
+            patch.object(service, "init_miniprogram_cat_profile_tables"),
+            patch.object(service, "_connect_app", return_value=connection),
+            patch.object(service, "_now", return_value="2026-09-25 12:00:00"),
+        ):
+            result = service.delete_cat_profile("user-1", "pet-1")
+
+        statements = connection.cursor_instance.statements
+        self.assertTrue(connection.committed)
+        self.assertIn("LIMIT 1 FOR UPDATE", statements[0][0])
+        self.assertIn("status='deleted'", statements[1][0])
+        self.assertIn("deleted_at=%s", statements[1][0])
+        self.assertIn("ORDER BY updated_at DESC LIMIT 1", statements[2][0])
+        self.assertEqual(result, {
+            "ok": True,
+            "id": "pet-1",
+            "deleted_at": "2026-09-25 12:00:00",
+        })
+
+    def test_delete_profile_returns_not_found_for_inactive_profile(self):
+        class Cursor:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return None
+
+            def execute(self, _sql, _params):
+                return None
+
+            def fetchone(self):
+                return None
+
+        class Connection:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return None
+
+            def cursor(self):
+                return Cursor()
+
+        with (
+            patch.object(service, "init_miniprogram_cat_profile_tables"),
+            patch.object(service, "_connect_app", return_value=Connection()),
+        ):
+            with self.assertRaisesRegex(LookupError, "猫咪档案不存在"):
+                service.delete_cat_profile("user-1", "pet-1")
 
 
 if __name__ == "__main__":

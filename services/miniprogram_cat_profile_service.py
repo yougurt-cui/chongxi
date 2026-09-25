@@ -261,6 +261,7 @@ def init_miniprogram_cat_profile_tables() -> None:
                     notes TEXT NULL,
                     is_default TINYINT NOT NULL DEFAULT 0,
                     status VARCHAR(16) NOT NULL DEFAULT 'active',
+                    deleted_at DATETIME NULL,
                     created_at DATETIME NOT NULL,
                     updated_at DATETIME NOT NULL,
                     PRIMARY KEY (id),
@@ -290,6 +291,10 @@ def init_miniprogram_cat_profile_tables() -> None:
             if "avatar_image_id" not in existing_columns:
                 cursor.execute(
                     f"ALTER TABLE {TABLE_NAME} ADD COLUMN avatar_image_id CHAR(32) NULL AFTER health_status_json"
+                )
+            if "deleted_at" not in existing_columns:
+                cursor.execute(
+                    f"ALTER TABLE {TABLE_NAME} ADD COLUMN deleted_at DATETIME NULL AFTER status"
                 )
         conn.commit()
 
@@ -449,14 +454,29 @@ def delete_cat_profile(user_id: Any, profile_id: Any) -> dict[str, Any]:
     cleaned_user_id = _clean_user_id(user_id)
     cleaned_profile_id = _clean_profile_id(profile_id)
     init_miniprogram_cat_profile_tables()
+    deleted_at = _now()
     with _connect_app() as conn:
         with conn.cursor() as cursor:
             cursor.execute(
-                f"UPDATE {TABLE_NAME} SET status='deleted', is_default=0, updated_at=%s "
-                "WHERE id=%s AND user_id=%s AND status='active'",
-                (_now(), cleaned_profile_id, cleaned_user_id),
+                f"SELECT is_default FROM {TABLE_NAME} "
+                "WHERE id=%s AND user_id=%s AND status='active' LIMIT 1 FOR UPDATE",
+                (cleaned_profile_id, cleaned_user_id),
             )
-            if cursor.rowcount == 0:
+            profile = cursor.fetchone()
+            if not profile:
                 raise LookupError("猫咪档案不存在")
+            cursor.execute(
+                f"UPDATE {TABLE_NAME} "
+                "SET status='deleted', is_default=0, deleted_at=%s, updated_at=%s "
+                "WHERE id=%s AND user_id=%s AND status='active'",
+                (deleted_at, deleted_at, cleaned_profile_id, cleaned_user_id),
+            )
+            if profile.get("is_default"):
+                cursor.execute(
+                    f"UPDATE {TABLE_NAME} SET is_default=1, updated_at=%s "
+                    "WHERE user_id=%s AND status='active' "
+                    "ORDER BY updated_at DESC LIMIT 1",
+                    (deleted_at, cleaned_user_id),
+                )
         conn.commit()
-    return {"ok": True, "id": cleaned_profile_id}
+    return {"ok": True, "id": cleaned_profile_id, "deleted_at": deleted_at}
