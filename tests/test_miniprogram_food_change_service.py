@@ -48,6 +48,7 @@ class MiniProgramFoodChangeServiceTest(unittest.TestCase):
         self.assertEqual(result["interpretation"]["brand"]["brand_id"], 1)
         self.assertEqual(result["interpretation"]["product_text"], "肠胃")
         self.assertEqual(result["suggestions"][0]["formula_id"], 111)
+        self.assertTrue(all(item["brand_id"] == 1 for item in result["suggestions"]))
 
     def test_search_rejects_empty_query(self):
         with self.assertRaisesRegex(ValueError, "q 不能为空"):

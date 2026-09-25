@@ -172,6 +172,8 @@ def search_catalog_products(query: str, *, limit: int = 20) -> dict[str, Any]:
         brand_id = int(item["brand_id"])
         product_id = int(item["product_id"])
         brand_match = detected_brands.get(brand_id)
+        if strongest_brand and strongest_brand["score"] >= 0.9 and brand_id != strongest_brand["brand_id"]:
+            continue
         product_terms = [
             item.get("product_name"), item.get("standard_product_name"),
             item.get("display_subtitle"), *product_aliases.get(product_id, []),
