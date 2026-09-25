@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import patch
 
 from services import miniprogram_food_change_service as service
 
@@ -24,6 +25,33 @@ class MiniProgramFoodChangeServiceTest(unittest.TestCase):
     def test_product_list_requires_brand(self):
         with self.assertRaisesRegex(ValueError, "brand 不能为空"):
             service.list_catalog_products_by_brand("")
+
+    def test_search_splits_brand_alias_from_product_text(self):
+        options = [
+            {
+                "brand_id": 1, "brand": "皇家", "product_id": 11,
+                "product_name": "肠胃舒适成猫粮", "standard_product_name": "肠胃舒适成猫粮",
+                "display_subtitle": "", "formula_id": 111, "label": "皇家 肠胃舒适成猫粮",
+            },
+            {
+                "brand_id": 2, "brand": "渴望", "product_id": 22,
+                "product_name": "六种鱼", "standard_product_name": "六种鱼",
+                "display_subtitle": "", "formula_id": 222, "label": "渴望 六种鱼",
+            },
+        ]
+        with (
+            patch.object(service, "list_standardized_product_options", return_value={"items": options}),
+            patch.object(service, "_load_catalog_aliases", return_value=({1: ["Royal Canin"]}, {})),
+        ):
+            result = service.search_catalog_products("Royal Canin 肠胃", limit=5)
+
+        self.assertEqual(result["interpretation"]["brand"]["brand_id"], 1)
+        self.assertEqual(result["interpretation"]["product_text"], "肠胃")
+        self.assertEqual(result["suggestions"][0]["formula_id"], 111)
+
+    def test_search_rejects_empty_query(self):
+        with self.assertRaisesRegex(ValueError, "q 不能为空"):
+            service.search_catalog_products(" ")
 
     def test_analyze_rejects_empty_message(self):
         with self.assertRaisesRegex(ValueError, "message 不能为空"):

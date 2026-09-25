@@ -13,6 +13,7 @@ import pymysql
 from openai import OpenAI
 
 from app_config import get_feature_mysql_config, get_mysql_config, get_qwen_config
+from services.catfood_standardization_service import BRAND_ALIAS_TABLE, PRODUCT_ALIAS_TABLE
 from services.taobao_sku_import_service import list_standardized_product_options
 
 
@@ -87,6 +88,133 @@ def _clean(value: Any, max_length: int | None = None) -> str:
 
 def _compact(value: Any) -> str:
     return re.sub(r"[^0-9a-z\u4e00-\u9fff]+", "", _clean(value).lower())
+
+
+def _load_catalog_aliases() -> tuple[dict[int, list[str]], dict[int, list[str]]]:
+    brand_aliases: dict[int, list[str]] = {}
+    product_aliases: dict[int, list[str]] = {}
+    with _connect_app(autocommit=True) as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                f"SELECT brand_id,alias_name FROM {BRAND_ALIAS_TABLE} WHERE active=1"
+            )
+            for row in cursor.fetchall() or []:
+                brand_aliases.setdefault(int(row["brand_id"]), []).append(row["alias_name"])
+            cursor.execute(
+                f"SELECT product_id,alias_name FROM {PRODUCT_ALIAS_TABLE} WHERE active=1"
+            )
+            for row in cursor.fetchall() or []:
+                product_aliases.setdefault(int(row["product_id"]), []).append(row["alias_name"])
+    return brand_aliases, product_aliases
+
+
+def _text_match_score(query: str, candidates: list[Any]) -> tuple[float, str]:
+    wanted = _compact(query)
+    best_score = 0.0
+    best_text = ""
+    for candidate in candidates:
+        text = _clean(candidate)
+        normalized = _compact(text)
+        if not wanted or not normalized:
+            continue
+        if wanted == normalized:
+            score = 1.0
+        elif wanted in normalized or normalized in wanted:
+            score = min(0.98, 0.82 + 0.16 * min(len(wanted), len(normalized)) / max(len(wanted), len(normalized)))
+        else:
+            score = SequenceMatcher(None, wanted, normalized).ratio()
+        if score > best_score:
+            best_score, best_text = score, text
+    return round(best_score, 5), best_text
+
+
+def search_catalog_products(query: str, *, limit: int = 20) -> dict[str, Any]:
+    """Interpret one free-text input and return standard product/formula candidates."""
+    query = _clean(query, 255)
+    if not query:
+        raise ValueError("q \u4e0d\u80fd\u4e3a\u7a7a")
+    limit = max(1, min(int(limit or 20), 50))
+    options = list_standardized_product_options(q="", limit=500).get("items", [])
+    brand_aliases, product_aliases = _load_catalog_aliases()
+    normalized_query = _compact(query)
+
+    detected_brands: dict[int, dict[str, Any]] = {}
+    for item in options:
+        brand_id = int(item["brand_id"])
+        brand_terms = [item.get("brand"), *brand_aliases.get(brand_id, [])]
+        score, matched_text = _text_match_score(query, brand_terms)
+        contained = [
+            term for term in brand_terms
+            if _compact(term) and _compact(term) in normalized_query
+        ]
+        if contained:
+            matched_text = max(contained, key=lambda term: len(_compact(term)))
+            score = max(score, 0.99 if _compact(matched_text) == normalized_query else 0.96)
+        current = detected_brands.get(brand_id)
+        if score >= 0.62 and (not current or score > current["score"]):
+            detected_brands[brand_id] = {
+                "brand_id": brand_id,
+                "brand": item.get("brand"),
+                "matched_text": matched_text,
+                "score": score,
+            }
+
+    strongest_brand = max(detected_brands.values(), key=lambda row: row["score"], default=None)
+    product_query = query
+    if strongest_brand and _compact(strongest_brand["matched_text"]) in normalized_query:
+        product_query = normalized_query.replace(_compact(strongest_brand["matched_text"]), "", 1)
+    weak_words = ("\u732b\u7cae", "\u732b\u4e3b\u98df", "\u4e3b\u98df", "\u914d\u65b9", "\u4ea7\u54c1", "\u7cfb\u5217")
+    for word in weak_words:
+        product_query = product_query.replace(_compact(word), "")
+
+    suggestions = []
+    for item in options:
+        brand_id = int(item["brand_id"])
+        product_id = int(item["product_id"])
+        brand_match = detected_brands.get(brand_id)
+        product_terms = [
+            item.get("product_name"), item.get("standard_product_name"),
+            item.get("display_subtitle"), *product_aliases.get(product_id, []),
+        ]
+        product_score, product_match = _text_match_score(product_query or query, product_terms)
+        if strongest_brand and brand_id != strongest_brand["brand_id"]:
+            score = product_score * 0.55
+        elif strongest_brand and product_query:
+            score = strongest_brand["score"] * 0.35 + product_score * 0.65
+        elif strongest_brand:
+            score = strongest_brand["score"] * 0.9
+        else:
+            score = product_score
+        if score < 0.45:
+            continue
+        suggestions.append({
+            **item,
+            "score": round(score, 5),
+            "matched_by": [
+                key for key, value in (("brand", brand_match), ("product", product_match)) if value
+            ],
+            "matched_text": [
+                value for value in ((brand_match or {}).get("matched_text"), product_match) if value
+            ],
+        })
+    suggestions.sort(key=lambda item: (-item["score"], item.get("label") or ""))
+    suggestions = suggestions[:limit]
+    top_score = suggestions[0]["score"] if suggestions else 0.0
+    next_score = suggestions[1]["score"] if len(suggestions) > 1 else 0.0
+    return {
+        "ok": True,
+        "query": query,
+        "interpretation": {
+            "type": "brand_and_product" if strongest_brand and product_query else "brand" if strongest_brand else "product",
+            "brand": strongest_brand,
+            "product_text": product_query if strongest_brand else query,
+            "confidence": round(max((strongest_brand or {}).get("score", 0), top_score), 5),
+        },
+        "count": len(suggestions),
+        "suggestions": suggestions,
+        "brand_suggestions": sorted(detected_brands.values(), key=lambda row: -row["score"])[:5],
+        "needs_confirmation": not suggestions or top_score < 0.9 or (next_score and top_score - next_score < 0.08),
+    }
 
 
 def _parse_json_object(raw: str) -> dict[str, Any]:

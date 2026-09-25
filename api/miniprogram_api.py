@@ -27,6 +27,7 @@ from services.miniprogram_food_change_service import (
     analyze_and_store,
     get_catalog_product_ingredients,
     list_catalog_products_by_brand,
+    search_catalog_products,
 )
 from services.miniprogram_food_submission_service import (
     cancel_food_submission,
@@ -646,6 +647,21 @@ def products_by_brand():
         response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
         response.headers["Pragma"] = "no-cache"
         response.headers["Expires"] = "0"
+        return response, 200
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@miniprogram_api.get("/products/search")
+def search_products():
+    try:
+        response = jsonify(search_catalog_products(
+            request.args.get("q", ""),
+            limit=int(request.args.get("limit") or 20),
+        ))
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
         return response, 200
     except ValueError as exc:
         return jsonify({"ok": False, "error": str(exc)}), 400

@@ -191,6 +191,18 @@ def _normalize_payload(payload: dict[str, Any], *, partial: bool = False) -> dic
             else diet.get("product", diet.get("product_name")),
             512,
         )
+    if "food_product_id" in payload or "product_id" in diet or not partial:
+        normalized["food_product_id"] = _clean_int(
+            payload.get("food_product_id") if "food_product_id" in payload else diet.get("product_id"),
+            "food_product_id", minimum=1,
+        )
+    if "food_formula_id" in payload or "formula_id" in diet or not partial:
+        normalized["food_formula_id"] = _clean_int(
+            payload.get("food_formula_id") if "food_formula_id" in payload else diet.get("formula_id"),
+            "food_formula_id", minimum=1,
+        )
+    if ("food_product_id" in normalized) != ("food_formula_id" in normalized):
+        raise ValueError("food_product_id \u548c food_formula_id \u5fc5\u987b\u540c\u65f6\u63d0\u4f9b")
     if "notes" in payload or not partial:
         normalized["notes"] = _clean(payload.get("notes"), 1000)
     if "is_default" in payload or not partial:
@@ -201,6 +213,8 @@ def _normalize_payload(payload: dict[str, Any], *, partial: bool = False) -> dic
 def _serialize(row: dict[str, Any]) -> dict[str, Any]:
     food_brand = row.get("food_brand") or ""
     food_product = row.get("food_product") or ""
+    food_product_id = row.get("food_product_id")
+    food_formula_id = row.get("food_formula_id")
     avatar_image_id = row.get("avatar_image_id") or ""
     avatar_url = row.get("avatar_url") or ""
     if avatar_image_id:
@@ -225,7 +239,12 @@ def _serialize(row: dict[str, Any]) -> dict[str, Any]:
         "avatar_image_id": avatar_image_id,
         "food_brand": food_brand,
         "food_product": food_product,
-        "diet": {"brand": food_brand, "product": food_product},
+        "food_product_id": food_product_id,
+        "food_formula_id": food_formula_id,
+        "diet": {
+            "brand": food_brand, "product": food_product,
+            "product_id": food_product_id, "formula_id": food_formula_id,
+        },
         "notes": row.get("notes") or "",
         "is_default": bool(row.get("is_default")),
         "created_at": str(row.get("created_at") or ""),
@@ -258,6 +277,8 @@ def init_miniprogram_cat_profile_tables() -> None:
                     avatar_image_id CHAR(32) NULL,
                     food_brand VARCHAR(128) NULL,
                     food_product VARCHAR(512) NULL,
+                    food_product_id BIGINT UNSIGNED NULL,
+                    food_formula_id BIGINT UNSIGNED NULL,
                     notes TEXT NULL,
                     is_default TINYINT NOT NULL DEFAULT 0,
                     status VARCHAR(16) NOT NULL DEFAULT 'active',
@@ -296,6 +317,14 @@ def init_miniprogram_cat_profile_tables() -> None:
                 cursor.execute(
                     f"ALTER TABLE {TABLE_NAME} ADD COLUMN deleted_at DATETIME NULL AFTER status"
                 )
+            if "food_product_id" not in existing_columns:
+                cursor.execute(
+                    f"ALTER TABLE {TABLE_NAME} ADD COLUMN food_product_id BIGINT UNSIGNED NULL AFTER food_product"
+                )
+            if "food_formula_id" not in existing_columns:
+                cursor.execute(
+                    f"ALTER TABLE {TABLE_NAME} ADD COLUMN food_formula_id BIGINT UNSIGNED NULL AFTER food_product_id"
+                )
         conn.commit()
 
 
@@ -308,8 +337,41 @@ def _unset_other_defaults(cursor, user_id: str, profile_id: str | None = None) -
     cursor.execute(f"UPDATE {TABLE_NAME} SET is_default=0 WHERE {where}", params)
 
 
+def _resolve_food_formula(product_id: int, formula_id: int) -> dict[str, Any]:
+    with _connect_app(autocommit=True) as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT p.product_id,f.formula_id,b.standard_brand_name,
+                       p.standard_product_name,p.display_name
+                FROM catfood_standard_formula f
+                JOIN catfood_standard_product p ON p.product_id=f.product_id AND p.active=1
+                JOIN catfood_standard_brand b ON b.brand_id=p.brand_id AND b.active=1
+                WHERE p.product_id=%s AND f.formula_id=%s
+                  AND f.status='active' AND f.is_current=1
+                LIMIT 1
+                """,
+                (product_id, formula_id),
+            )
+            row = cursor.fetchone()
+    if not row:
+        raise ValueError("产品或配方不存在、已停用，或二者不匹配")
+    return row
+
+
+def _apply_food_formula_snapshot(data: dict[str, Any]) -> None:
+    product_id = data.get("food_product_id")
+    formula_id = data.get("food_formula_id")
+    if product_id is None and formula_id is None:
+        return
+    resolved = _resolve_food_formula(product_id, formula_id)
+    data["food_brand"] = resolved["standard_brand_name"]
+    data["food_product"] = resolved.get("display_name") or resolved["standard_product_name"]
+
+
 def create_cat_profile(payload: dict[str, Any]) -> dict[str, Any]:
     data = _normalize_payload(payload)
+    _apply_food_formula_snapshot(data)
     if data["avatar_image_id"]:
         from services.miniprogram_pet_image_service import validate_pet_image_owner
 
@@ -326,8 +388,8 @@ def create_cat_profile(payload: dict[str, Any]) -> dict[str, Any]:
                 INSERT INTO {TABLE_NAME} (
                     id,user_id,name,animal_type,breed,sex,neutered,birthday,age_text,age_months,weight_kg,
                     avatar_url,allergies_json,diseases_json,symptoms_json,health_status_json,avatar_image_id,
-                    food_brand,food_product,notes,is_default,status,created_at,updated_at
-                ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'active',%s,%s)
+                    food_brand,food_product,food_product_id,food_formula_id,notes,is_default,status,created_at,updated_at
+                ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'active',%s,%s)
                 """,
                 (
                     profile_id, data["user_id"], data["name"], data["animal_type"],
@@ -337,6 +399,7 @@ def create_cat_profile(payload: dict[str, Any]) -> dict[str, Any]:
                     _json_dumps(data["diseases"]), _json_dumps(data["symptoms"]),
                     _json_dumps(data["health_status"]), data["avatar_image_id"] or None,
                     data["food_brand"] or None, data["food_product"] or None,
+                    data["food_product_id"], data["food_formula_id"],
                     data["notes"] or None, data["is_default"], now, now,
                 ),
             )
@@ -394,6 +457,7 @@ def update_cat_profile(user_id: Any, profile_id: Any, payload: dict[str, Any]) -
     data.pop("user_id", None)
     if not data:
         raise ValueError("没有可更新字段")
+    _apply_food_formula_snapshot(data)
     init_miniprogram_cat_profile_tables()
     if data.get("avatar_image_id"):
         from services.miniprogram_pet_image_service import validate_pet_image_owner
@@ -417,6 +481,8 @@ def update_cat_profile(user_id: Any, profile_id: Any, payload: dict[str, Any]) -
         "avatar_image_id": "avatar_image_id",
         "food_brand": "food_brand",
         "food_product": "food_product",
+        "food_product_id": "food_product_id",
+        "food_formula_id": "food_formula_id",
         "notes": "notes",
         "is_default": "is_default",
     }
