@@ -16,6 +16,9 @@ class PetContentOperationsServiceTest(unittest.TestCase):
         self.assertIn("猫咪跳跃扑捉", prompt)
         self.assertIn("竖版 3:4", prompt)
         self.assertIn("不复制", prompt)
+        self.assertIn("【物理结构硬约束】", prompt)
+        self.assertIn("不得悬空", prompt)
+        self.assertIn("禁止漂浮、穿模", prompt)
 
     def test_serializers_parse_json_fields(self):
         material = service._serialize_material({"visual_tags": '["猫咪", "玩具"]'})
@@ -78,6 +81,26 @@ class PetContentOperationsServiceTest(unittest.TestCase):
         self.assertIn("低机位动态抓拍", first)
         self.assertIn("近距离特写", second)
         self.assertIn("不得使用橘猫、浅木地板", first)
+        self.assertIn("可以制造并安全使用", first)
+
+    def test_text_evidence_corrects_feeder_misclassified_as_toy(self):
+        prompt = service.build_image_prompt({
+            "id": 12,
+            "title": "Automatic Cat Treat Dispenser and Snack Launcher",
+            "search_keyword": "automatic feeder",
+            "sub_category": "自动互动玩具",
+            "product_type": "普通逗猫玩具",
+            "pet_action": "猫追逐设备",
+        })
+        self.assertIn("【产品主属性】", prompt)
+        self.assertIn("自动投食器 / 自动零食发射器", prompt)
+        self.assertIn("【功能机制】", prompt)
+        self.assertIn("储存宠物零食", prompt)
+        self.assertIn("【视觉证据】", prompt)
+        self.assertIn("出粮口", prompt)
+        self.assertIn("【互斥限制】", prompt)
+        self.assertIn("不要将其表现为追逐扑击类互动玩具", prompt)
+        self.assertNotIn("本产品的核心类别是普通逗猫玩具", prompt)
 
     def test_generate_image_calls_volcengine_ark(self):
         response = unittest.mock.Mock()

@@ -210,6 +210,9 @@ CREATIVE_PLAN_SYSTEM_PROMPT = """你是一名宠物内容视觉策划和生图�
 2. 差异层 difference_layer：写本图独有且必须被一眼看出的产品结构、互动动作、场景、构图、色调和情绪。至少包含一个与其他图明显不同的场景或镜头方案。
 3. 互斥层 exclusion_layer：明确本图绝对不能出现的主体、产品形态、互动方式和模板化视觉组合，并禁止偏离指定视觉路线。
 
+文本优先校正规则：原始产品标题、搜索关键词、人工类目中的明确产品定义，优先级高于图片视觉分析产生的模糊分类。视觉分析只能补充形状、材质和画面证据，不能把投食器改写成逗猫玩具，也不能用宠物当前动作反推错误的产品类别。
+final_prompt 必须依次写清楚：产品主属性、功能机制、视觉证据、互斥限制，然后才能描述摄影风格。
+
 不得复制品牌、Logo、文字、水印、原图的独特产品外观或完全相同构图。不要凭空增加素材没有表达的产品功能，不要把互动产品弱化为普通摆件。
 避免反复使用“橘猫、浅木地板、窗边绿植、左侧暖光、居中构图”这一默认组合。除非输入明确要求，不要加入奶瓶、眼镜、梳子、遥控器等无关配件，也不要使用“亲子陪伴”等与宠物互动无关的叙事。
 
@@ -225,7 +228,17 @@ VISUAL_DIRECTIONS = (
     "户外或半户外自然环境；清晨散射光；石材或草地质感；广角环境构图；强调探索感和空间层次",
 )
 
+PHYSICAL_STRUCTURE_CONSTRAINT = (
+    "所有物体必须符合真实重力、支撑、受力和机械连接关系。玩具主体必须通过地面、底座或素材中明确存在的结构稳定承重，不得悬空。"
+    "如果素材包含弹簧、轮组、底座、透明罩、转轴、连杆或内部转动件，这些部件必须连续连接、装配位置合理，能够解释实际运动来源；"
+    "不得为了表现运动而凭空增加素材没有的机械零件。猫只能接触现实中可触及的部位，猫爪、玩具和地面之间的距离、遮挡、接触点和运动方向必须自然。"
+    "禁止漂浮、穿模、肢体或零件互相穿透、错误铰接、断裂连接、重复部件、无法承重、重心失衡和违反重力的姿态。"
+    "最终产品必须像真实存在、可以制造并安全使用的宠物玩具，不得呈现为概念设计、魔法物体或超现实装置。"
+)
+
 MATERIAL_PROMPT_FIELDS = (
+    ("title", "原始产品标题（仅用于识别类别，不复制品牌文案）"),
+    ("search_keyword", "原始搜索关键词"),
     ("category", "大类"), ("sub_category", "细分类目"), ("product_type", "产品类型"),
     ("main_subject", "画面主体"), ("product_shape", "产品形状/功能结构"),
     ("main_colors", "主要颜色"), ("material_texture", "材质质感"),
@@ -236,6 +249,35 @@ MATERIAL_PROMPT_FIELDS = (
     ("standout_element", "核心视觉亮点"), ("visual_tags", "视觉标签"),
 )
 
+FEEDING_PRODUCT_TERMS = (
+    "自动投食", "自动喂食", "零食发射", "零食投放", "投食器", "喂食器", "粮食分配",
+    "treat dispenser", "treat launcher", "food dispenser", "automatic feeder", "snack dispenser",
+)
+
+
+def _product_semantic_brief(material: dict[str, Any]) -> dict[str, str]:
+    text_evidence = " ".join(
+        _clean(material.get(key), 1000)
+        for key in ("title", "search_keyword", "sub_category", "product_type", "main_subject")
+        if material.get(key)
+    ).lower()
+    if any(term in text_evidence for term in FEEDING_PRODUCT_TERMS):
+        return {
+            "primary_attribute": "本产品的核心类别是自动投食器 / 自动零食发射器，不是普通逗猫玩具",
+            "mechanism": "产品应体现储存宠物零食、自动投放或发射零食的功能，运动和奖励必须由真实投食结构产生",
+            "visual_evidence": "画面中应能看出粮仓或储粮空间、出粮口、可辨认的零食颗粒，以及猫靠近取食或等待投食的行为",
+            "exclusion": "不要将其表现为追逐扑击类互动玩具，不要把重点放在猫追玩具，而应突出投食奖励机制；不得用羽毛、激光点或摆动逗猫杆代替出粮结构",
+        }
+    product = _clean(material.get("product_type") or material.get("sub_category") or "宠物用品", 255)
+    mechanism = _clean(material.get("interaction_type") or material.get("pet_action") or "宠物按产品真实功能与其互动", 500)
+    evidence = _clean(material.get("product_shape") or material.get("standout_element") or "画面应清楚呈现产品功能结构和宠物的实际接触点", 500)
+    return {
+        "primary_attribute": f"本产品的核心类别是{product}，不得改写成其他宠物用品",
+        "mechanism": f"产品功能机制：{mechanism}",
+        "visual_evidence": f"画面必须提供可验证产品类别和功能的视觉证据：{evidence}",
+        "exclusion": f"不得把{product}表现成另一类产品，不得用与真实功能无关的追逐、扑击或装饰性动作取代核心机制",
+    }
+
 
 def _material_prompt_asset(material: dict[str, Any], style: str = "") -> dict[str, Any]:
     asset = {
@@ -245,30 +287,40 @@ def _material_prompt_asset(material: dict[str, Any], style: str = "") -> dict[st
     }
     direction_index = int(material.get("id") or 0) % len(VISUAL_DIRECTIONS)
     asset["指定视觉路线"] = _clean(style, 100) or VISUAL_DIRECTIONS[direction_index]
+    asset["文本优先产品校正"] = _product_semantic_brief(material)
     return asset
 
 
 def _fallback_creative_plan(material: dict[str, Any], style: str = "") -> dict[str, Any]:
     asset = _material_prompt_asset(material, style)
-    product = _clean(material.get("product_type") or material.get("sub_category") or "宠物用品", 255)
-    interaction = _clean(material.get("interaction_type") or material.get("pet_action") or "宠物自然地与产品互动", 500)
+    semantics = _product_semantic_brief(material)
+    product = semantics["primary_attribute"]
+    interaction = semantics["mechanism"]
     structure = _clean(material.get("product_shape") or material.get("material_texture"), 500)
     highlight = _clean(material.get("standout_element") or material.get("emotion"), 500)
     scene = _clean(material.get("usage_scene") or "符合指定视觉路线的简洁环境", 500)
     direction = asset["指定视觉路线"]
-    common_layer = ["真实宠物商业摄影", "产品类别与互动机制清晰", "动作自然安全", "单张竖版 3:4 画面", "无文字、Logo、水印、拼贴和边框"]
-    difference_layer = [value for value in (f"产品明确是{product}", interaction, structure, highlight, f"视觉路线：{direction}") if value]
+    common_layer = [
+        "真实宠物商业摄影", "产品类别与互动机制清晰", "动作自然安全",
+        "单张竖版 3:4 画面", "无文字、Logo、水印、拼贴和边框",
+        PHYSICAL_STRUCTURE_CONSTRAINT,
+    ]
+    difference_layer = [
+        semantics["primary_attribute"], semantics["mechanism"], semantics["visual_evidence"],
+        structure, highlight, f"视觉路线：{direction}",
+    ]
     exclusion_layer = [
         "不得改变产品类别或互动机制",
         "不得添加素材未提及的功能和无关配件",
         "不得使用橘猫、浅木地板、窗边绿植、左侧暖光、居中构图的模板化组合",
         "不得偏离指定视觉路线或复刻原素材构图",
         "不复制品牌、Logo、文字、水印或原素材的独特产品外观",
+        "不得出现悬浮、穿模、错误铰接、断裂连接、重复肢体或违反重力的结构",
+        semantics["exclusion"],
     ]
     details = "；".join(f"{key}：{value}" for key, value in asset.items())
     final_prompt = (
-        f"一张竖版 3:4 的真实宠物商业摄影照片。采用以下独特视觉路线：{direction}。"
-        f"画面中产品必须清楚呈现为{product}，宠物正在{interaction}，互动因果清晰。场景为{scene}。"
+        f"【视觉路线】{direction}。一张竖版 3:4 的真实宠物商业摄影照片，互动因果清晰，场景为{scene}。"
         + (f"产品可见结构与材质：{structure}。" if structure else "")
         + (f"核心视觉亮点：{highlight}。" if highlight else "")
         + f"参考信息：{details}。自然生活方式摄影，真实毛发与材质，高质量光影，主体完整，社交媒体传播感。"
@@ -318,11 +370,20 @@ def build_image_prompt(
         if enhance or llm_client is not None
         else _fallback_creative_plan(material, style)
     )
+    semantics = _product_semantic_brief(material)
+    semantic_block = (
+        f"【产品主属性】{semantics['primary_attribute']}。\n"
+        f"【功能机制】{semantics['mechanism']}。\n"
+        f"【视觉证据】{semantics['visual_evidence']}。\n"
+        f"【互斥限制】{semantics['exclusion']}。"
+    )
     return (
-        f"{plan['final_prompt']}\n\n"
+        f"【文本优先校正】产品标题、搜索关键词和人工类目优先于图片视觉误判。\n"
+        f"{semantic_block}\n\n{plan['final_prompt']}\n\n"
         f"共性层：{'；'.join(plan['common_layer'])}。\n"
         f"差异层：{'；'.join(plan['difference_layer'])}。\n"
-        f"互斥层：{'；'.join(plan['exclusion_layer'])}。"
+        f"互斥层：{'；'.join(plan['exclusion_layer'])}。\n"
+        f"【物理结构硬约束】{PHYSICAL_STRUCTURE_CONSTRAINT}"
     ).strip()
 
 
