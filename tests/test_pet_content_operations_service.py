@@ -30,6 +30,32 @@ class PetContentOperationsServiceTest(unittest.TestCase):
     def test_clean_limits_text(self):
         self.assertEqual(service._clean(" abc ", 2), "ab")
 
+    def test_collection_command_uses_argument_list_without_shell(self):
+        command, config = service._build_collection_command({
+            "platform": "amazon", "category": "玩具", "sub_category": "漏食玩具",
+            "keyword": "automatic cat treat dispenser", "limit": 8, "use_vision": False,
+        })
+        self.assertEqual(command[0], service.sys.executable)
+        self.assertIn("--platforms", command)
+        self.assertIn("amazon", command)
+        self.assertIn("--keyword", command)
+        self.assertIn("automatic cat treat dispenser", command)
+        self.assertIn("--no-vision", command)
+        self.assertEqual(config["item_limit"], 8)
+
+    def test_collection_command_rejects_invalid_platform_and_limit(self):
+        with self.assertRaisesRegex(ValueError, "platform"):
+            service._build_collection_command({"platform": "unknown"})
+        with self.assertRaisesRegex(ValueError, "1 到 20"):
+            service._build_collection_command({"platform": "amazon", "limit": 100})
+
+    def test_full_collection_uses_all_catalog_defaults(self):
+        command, config = service._build_collection_command({"platform": "amazon", "limit": 3})
+        self.assertNotIn("--category", command)
+        self.assertNotIn("--sub-category", command)
+        self.assertNotIn("--keyword", command)
+        self.assertEqual(config["item_limit"], 3)
+
     def test_generate_content_task_enqueues_without_running_inline(self):
         material = {"id": 7, "sub_category": "逗猫棒"}
         with (

@@ -47,18 +47,18 @@ PLATFORM_DOMAINS = {
 }
 
 CATEGORIES = [
-    {"category": "玩具", "sub_category": "自动互动玩具", "keywords": ["automatic interactive cat toy", "smart cat toy"]},
-    {"category": "玩具", "sub_category": "猫薄荷毛绒玩具", "keywords": ["catnip plush toy", "cat kicker toy"]},
-    {"category": "玩具", "sub_category": "益智玩具", "keywords": ["pet puzzle toy", "cat puzzle toy"]},
-    {"category": "玩具", "sub_category": "逗猫棒", "keywords": ["cat teaser wand", "interactive feather wand cat toy"]},
-    {"category": "玩具", "sub_category": "轨道球", "keywords": ["cat track ball toy", "interactive ball track cat toy"]},
-    {"category": "玩具", "sub_category": "磨牙玩具", "keywords": ["pet chew toy", "cat dental chew toy"]},
-    {"category": "玩具", "sub_category": "漏食玩具", "keywords": ["pet treat dispenser toy", "cat food puzzle feeder toy"]},
-    {"category": "玩具", "sub_category": "猫抓板", "keywords": ["cat scratching board", "cardboard cat scratcher"]},
-    {"category": "玩具", "sub_category": "猫隧道", "keywords": ["cat tunnel toy", "collapsible cat play tunnel"]},
-    {"category": "玩具", "sub_category": "激光玩具", "keywords": ["cat laser toy", "automatic laser toy for cats"]},
-    {"category": "衣服", "sub_category": "日常宠物服", "keywords": ["dog hoodie", "cat sweater"]},
-    {"category": "衣服", "sub_category": "搞笑Cosplay", "keywords": ["funny pet costume", "cat cosplay costume"]},
+    {"category": "玩具", "sub_category": "自动互动玩具", "keywords": ["automatic interactive cat toy", "electronic moving cat toy", "motion activated cat toy", "self play cat toy"]},
+    {"category": "玩具", "sub_category": "猫薄荷毛绒玩具", "keywords": ["catnip plush toy", "catnip kicker toy", "refillable catnip toy", "plush cat chew toy"]},
+    {"category": "玩具", "sub_category": "益智玩具", "keywords": ["cat puzzle toy", "interactive cat puzzle feeder", "cat enrichment puzzle toy", "cat intelligence toy"]},
+    {"category": "玩具", "sub_category": "逗猫棒", "keywords": ["cat teaser wand", "interactive feather wand cat toy", "retractable cat wand toy", "suction cup cat teaser toy"]},
+    {"category": "玩具", "sub_category": "轨道球", "keywords": ["cat track ball toy", "interactive ball track cat toy", "multi level cat track toy", "enclosed ball track cat toy"]},
+    {"category": "玩具", "sub_category": "磨牙玩具", "keywords": ["cat dental chew toy", "kitten teething toy", "silvervine chew stick toy", "durable pet chew toy"]},
+    {"category": "玩具", "sub_category": "漏食玩具", "keywords": ["automatic cat treat dispenser", "cat food puzzle feeder toy", "interactive pet slow feeder toy", "cat food dispensing ball"]},
+    {"category": "玩具", "sub_category": "猫抓板", "keywords": ["cat scratching board", "corrugated cardboard cat scratcher", "cat scratching lounge", "cat scratch pad"]},
+    {"category": "玩具", "sub_category": "猫隧道", "keywords": ["cat tunnel toy", "collapsible cat play tunnel", "crinkle cat tunnel", "S shaped cat tunnel"]},
+    {"category": "玩具", "sub_category": "激光玩具", "keywords": ["cat laser toy", "automatic rotating laser cat toy", "rechargeable laser toy for cats", "motion activated cat laser toy"]},
+    {"category": "衣服", "sub_category": "日常宠物服", "keywords": ["pet hoodie", "cat sweater", "dog sweatshirt", "pet pajamas"]},
+    {"category": "衣服", "sub_category": "搞笑Cosplay", "keywords": ["funny pet costume", "cat cosplay costume", "dog cosplay outfit", "pet Halloween costume"]},
 ]
 
 
@@ -175,7 +175,10 @@ def domain_match(url: str, platform: str) -> bool:
 
 
 def search_materials(page, platform: str, keyword: str, category: str, sub_category: str, limit: int):
-    query = quote_plus(f'site:{PLATFORM_DOMAINS[platform]} "{keyword}"')
+    # Bing 图片搜索对带引号的 site: 查询偶尔会忽略域名条件，并返回与
+    # Amazon 无关的百科/植物图片。用平台名称作为自然语言限定词召回更稳定，
+    # 下方仍通过 domain_match 严格保证只保存目标平台的商品页面。
+    query = quote_plus(f"{keyword} {platform} product")
     page.goto(f"https://www.bing.com/images/search?q={query}", wait_until="domcontentloaded", timeout=60000)
     page.wait_for_timeout(1800)
     for _ in range(2):
@@ -183,6 +186,7 @@ def search_materials(page, platform: str, keyword: str, category: str, sub_categ
         page.wait_for_timeout(500)
 
     results = []
+    seen_source_urls: set[str] = set()
     elements = page.locator("a.iusc")
     for index in range(min(elements.count(), max(limit * 6, 20))):
         if len(results) >= limit:
@@ -192,8 +196,14 @@ def search_materials(page, platform: str, keyword: str, category: str, sub_categ
             metadata = json.loads(raw) if raw else {}
             image_url = metadata.get("murl") or metadata.get("turl")
             source_url = metadata.get("purl") or metadata.get("surl")
-            if not image_url or not source_url or not domain_match(source_url, platform):
+            if (
+                not image_url
+                or not source_url
+                or not domain_match(source_url, platform)
+                or source_url in seen_source_urls
+            ):
                 continue
+            seen_source_urls.add(source_url)
             rank = len(results) + 1
             results.append({
                 "platform": platform,

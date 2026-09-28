@@ -7,12 +7,15 @@ from services.pet_content_operations_service import (
     approve_task,
     delete_material,
     generate_content_task,
+    get_material_collection_task,
     get_material,
     get_task,
     list_materials,
+    list_material_collection_tasks,
     list_tasks,
     publish_task,
     regenerate_task_image,
+    start_material_collection,
     update_material,
     update_task_content,
 )
@@ -58,6 +61,27 @@ def material_update(material_id: int):
 @admin_required
 def material_delete(material_id: int):
     return _response(lambda: delete_material(material_id))
+
+
+@pet_content_api.post("/collection-tasks")
+@admin_required
+def material_collection_create():
+    payload = request.get_json(silent=True) or {}
+    return _response(lambda: start_material_collection(
+        payload, created_by=payload.get("operator") or "pipeline-review-page",
+    ), 202)
+
+
+@pet_content_api.get("/collection-tasks")
+@admin_required
+def material_collection_list():
+    return _response(lambda: list_material_collection_tasks(request.args.get("limit") or 20))
+
+
+@pet_content_api.get("/collection-tasks/<task_id>")
+@admin_required
+def material_collection_detail(task_id: str):
+    return _response(lambda: {"ok": True, "item": get_material_collection_task(task_id)})
 
 
 @pet_content_api.post("/tasks")

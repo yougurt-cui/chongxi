@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import subprocess
+import sys
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
@@ -22,9 +25,11 @@ from app_config import get_ark_image_config, get_mysql_config, get_qwen_config
 
 MATERIAL_TABLE = "pet_material"
 TASK_TABLE = "pet_content_task"
+COLLECTION_TASK_TABLE = "pet_material_collection_task"
 MAX_PAGE_SIZE = 100
 GENERATED_DIR = Path(__file__).resolve().parents[1] / "var" / "generated_pet_content"
 _generation_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="pet-content")
+_collection_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="pet-material-collection")
 OFFICIAL_USER_ID = os.getenv("MINIPROGRAM_OFFICIAL_USER_ID", "").strip() or "content-operations"
 OFFICIAL_AUTHOR_NAME = "宠析官方"
 
@@ -105,7 +110,143 @@ def init_pet_content_tables() -> None:
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
                 """
             )
+            cursor.execute(
+                f"""
+                CREATE TABLE IF NOT EXISTS {COLLECTION_TASK_TABLE} (
+                    id CHAR(32) NOT NULL,
+                    platform VARCHAR(32) NOT NULL,
+                    category VARCHAR(64) NULL,
+                    sub_category VARCHAR(128) NULL,
+                    keyword VARCHAR(255) NULL,
+                    item_limit INT NOT NULL DEFAULT 5,
+                    use_vision TINYINT(1) NOT NULL DEFAULT 1,
+                    status VARCHAR(32) NOT NULL DEFAULT 'pending',
+                    collected_count INT NOT NULL DEFAULT 0,
+                    log_text LONGTEXT NULL,
+                    error_message TEXT NULL,
+                    created_by VARCHAR(128) NULL,
+                    created_at DATETIME NOT NULL,
+                    started_at DATETIME NULL,
+                    finished_at DATETIME NULL,
+                    updated_at DATETIME NOT NULL,
+                    PRIMARY KEY (id),
+                    KEY idx_pet_material_collection_status (status,created_at)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+                """
+            )
         conn.commit()
+
+
+def _serialize_collection_task(row: dict[str, Any]) -> dict[str, Any]:
+    item = dict(row)
+    item["use_vision"] = bool(item.get("use_vision"))
+    return item
+
+
+def _build_collection_command(payload: dict[str, Any]) -> tuple[list[str], dict[str, Any]]:
+    platform = _clean(payload.get("platform") or "amazon", 32).lower()
+    if platform not in {"amazon", "youtube", "facebook"}:
+        raise ValueError("platform 仅支持 amazon/youtube/facebook")
+    try:
+        item_limit = int(payload.get("limit") or 5)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("limit 必须是整数") from exc
+    if not 1 <= item_limit <= 20:
+        raise ValueError("limit 必须在 1 到 20 之间")
+    category = _clean(payload.get("category"), 64)
+    sub_category = _clean(payload.get("sub_category"), 128)
+    keyword = _clean(payload.get("keyword"), 255)
+    use_vision = bool(payload.get("use_vision", True))
+    script = Path(__file__).resolve().parents[1] / "scripts" / "pet_material_onefile.py"
+    command = [sys.executable, "-u", str(script), "--platforms", platform, "--limit", str(item_limit)]
+    if category:
+        command.extend(["--category", category])
+    if sub_category:
+        command.extend(["--sub-category", sub_category])
+    if keyword:
+        command.extend(["--keyword", keyword])
+    if not use_vision:
+        command.append("--no-vision")
+    return command, {
+        "platform": platform, "category": category, "sub_category": sub_category,
+        "keyword": keyword, "item_limit": item_limit, "use_vision": use_vision,
+    }
+
+
+def _update_collection_task(task_id: str, **values: Any) -> None:
+    values["updated_at"] = _now()
+    with _connect() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                f"UPDATE {COLLECTION_TASK_TABLE} SET {','.join(f'{key}=%s' for key in values)} WHERE id=%s",
+                [*values.values(), task_id],
+            )
+        conn.commit()
+
+
+def _run_collection_task(task_id: str, command: list[str]) -> None:
+    _update_collection_task(task_id, status="running", started_at=_now(), error_message=None)
+    try:
+        result = subprocess.run(
+            command, cwd=str(Path(__file__).resolve().parents[1]), text=True,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=1800, check=False,
+        )
+        output = _clean(result.stdout, 20000)
+        match = re.search(r"完成，共处理\s*(\d+)\s*条素材", output)
+        count = int(match.group(1)) if match else 0
+        if result.returncode != 0:
+            raise RuntimeError(output[-4000:] or f"采集进程退出码 {result.returncode}")
+        _update_collection_task(
+            task_id, status="completed", collected_count=count, log_text=output,
+            error_message=None, finished_at=_now(),
+        )
+    except Exception as exc:
+        _update_collection_task(
+            task_id, status="failed", error_message=_clean(exc, 4000), finished_at=_now(),
+        )
+
+
+def start_material_collection(payload: dict[str, Any], created_by: str = "admin") -> dict[str, Any]:
+    init_pet_content_tables()
+    command, config = _build_collection_command(payload)
+    task_id, now = uuid.uuid4().hex, _now()
+    with _connect() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                f"""INSERT INTO {COLLECTION_TASK_TABLE}
+                (id,platform,category,sub_category,keyword,item_limit,use_vision,status,created_by,created_at,updated_at)
+                VALUES(%s,%s,%s,%s,%s,%s,%s,'pending',%s,%s,%s)""",
+                (task_id, config["platform"], config["category"] or None, config["sub_category"] or None,
+                 config["keyword"] or None, config["item_limit"], int(config["use_vision"]),
+                 _clean(created_by, 128) or None, now, now),
+            )
+        conn.commit()
+    _collection_executor.submit(_run_collection_task, task_id, command)
+    return {"ok": True, "item": get_material_collection_task(task_id)}
+
+
+def get_material_collection_task(task_id: Any) -> dict[str, Any]:
+    init_pet_content_tables()
+    with _connect(autocommit=True) as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(f"SELECT * FROM {COLLECTION_TASK_TABLE} WHERE id=%s LIMIT 1", (_clean(task_id, 32),))
+            row = cursor.fetchone()
+    if not row:
+        raise LookupError("素材采集任务不存在")
+    return _serialize_collection_task(row)
+
+
+def list_material_collection_tasks(limit: Any = 20) -> dict[str, Any]:
+    init_pet_content_tables()
+    cleaned_limit = max(1, min(int(limit or 20), 100))
+    with _connect(autocommit=True) as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                f"SELECT * FROM {COLLECTION_TASK_TABLE} ORDER BY created_at DESC LIMIT %s",
+                (cleaned_limit,),
+            )
+            rows = list(cursor.fetchall() or [])
+    return {"ok": True, "count": len(rows), "items": [_serialize_collection_task(row) for row in rows]}
 
 
 def _serialize_material(row: dict[str, Any]) -> dict[str, Any]:

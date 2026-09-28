@@ -27,6 +27,7 @@ git checkout "$REMOTE_BRANCH"
 git pull --ff-only origin "$REMOTE_BRANCH"
 
 .venv/bin/python -m pip install -r requirements.txt
+.venv/bin/python -m playwright install chromium
 
 .venv/bin/python -m py_compile \
   main.py \

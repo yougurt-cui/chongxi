@@ -767,6 +767,7 @@
       <button id="identityTab" class="tab" type="button" data-tab="identity">身份认证</button>
       <button id="diseaseTab" class="tab" type="button" data-tab="disease">病症数据确认</button>
       <button id="contentReviewTab" class="tab" type="button" data-tab="content">内容审核</button>
+      <button id="materialCollectionTab" class="tab" type="button" data-tab="material-collection">素材采集</button>
       <button id="contentOperationsTab" class="tab" type="button" data-tab="content-operations">内容运营</button>
       <button id="reportReviewTab" class="tab" type="button" data-tab="report">举报审核</button>
       <button id="ideaTab" class="tab" type="button" data-tab="idea">创意管理</button>
@@ -1235,6 +1236,33 @@
       </section>
     </section>
 
+    <section id="materialCollectionSection" class="section" hidden>
+      <section class="toolbar">
+        <div>
+          <div class="title">Amazon 宠物素材采集</div>
+          <div id="materialCollectionSummary" class="muted">选择大类和子类目，系统自动使用该子类目的 4 组扩展关键词采集。</div>
+        </div>
+        <button id="materialCollectionRefresh" class="button secondary" type="button">刷新任务</button>
+      </section>
+      <section class="filters" aria-label="素材采集参数">
+        <label><span class="field-label">大类</span><select id="collectionCategory"></select></label>
+        <label><span class="field-label">子类目</span><select id="collectionSubCategory"></select></label>
+        <label><span class="field-label">每个关键词数量</span><input id="collectionLimit" type="number" min="1" max="20" value="5" /></label>
+        <label><span class="field-label">视觉分析</span><select id="collectionVision"><option value="1">启用</option><option value="0">跳过</option></select></label>
+        <div><span class="field-label">搜索关键词</span><div class="muted">系统按所选子类目自动使用 4 组扩展词</div></div>
+        <div class="row-actions"><button id="materialCollectionStart" class="button" type="button">开始采集一轮</button></div>
+      </section>
+      <section class="card">
+        <div class="table-wrap">
+          <table style="min-width:980px;">
+            <thead><tr><th>平台</th><th>类目</th><th>关键词</th><th>数量</th><th>视觉分析</th><th>状态</th><th>创建时间</th><th>操作</th></tr></thead>
+            <tbody id="materialCollectionRows"></tbody>
+          </table>
+        </div>
+        <div id="materialCollectionEmpty" class="empty" style="display:none;">暂无素材采集任务。</div>
+      </section>
+    </section>
+
     <section id="contentOperationsSection" class="section" hidden>
       <iframe
         id="contentOperationsFrame"
@@ -1384,12 +1412,23 @@
     const identityTab = document.getElementById("identityTab");
     const diseaseTab = document.getElementById("diseaseTab");
     const contentReviewTab = document.getElementById("contentReviewTab");
+    const materialCollectionTab = document.getElementById("materialCollectionTab");
     const contentOperationsTab = document.getElementById("contentOperationsTab");
     const reportReviewTab = document.getElementById("reportReviewTab");
     const nodeSection = document.getElementById("nodeSection");
     const identitySection = document.getElementById("identitySection");
     const diseaseSection = document.getElementById("diseaseSection");
     const contentReviewSection = document.getElementById("contentReviewSection");
+    const materialCollectionSection = document.getElementById("materialCollectionSection");
+    const materialCollectionSummary = document.getElementById("materialCollectionSummary");
+    const materialCollectionRows = document.getElementById("materialCollectionRows");
+    const materialCollectionEmpty = document.getElementById("materialCollectionEmpty");
+    const materialCollectionRefresh = document.getElementById("materialCollectionRefresh");
+    const materialCollectionStart = document.getElementById("materialCollectionStart");
+    const collectionCategory = document.getElementById("collectionCategory");
+    const collectionSubCategory = document.getElementById("collectionSubCategory");
+    const collectionLimit = document.getElementById("collectionLimit");
+    const collectionVision = document.getElementById("collectionVision");
     const contentOperationsSection = document.getElementById("contentOperationsSection");
     const contentOperationsFrame = document.getElementById("contentOperationsFrame");
     const reportReviewSection = document.getElementById("reportReviewSection");
@@ -3340,12 +3379,90 @@
       await loadEnterpriseAdmin();
     }
 
+    let materialCollectionTimer = null;
+    const materialCollectionCatalog = {
+      "玩具": ["自动互动玩具", "猫薄荷毛绒玩具", "益智玩具", "逗猫棒", "轨道球", "磨牙玩具", "漏食玩具", "猫抓板", "猫隧道", "激光玩具"],
+      "衣服": ["日常宠物服", "搞笑Cosplay"],
+    };
+
+    function fillMaterialCollectionCategories() {
+      collectionCategory.innerHTML = Object.keys(materialCollectionCatalog)
+        .map((category) => `<option value="${escapeHtml(category)}">${escapeHtml(category)}</option>`).join("");
+      fillMaterialCollectionSubCategories();
+    }
+
+    function fillMaterialCollectionSubCategories() {
+      const subCategories = materialCollectionCatalog[collectionCategory.value] || [];
+      collectionSubCategory.innerHTML = subCategories
+        .map((subCategory) => `<option value="${escapeHtml(subCategory)}">${escapeHtml(subCategory)}</option>`).join("");
+    }
+
+    function renderMaterialCollectionTasks(items) {
+      materialCollectionSummary.textContent = `共 ${items.length} 个采集任务`;
+      materialCollectionRows.innerHTML = "";
+      materialCollectionEmpty.style.display = items.length ? "none" : "block";
+      items.forEach((item) => {
+        const row = document.createElement("tr");
+        row.innerHTML = `
+          <td><span class="chip">${escapeHtml(item.platform)}</span></td>
+          <td>${escapeHtml([item.category,item.sub_category].filter(Boolean).join(" / ") || "全部预设类目")}</td>
+          <td>${escapeHtml(item.keyword || "系统扩展关键词")}</td>
+          <td>${escapeHtml(item.collected_count || 0)} / 每词 ${escapeHtml(item.item_limit)}</td>
+          <td>${item.use_vision ? "启用" : "跳过"}</td>
+          <td><span class="status-badge">${escapeHtml(item.status)}</span>${item.error_message ? `<div class="reason-cell" style="margin-top:6px;">${escapeHtml(compactText(item.error_message,160))}</div>` : ""}</td>
+          <td class="muted">${escapeHtml(item.created_at || "-")}</td>
+          <td><button class="small-button secondary" data-log type="button">查看日志</button></td>`;
+        row.querySelector("[data-log]").addEventListener("click", () => {
+          outputDialogMeta.textContent = `素材采集任务｜${item.status}`;
+          outputJsonEl.textContent = item.log_text || item.error_message || "任务尚未产生日志";
+          outputDialog.showModal();
+        });
+        materialCollectionRows.appendChild(row);
+      });
+      const running = items.some((item) => ["pending","running"].includes(item.status));
+      window.clearTimeout(materialCollectionTimer);
+      if (running && activeTab === "material-collection") materialCollectionTimer = window.setTimeout(loadMaterialCollectionTasks, 3000);
+    }
+
+    async function loadMaterialCollectionTasks() {
+      try {
+        const data = await api("/api/admin/pet-content/collection-tasks?limit=30");
+        renderMaterialCollectionTasks(data.items || []);
+      } catch (error) {
+        materialCollectionSummary.textContent = `加载失败：${error.message}`;
+      }
+    }
+
+    async function startMaterialCollection() {
+      const limit = Number(collectionLimit.value || 5);
+      if (!Number.isInteger(limit) || limit < 1 || limit > 20) return showToast("数量必须在 1 到 20 之间", "error");
+      materialCollectionStart.disabled = true;
+      try {
+        await api("/api/admin/pet-content/collection-tasks", {
+          method: "POST", headers: {"Content-Type":"application/json"},
+          body: JSON.stringify({
+            platform: "amazon", category: collectionCategory.value,
+            sub_category: collectionSubCategory.value, limit,
+            use_vision: collectionVision.value === "1",
+            operator: "pipeline-review-page",
+          }),
+        });
+        showToast(`${collectionSubCategory.value}素材采集任务已启动`);
+        await loadMaterialCollectionTasks();
+      } catch (error) {
+        showToast(error.message, "error");
+      } finally {
+        materialCollectionStart.disabled = false;
+      }
+    }
+
     function switchTab(tab) {
       activeTab = tab;
       nodeTab.classList.toggle("active", tab === "node");
       identityTab.classList.toggle("active", tab === "identity");
       diseaseTab.classList.toggle("active", tab === "disease");
       contentReviewTab.classList.toggle("active", tab === "content");
+      materialCollectionTab.classList.toggle("active", tab === "material-collection");
       contentOperationsTab.classList.toggle("active", tab === "content-operations");
       reportReviewTab.classList.toggle("active", tab === "report");
       ideaTab.classList.toggle("active", tab === "idea");
@@ -3354,6 +3471,7 @@
       identitySection.hidden = tab !== "identity";
       diseaseSection.hidden = tab !== "disease";
       contentReviewSection.hidden = tab !== "content";
+      materialCollectionSection.hidden = tab !== "material-collection";
       contentOperationsSection.hidden = tab !== "content-operations";
       reportReviewSection.hidden = tab !== "report";
       ideaSection.hidden = tab !== "idea";
@@ -3380,6 +3498,7 @@
       if (tab === "content-operations" && !contentOperationsFrame.src) {
         contentOperationsFrame.src = contentOperationsFrame.dataset.src;
       }
+      if (tab === "material-collection") loadMaterialCollectionTasks();
       if (tab === "report" && !reportReviewRowsEl.children.length) {
         loadReportReviewItems();
       }
@@ -3514,6 +3633,11 @@
     identityTab.addEventListener("click", () => switchTab("identity"));
     diseaseTab.addEventListener("click", () => switchTab("disease"));
     contentReviewTab.addEventListener("click", () => switchTab("content"));
+    materialCollectionTab.addEventListener("click", () => switchTab("material-collection"));
+    materialCollectionRefresh.addEventListener("click", loadMaterialCollectionTasks);
+    materialCollectionStart.addEventListener("click", startMaterialCollection);
+    collectionCategory.addEventListener("change", fillMaterialCollectionSubCategories);
+    fillMaterialCollectionCategories();
     contentOperationsTab.addEventListener("click", () => switchTab("content-operations"));
     reportReviewTab.addEventListener("click", () => switchTab("report"));
     ideaTab.addEventListener("click", () => switchTab("idea"));
