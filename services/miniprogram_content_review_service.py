@@ -27,6 +27,7 @@ MAX_LIST_LIMIT = 200
 CONTENT_TYPES = {"all", "post", "comment"}
 CONTENT_ACTIONS = {"check", "hide", "delete"}
 SAFETY_TABLE_NAME = "miniprogram_content_safety_check"
+GENERATED_CONTENT_TABLE_NAME = "pet_content_task"
 _ACCESS_TOKEN_CACHE: dict[str, Any] = {"token": "", "expires_at": 0.0}
 DEFAULT_PUBLIC_BASE_URL = "https://chongxi.cloud"
 
@@ -437,10 +438,14 @@ def _serialize_post(row: dict[str, Any]) -> dict[str, Any]:
         "post_id": row.get("id"),
         "user_id": row.get("user_id") or "",
         "openid": row.get("openid") or "",
+        "author_name": row.get("author_name") or ("宠析官方" if row.get("generation_task_id") else ""),
         "title": row.get("title") or "",
         "content": content,
         "images": images if isinstance(images, list) else [],
         "image_count": len(images) if isinstance(images, list) else 0,
+        "generated": bool(row.get("generation_task_id")),
+        "generation_task_id": row.get("generation_task_id") or "",
+        "generation_model": row.get("generation_model") or "",
         "status": row.get("status") or "",
         "created_at": str(row.get("created_at") or ""),
         "updated_at": str(row.get("updated_at") or ""),
@@ -516,7 +521,10 @@ def _attach_latest_safety(items: list[dict[str, Any]]) -> None:
         item["latest_safety"] = checks[0] if checks else {}
 
 
-def list_content_reviews(*, content_type: Any = "all", status: Any = "active", limit: Any = 50) -> dict[str, Any]:
+def list_content_reviews(
+    *, content_type: Any = "all", status: Any = "active", limit: Any = 50,
+    generated_only: bool = False,
+) -> dict[str, Any]:
     cleaned_type = _clean(content_type, 16) or "all"
     if cleaned_type not in CONTENT_TYPES:
         raise ValueError("type 仅支持 all/post/comment")
@@ -529,10 +537,20 @@ def list_content_reviews(*, content_type: Any = "all", status: Any = "active", l
     with _connect_app(autocommit=True) as conn:
         with conn.cursor() as cursor:
             if cleaned_type in {"all", "post"}:
+                generated_join = (
+                    f"INNER JOIN {GENERATED_CONTENT_TABLE_NAME} generated_task "
+                    "ON generated_task.platform_post_id=p.id AND generated_task.publish_status='published'"
+                    if generated_only else ""
+                )
+                generated_fields = (
+                    ", generated_task.id AS generation_task_id, generated_task.generation_model"
+                    if generated_only else ""
+                )
                 cursor.execute(
                     f"""
-                    SELECT p.*, u.openid
+                    SELECT p.*, u.openid{generated_fields}
                     FROM {MOMENT_TABLE_NAME} p
+                    {generated_join}
                     LEFT JOIN {USER_TABLE} u ON u.id=p.user_id
                     WHERE p.status=%s
                     ORDER BY p.updated_at DESC
@@ -541,7 +559,7 @@ def list_content_reviews(*, content_type: Any = "all", status: Any = "active", l
                     (cleaned_status, cleaned_limit),
                 )
                 items.extend(_serialize_post(row) for row in list(cursor.fetchall() or []))
-            if cleaned_type in {"all", "comment"}:
+            if not generated_only and cleaned_type in {"all", "comment"}:
                 cursor.execute(
                     f"""
                     SELECT c.*, p.title AS post_title, u.openid
@@ -558,7 +576,7 @@ def list_content_reviews(*, content_type: Any = "all", status: Any = "active", l
     items.sort(key=lambda item: item.get("updated_at") or "", reverse=True)
     items = items[:cleaned_limit]
     _attach_latest_safety(items)
-    return {"ok": True, "count": len(items), "items": items}
+    return {"ok": True, "count": len(items), "generated_only": bool(generated_only), "items": items}
 
 
 def _load_content(cursor, content_type: str, content_id: str) -> dict[str, Any]:

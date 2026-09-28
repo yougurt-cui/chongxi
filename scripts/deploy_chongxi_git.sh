@@ -35,6 +35,7 @@ git pull --ff-only origin "$REMOTE_BRANCH"
   api/catfood_standardization_api.py \
   api/consumer_api.py \
   api/miniprogram_api.py \
+  api/pet_content_api.py \
   api/pipeline_api.py \
   api/product_identity_api.py \
   api/product_catalog_api.py \
@@ -59,6 +60,7 @@ git pull --ff-only origin "$REMOTE_BRANCH"
   services/miniprogram_content_review_service.py \
   services/miniprogram_moment_service.py \
   services/miniprogram_moment_report_service.py \
+  services/pet_content_operations_service.py \
   services/product_function_service.py \
   services/product_identity_service.py \
   services/taobao_sku_import_service.py \
@@ -78,6 +80,8 @@ git pull --ff-only origin "$REMOTE_BRANCH"
   vendor/feature_score_pipeline/scripts/protein_score1.py \
   vendor/feature_score_pipeline/scripts/rebuild_protein_source_aggregate.py \
   scripts/rebuild_protein_source_from_profiles.py \
+  scripts/generate_pet_content.py \
+  scripts/pet_material_onefile.py \
   vendor/csv_mysql_labeling/src/parse_catfood_ocr.py \
   vendor/csv_mysql_labeling/src/extract_catfood_brand_relations.py \
   vendor/feature_score_pipeline/scripts/brand_normalizer.py

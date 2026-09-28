@@ -8,6 +8,19 @@ class MiniProgramContentReviewServiceTest(unittest.TestCase):
     def test_json_loads_parses_image_list(self):
         self.assertEqual(service._json_loads('[{"url": "/image"}]', []), [{"url": "/image"}])
 
+    def test_generated_post_serializes_photos_and_generation_metadata(self):
+        item = service._serialize_post({
+            "id": "post-1", "title": "标题", "content": "正文",
+            "images_json": '[{"url":"/image-1.jpg"}]', "status": "active",
+            "generation_task_id": "task-1", "generation_model": "seedream",
+            "author_name": "宠析官方",
+        })
+        self.assertEqual(item["images"], [{"url": "/image-1.jpg"}])
+        self.assertEqual(item["image_count"], 1)
+        self.assertTrue(item["generated"])
+        self.assertEqual(item["generation_task_id"], "task-1")
+        self.assertEqual(item["author_name"], "宠析官方")
+
     def test_relative_media_url_uses_public_base(self):
         self.assertEqual(
             service._absolute_media_url("/api/miniprogram/moment-images/f1"),

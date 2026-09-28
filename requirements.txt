@@ -1,5 +1,7 @@
 Flask
 PyMySQL
+playwright==1.48.0
+requests
 SQLAlchemy
 PyYAML
 numpy

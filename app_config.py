@@ -99,6 +99,29 @@ def get_qwen_config(payload: Dict[str, Any] | None = None) -> Dict[str, str]:
     }
 
 
+def get_ark_image_config(payload: Dict[str, Any] | None = None) -> Dict[str, str]:
+    """Return Volcengine Ark image-generation configuration."""
+    payload = dict(payload or {})
+    return {
+        "api_key": str(
+            payload.get("api_key")
+            or os.getenv("ARK_API_KEY")
+            or os.getenv("VOLCENGINE_ARK_API_KEY")
+            or ""
+        ).strip(),
+        "base_url": str(
+            payload.get("base_url")
+            or os.getenv("ARK_BASE_URL")
+            or "https://ark.cn-beijing.volces.com/api/v3"
+        ).strip().rstrip("/"),
+        "model": str(
+            payload.get("model")
+            or os.getenv("ARK_IMAGE_MODEL")
+            or "doubao-seedream-4-0-250828"
+        ).strip(),
+    }
+
+
 def get_chat_model_config(payload: Dict[str, Any] | None = None) -> Dict[str, str]:
     """Return the text-chat model config without changing Qwen vision/OCR settings."""
     payload = dict(payload or {})

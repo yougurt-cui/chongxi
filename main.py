@@ -45,6 +45,7 @@ try:
     from .api.comment_mining_api import comment_mining_api
     from .api.demand_cross_analysis_api import demand_cross_analysis_api
     from .api.disease_representative_api import disease_representative_api
+    from .api.pet_content_api import pet_content_api
 except ImportError:
     from api.consumer_api import consumer_api
     from api.business_api import business_api
@@ -66,6 +67,7 @@ except ImportError:
     from api.comment_mining_api import comment_mining_api
     from api.demand_cross_analysis_api import demand_cross_analysis_api
     from api.disease_representative_api import disease_representative_api
+    from api.pet_content_api import pet_content_api
 
 from services import cat_food_task_service as task_store
 
@@ -1951,6 +1953,7 @@ def create_app() -> Flask:
     flask_app.register_blueprint(comment_mining_api)
     flask_app.register_blueprint(demand_cross_analysis_api)
     flask_app.register_blueprint(disease_representative_api)
+    flask_app.register_blueprint(pet_content_api)
 
     @flask_app.get("/health")
     def health() -> tuple[dict, int]:
@@ -2106,6 +2109,14 @@ def create_app() -> Flask:
         response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
         response.headers["Pragma"] = "no-cache"
         response.headers["Expires"] = "0"
+        return response
+
+    @flask_app.get("/pet-content-operations.html")
+    def pet_content_operations_html():
+        if response := _workbench_login_required():
+            return response
+        response = send_from_directory(WEB_DIR, "pet-content-operations.html")
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
         return response
 
     @flask_app.get("/formula-clue-analysis.html")

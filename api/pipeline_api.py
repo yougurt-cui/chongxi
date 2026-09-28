@@ -68,6 +68,7 @@ def miniprogram_content_reviews():
             content_type=request.args.get("type") or "all",
             status=request.args.get("status") or "active",
             limit=request.args.get("limit") or 50,
+            generated_only=str(request.args.get("generated_only") or "").lower() in {"1", "true", "yes"},
         )
         return jsonify(result), 200
     except ValueError as exc:

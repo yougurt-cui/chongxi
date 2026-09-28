@@ -1,0 +1,161 @@
+import json
+import unittest
+from unittest.mock import patch
+
+from services import pet_content_operations_service as service
+
+
+class PetContentOperationsServiceTest(unittest.TestCase):
+    def test_build_prompt_uses_material_without_copying_brand(self):
+        prompt = service.build_image_prompt({
+            "sub_category": "逗猫棒",
+            "product_type": "羽毛逗猫棒",
+            "pet_action": "猫咪跳跃扑捉",
+            "usage_scene": "客厅",
+        }, "自然生活方式摄影")
+        self.assertIn("猫咪跳跃扑捉", prompt)
+        self.assertIn("竖版 3:4", prompt)
+        self.assertIn("不复制", prompt)
+
+    def test_serializers_parse_json_fields(self):
+        material = service._serialize_material({"visual_tags": '["猫咪", "玩具"]'})
+        task = service._serialize_task({"hashtags_json": '["猫咪"]'})
+        self.assertEqual(material["visual_tags"], ["猫咪", "玩具"])
+        self.assertEqual(task["hashtags"], ["猫咪"])
+        self.assertNotIn("hashtags_json", task)
+
+    def test_clean_limits_text(self):
+        self.assertEqual(service._clean(" abc ", 2), "ab")
+
+    def test_generate_content_task_enqueues_without_running_inline(self):
+        material = {"id": 7, "sub_category": "逗猫棒"}
+        with (
+            patch.object(service, "get_material", return_value=material),
+            patch.object(service, "_create_task", return_value="task-1"),
+            patch.object(service, "get_task", return_value={"id": "task-1", "status": "pending"}),
+            patch.object(service._generation_executor, "submit") as submit,
+        ):
+            result = service.generate_content_task(7)
+        self.assertEqual(result["item"]["status"], "pending")
+        submitted = submit.call_args.args
+        self.assertEqual(submitted[:2], (service._run_content_generation, "task-1"))
+        self.assertEqual(submitted[2], material)
+        self.assertEqual(submitted[3], "")
+
+    def test_creative_plan_preserves_llm_structure_and_anchors(self):
+        class FakeClient:
+            def chat(self, **kwargs):
+                self.kwargs = kwargs
+                return json.dumps({
+                    "creative_core": "猫咪追逐轨道里的球",
+                    "must_keep": ["环形轨道", "猫爪拨球"],
+                    "can_change": ["颜色", "猫咪品种"],
+                    "final_prompt": "一只猫用前爪拨动环形轨道里的球，真实摄影。",
+                }, ensure_ascii=False)
+
+        client = FakeClient()
+        prompt = service.build_image_prompt({
+            "sub_category": "轨道球", "product_type": "环形轨道球玩具",
+            "product_shape": "环形轨道内嵌小球", "pet_action": "猫爪拨球",
+            "interaction_type": "球沿轨道滚动，猫继续追逐",
+        }, llm_client=client)
+        self.assertIn("环形轨道", prompt)
+        self.assertIn("猫爪拨球", prompt)
+        self.assertIn("不得改变产品类别或互动机制", prompt)
+        self.assertIn("产品形状/功能结构", client.kwargs["user_prompt"])
+
+    def test_generate_image_calls_volcengine_ark(self):
+        response = unittest.mock.Mock()
+        response.status_code = 200
+        response.headers = {"x-tt-logid": "ark-request-1"}
+        response.json.return_value = {"data": [{"url": "https://example.com/image.png"}]}
+        with (
+            patch.object(service, "get_ark_image_config", return_value={
+                "api_key": "ark-key",
+                "base_url": "https://ark.cn-beijing.volces.com/api/v3",
+                "model": "doubao-seedream-4-0-250828",
+            }),
+            patch.object(service.requests, "post", return_value=response) as post,
+        ):
+            request_id, image_url = service._generate_image("一只玩逗猫棒的猫")
+
+        self.assertEqual(request_id, "ark-request-1")
+        self.assertEqual(image_url, "https://example.com/image.png")
+        call = post.call_args
+        self.assertEqual(call.args[0], "https://ark.cn-beijing.volces.com/api/v3/images/generations")
+        self.assertEqual(call.kwargs["headers"]["Authorization"], "Bearer ark-key")
+        self.assertEqual(call.kwargs["json"]["size"], "1728x2304")
+        self.assertEqual(call.kwargs["json"]["sequential_image_generation"], "disabled")
+        self.assertFalse(call.kwargs["json"]["stream"])
+        self.assertTrue(call.kwargs["json"]["watermark"])
+
+    def test_generate_image_requires_ark_api_key(self):
+        with patch.object(service, "get_ark_image_config", return_value={
+            "api_key": "", "base_url": "https://ark.example/api/v3", "model": "seedream",
+        }):
+            with self.assertRaisesRegex(RuntimeError, "ARK_API_KEY"):
+                service._generate_image("prompt")
+
+    def test_generate_image_explains_model_not_open(self):
+        response = unittest.mock.Mock()
+        response.status_code = 404
+        response.json.return_value = {
+            "error": {"code": "ModelNotOpen", "message": "account has not activated model"},
+        }
+        with (
+            patch.object(service, "get_ark_image_config", return_value={
+                "api_key": "ark-key", "base_url": "https://ark.example/api/v3",
+                "model": "doubao-seedream-4-0-250828",
+            }),
+            patch.object(service.requests, "post", return_value=response),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "开通管理"):
+                service._generate_image("prompt")
+
+    def test_generate_copy_uses_fallback_when_model_returns_empty_fields(self):
+        response = unittest.mock.Mock()
+        response.choices = [unittest.mock.Mock(message=unittest.mock.Mock(content='{"title":"","content":"","hashtags":[]}'))]
+        client = unittest.mock.Mock()
+        client.chat.completions.create.return_value = response
+        with (
+            patch.object(service, "get_qwen_config", return_value={
+                "api_key": "key", "base_url": "https://example.com/v1", "model": "qwen-plus",
+            }),
+            patch.object(service, "OpenAI", return_value=client),
+        ):
+            copy = service._generate_copy({"sub_category": "轨道球", "pet_action": "用爪子拨球"})
+        self.assertTrue(copy["title"])
+        self.assertTrue(copy["content"])
+        self.assertTrue(copy["hashtags"])
+
+    def test_approve_rejects_empty_copy(self):
+        with patch.object(service, "get_task", return_value={
+            "id": "task-1", "status": "draft", "title": None, "content": None,
+            "generated_image_url": "https://example.com/image.jpg",
+        }):
+            with self.assertRaisesRegex(ValueError, "标题、正文和图片"):
+                service.approve_task("task-1")
+
+    def test_publish_uses_official_miniprogram_identity(self):
+        task = {
+            "id": "task-1", "status": "approved", "publish_status": "unpublished",
+            "material_id": 7, "title": "猫咪玩球", "content": "今天玩得很开心。",
+            "hashtags": ["猫咪"], "generated_image_url": "https://example.com/image.jpg",
+        }
+        created = {"item": {"id": "post-1"}}
+        with (
+            patch.object(service, "get_task", side_effect=[task, {**task, "publish_status": "published"}]),
+            patch.object(service, "_update_task"),
+            patch("services.miniprogram_moment_service.create_moment", return_value=created) as create,
+            patch.object(service, "_connect") as connect,
+        ):
+            result = service.publish_task("task-1")
+        payload = create.call_args.args[0]
+        self.assertEqual(payload["user_id"], service.OFFICIAL_USER_ID)
+        self.assertEqual(payload["author_name"], "宠析官方")
+        self.assertEqual(payload["visibility"], "public")
+        self.assertEqual(result["item"]["publish_status"], "published")
+
+
+if __name__ == "__main__":
+    unittest.main()

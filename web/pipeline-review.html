@@ -384,6 +384,11 @@
     .moderation-table th:nth-child(4) { width: 120px; }
     .moderation-table th:nth-child(5) { width: 170px; }
     .moderation-table th:nth-child(6) { width: 230px; }
+    #contentReviewTable th:nth-child(3) { width: 150px; }
+    #contentReviewTable th:nth-child(4) { width: 350px; }
+    #contentReviewTable th:nth-child(5) { width: 110px; }
+    #contentReviewTable th:nth-child(6) { width: 150px; }
+    #contentReviewTable th:nth-child(7) { width: 220px; }
     .moderation-table .payload-cell {
       max-width: none;
       overflow-wrap: anywhere;
@@ -397,6 +402,15 @@
       min-height: 30px;
       padding: 0 8px;
       font-size: 11px;
+    }
+    .review-photos { display: flex; gap: 6px; flex-wrap: wrap; min-width: 132px; }
+    .review-photo {
+      width: 62px;
+      height: 62px;
+      border-radius: 8px;
+      border: 1px solid var(--line);
+      object-fit: cover;
+      background: var(--panel-soft);
     }
     /* ── Idea management ── */
     .idea-grid {
@@ -704,6 +718,16 @@
     .toast.show { display: block; }
     .toast.ok { background: #ecfdf5; color: #047857; border: 1px solid #a7f3d0; }
     .toast.error { background: #fff1f2; color: #be123c; border: 1px solid #fecdd3; }
+    .content-operations-frame {
+      display: block;
+      width: 100%;
+      min-height: 820px;
+      height: calc(100vh - 210px);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #f2f5f2;
+      box-shadow: var(--shadow);
+    }
     @media (max-width: 820px) {
       .topbar, .toolbar, .tabs { flex-direction: column; align-items: stretch; }
       .filters { grid-template-columns: 1fr; }
@@ -727,7 +751,9 @@
           <p>Pipeline review console</p>
         </div>
       </div>
-      <a class="back" href="/">返回工作台</a>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        <a class="back" href="/">返回工作台</a>
+      </div>
     </header>
 
     <section class="hero">
@@ -741,6 +767,7 @@
       <button id="identityTab" class="tab" type="button" data-tab="identity">身份认证</button>
       <button id="diseaseTab" class="tab" type="button" data-tab="disease">病症数据确认</button>
       <button id="contentReviewTab" class="tab" type="button" data-tab="content">内容审核</button>
+      <button id="contentOperationsTab" class="tab" type="button" data-tab="content-operations">内容运营</button>
       <button id="reportReviewTab" class="tab" type="button" data-tab="report">举报审核</button>
       <button id="ideaTab" class="tab" type="button" data-tab="idea">创意管理</button>
       <button id="enterpriseAdminTab" class="tab" type="button" data-tab="enterprise-admin">企业后台</button>
@@ -1059,21 +1086,13 @@
     <section id="contentReviewSection" class="section" hidden>
       <section class="toolbar">
         <div>
-          <div class="title">小程序内容审核</div>
-          <div id="contentReviewSummary" class="muted">等待加载...</div>
+          <div class="title">机器生成内容审核</div>
+          <div id="contentReviewSummary" class="muted">只展示数据生产线自动生成并发布的图文内容</div>
         </div>
         <button id="contentReviewRefresh" class="button secondary" type="button">刷新内容</button>
       </section>
 
       <section class="filters" aria-label="内容审核筛选">
-        <label>
-          <span class="field-label">内容类型</span>
-          <select id="contentReviewTypeFilter">
-            <option value="all">全部</option>
-            <option value="post">瞬间</option>
-            <option value="comment">评论</option>
-          </select>
-        </label>
         <label>
           <span class="field-label">状态</span>
           <select id="contentReviewStatusFilter">
@@ -1089,11 +1108,12 @@
 
       <section class="card">
         <div class="table-wrap">
-          <table class="moderation-table">
+          <table id="contentReviewTable" class="moderation-table">
             <thead>
               <tr>
                 <th>类型</th>
                 <th>作者</th>
+                <th>照片</th>
                 <th>内容</th>
                 <th>状态</th>
                 <th>更新时间</th>
@@ -1103,7 +1123,7 @@
             <tbody id="contentReviewRows"></tbody>
           </table>
         </div>
-        <div id="contentReviewEmpty" class="empty" style="display:none;">暂无可审核内容。</div>
+        <div id="contentReviewEmpty" class="empty" style="display:none;">暂无机器自动生成的内容。</div>
       </section>
     </section>
 
@@ -1213,6 +1233,15 @@
       <section class="card">
         <div id="enterpriseAdminContent" class="table-wrap"><div class="empty">请选择管理功能。</div></div>
       </section>
+    </section>
+
+    <section id="contentOperationsSection" class="section" hidden>
+      <iframe
+        id="contentOperationsFrame"
+        class="content-operations-frame"
+        title="宠析内容运营台"
+        data-src="/pet-content-operations.html?embedded=1"
+      ></iframe>
     </section>
 
     <!-- Idea edit / create dialog -->
@@ -1355,11 +1384,14 @@
     const identityTab = document.getElementById("identityTab");
     const diseaseTab = document.getElementById("diseaseTab");
     const contentReviewTab = document.getElementById("contentReviewTab");
+    const contentOperationsTab = document.getElementById("contentOperationsTab");
     const reportReviewTab = document.getElementById("reportReviewTab");
     const nodeSection = document.getElementById("nodeSection");
     const identitySection = document.getElementById("identitySection");
     const diseaseSection = document.getElementById("diseaseSection");
     const contentReviewSection = document.getElementById("contentReviewSection");
+    const contentOperationsSection = document.getElementById("contentOperationsSection");
+    const contentOperationsFrame = document.getElementById("contentOperationsFrame");
     const reportReviewSection = document.getElementById("reportReviewSection");
     const identityRowsEl = document.getElementById("identityRows");
     const identityEmptyEl = document.getElementById("identityEmpty");
@@ -1451,7 +1483,6 @@
     const contentReviewEmptyEl = document.getElementById("contentReviewEmpty");
     const contentReviewSummaryEl = document.getElementById("contentReviewSummary");
     const contentReviewRefreshBtn = document.getElementById("contentReviewRefresh");
-    const contentReviewTypeFilter = document.getElementById("contentReviewTypeFilter");
     const contentReviewStatusFilter = document.getElementById("contentReviewStatusFilter");
     const contentReviewApplyFilter = document.getElementById("contentReviewApplyFilter");
     const reportReviewRowsEl = document.getElementById("reportReviewRows");
@@ -2178,7 +2209,7 @@
         risky: "风险",
         async_pending: "图片待回调",
       };
-      return `${labels[safety.status] || safety.status}｜${safety.check_type || "-"}${safety.trace_id ? `｜${safety.trace_id}` : ""}`;
+      return labels[safety.status] || safety.status;
     }
 
     function ensureContentDeleted(result) {
@@ -2196,11 +2227,17 @@
         row.innerHTML = `
           <td>
             <span class="chip">${escapeHtml(item.type_label || item.type)}</span>
-            <div class="task-id" style="margin-top:6px;">${escapeHtml(item.id)}</div>
           </td>
           <td>
-            <div class="task-id">${escapeHtml(item.user_id || "-")}</div>
-            <div class="muted" style="margin-top:6px;">openid：${escapeHtml(item.openid || "缺失")}</div>
+            <div style="font-weight:800;color:#102236;">${escapeHtml(item.author_name || "宠析官方")}</div>
+          </td>
+          <td>
+            <div class="review-photos">
+              ${(item.images || []).map((image, index) => {
+                const url = typeof image === "string" ? image : (image.url || image.src || image.path || "");
+                return url ? `<a href="${escapeHtml(url)}" target="_blank" rel="noopener" title="查看第 ${index + 1} 张照片"><img class="review-photo" src="${escapeHtml(url)}" alt="内容照片 ${index + 1}" loading="lazy" /></a>` : "";
+              }).join("") || '<span class="muted">无照片</span>'}
+            </div>
           </td>
           <td class="payload-cell">
             <div style="font-weight:800;color:#102236;">${escapeHtml(item.title || item.post_id || "-")}</div>
@@ -2369,7 +2406,8 @@
       contentReviewRefreshBtn.disabled = true;
       contentReviewSummaryEl.textContent = "正在加载...";
       const params = new URLSearchParams({
-        type: contentReviewTypeFilter.value,
+        type: "post",
+        generated_only: "1",
         status: contentReviewStatusFilter.value,
         limit: "100",
       });
@@ -3308,6 +3346,7 @@
       identityTab.classList.toggle("active", tab === "identity");
       diseaseTab.classList.toggle("active", tab === "disease");
       contentReviewTab.classList.toggle("active", tab === "content");
+      contentOperationsTab.classList.toggle("active", tab === "content-operations");
       reportReviewTab.classList.toggle("active", tab === "report");
       ideaTab.classList.toggle("active", tab === "idea");
       enterpriseAdminTab.classList.toggle("active", tab === "enterprise-admin");
@@ -3315,6 +3354,7 @@
       identitySection.hidden = tab !== "identity";
       diseaseSection.hidden = tab !== "disease";
       contentReviewSection.hidden = tab !== "content";
+      contentOperationsSection.hidden = tab !== "content-operations";
       reportReviewSection.hidden = tab !== "report";
       ideaSection.hidden = tab !== "idea";
       enterpriseAdminSection.hidden = tab !== "enterprise-admin";
@@ -3336,6 +3376,9 @@
       }
       if (tab === "content" && !contentReviewRowsEl.children.length) {
         loadContentReviewItems();
+      }
+      if (tab === "content-operations" && !contentOperationsFrame.src) {
+        contentOperationsFrame.src = contentOperationsFrame.dataset.src;
       }
       if (tab === "report" && !reportReviewRowsEl.children.length) {
         loadReportReviewItems();
@@ -3455,7 +3498,6 @@
     });
     contentReviewRefreshBtn.addEventListener("click", loadContentReviewItems);
     contentReviewApplyFilter.addEventListener("click", loadContentReviewItems);
-    contentReviewTypeFilter.addEventListener("change", loadContentReviewItems);
     contentReviewStatusFilter.addEventListener("change", loadContentReviewItems);
     reportReviewRefreshBtn.addEventListener("click", loadReportReviewItems);
     reportReviewApplyFilter.addEventListener("click", loadReportReviewItems);
@@ -3472,6 +3514,7 @@
     identityTab.addEventListener("click", () => switchTab("identity"));
     diseaseTab.addEventListener("click", () => switchTab("disease"));
     contentReviewTab.addEventListener("click", () => switchTab("content"));
+    contentOperationsTab.addEventListener("click", () => switchTab("content-operations"));
     reportReviewTab.addEventListener("click", () => switchTab("report"));
     ideaTab.addEventListener("click", () => switchTab("idea"));
     enterpriseAdminTab.addEventListener("click", () => switchTab("enterprise-admin"));
