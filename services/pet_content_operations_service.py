@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import os
-import random
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
@@ -206,18 +205,25 @@ def delete_material(material_id: Any) -> dict[str, Any]:
 CREATIVE_PLAN_SYSTEM_PROMPT = """你是一名宠物内容视觉策划和生图提示词专家。
 根据输入的宠物素材分析结果，提炼核心创意并生成新的生图提示词。素材字段是事实依据，不得把产品类别、功能结构、宠物动作和互动机制改成别的东西。
 
-优先级从高到低：
-1. 准确保留产品/物体类别及实现功能所必需的可见结构；
-2. 准确保留宠物与产品的互动机制、动作方向和因果关系；
-3. 保留最核心的视觉亮点、情绪和使用场景；
-4. 产品颜色、非功能造型、宠物品种、背景细节、机位和光线可以变化。
+必须把创作要求拆成三层：
+1. 共性层 common_layer：只写所有运营图都必须满足的最低标准，例如真实、安全、产品与互动清晰、竖版3:4、无文字。不要在这里固定猫的品种、地板、绿植、暖光或机位。
+2. 差异层 difference_layer：写本图独有且必须被一眼看出的产品结构、互动动作、场景、构图、色调和情绪。至少包含一个与其他图明显不同的场景或镜头方案。
+3. 互斥层 exclusion_layer：明确本图绝对不能出现的主体、产品形态、互动方式和模板化视觉组合，并禁止偏离指定视觉路线。
 
 不得复制品牌、Logo、文字、水印、原图的独特产品外观或完全相同构图。不要凭空增加素材没有表达的产品功能，不要把互动产品弱化为普通摆件。
-最终画面应为真实宠物摄影、自然生活方式、高质量商业摄影，有明显互动感和社交媒体传播感，竖版 3:4，单张完整画面，不要文字、Logo、水印、拼贴、边框。
+避免反复使用“橘猫、浅木地板、窗边绿植、左侧暖光、居中构图”这一默认组合。除非输入明确要求，不要加入奶瓶、眼镜、梳子、遥控器等无关配件，也不要使用“亲子陪伴”等与宠物互动无关的叙事。
 
 严格返回 JSON，不要输出解释或 Markdown：
-{"creative_core":"一句话核心创意","must_keep":["必须保留的信息"],"can_change":["允许变化的信息"],"final_prompt":"可直接用于中文生图模型的具体提示词"}
+{"common_layer":["最低共性要求"],"difference_layer":["本图独特要求"],"exclusion_layer":["本图禁止内容"],"final_prompt":"可直接用于中文生图模型的具体提示词"}
 """.strip()
+
+VISUAL_DIRECTIONS = (
+    "低机位动态抓拍；冷白日光；深灰软垫或水泥质感地面；单只宠物；对角线构图；强调速度与瞬间动作",
+    "俯拍观察视角；明亮中性色；纯色织物或地毯场景；留出大面积负空间；强调产品结构和互动路径",
+    "近距离特写；深色简洁背景；侧逆光勾勒毛发和材质；浅景深；强调触碰细节，不出现完整居家陈设",
+    "明快棚拍风格；高饱和但克制的双色背景；平视构图；清晰硬朗光影；强调产品轮廓与幽默表情",
+    "户外或半户外自然环境；清晨散射光；石材或草地质感；广角环境构图；强调探索感和空间层次",
+)
 
 MATERIAL_PROMPT_FIELDS = (
     ("category", "大类"), ("sub_category", "细分类目"), ("product_type", "产品类型"),
@@ -237,9 +243,8 @@ def _material_prompt_asset(material: dict[str, Any], style: str = "") -> dict[st
         for key, label in MATERIAL_PROMPT_FIELDS
         if material.get(key) not in (None, "", [])
     }
-    asset["新的创作方向"] = _clean(style, 100) or random.choice(
-        ["真实宠物摄影", "自然生活方式摄影", "温馨治愈宠物摄影", "轻松幽默宠物摄影"]
-    )
+    direction_index = int(material.get("id") or 0) % len(VISUAL_DIRECTIONS)
+    asset["指定视觉路线"] = _clean(style, 100) or VISUAL_DIRECTIONS[direction_index]
     return asset
 
 
@@ -249,18 +254,26 @@ def _fallback_creative_plan(material: dict[str, Any], style: str = "") -> dict[s
     interaction = _clean(material.get("interaction_type") or material.get("pet_action") or "宠物自然地与产品互动", 500)
     structure = _clean(material.get("product_shape") or material.get("material_texture"), 500)
     highlight = _clean(material.get("standout_element") or material.get("emotion"), 500)
-    scene = _clean(material.get("usage_scene") or "自然居家环境", 500)
-    must_keep = [value for value in (f"产品明确是{product}", interaction, structure, highlight) if value]
-    can_change = ["不影响功能的具体造型和颜色", "宠物品种", "背景细节", "拍摄角度和光线"]
+    scene = _clean(material.get("usage_scene") or "符合指定视觉路线的简洁环境", 500)
+    direction = asset["指定视觉路线"]
+    common_layer = ["真实宠物商业摄影", "产品类别与互动机制清晰", "动作自然安全", "单张竖版 3:4 画面", "无文字、Logo、水印、拼贴和边框"]
+    difference_layer = [value for value in (f"产品明确是{product}", interaction, structure, highlight, f"视觉路线：{direction}") if value]
+    exclusion_layer = [
+        "不得改变产品类别或互动机制",
+        "不得添加素材未提及的功能和无关配件",
+        "不得使用橘猫、浅木地板、窗边绿植、左侧暖光、居中构图的模板化组合",
+        "不得偏离指定视觉路线或复刻原素材构图",
+        "不复制品牌、Logo、文字、水印或原素材的独特产品外观",
+    ]
     details = "；".join(f"{key}：{value}" for key, value in asset.items())
     final_prompt = (
-        f"一张竖版 3:4 的真实宠物商业摄影照片。画面中产品必须清楚呈现为{product}，"
-        f"宠物正在{interaction}，互动关系清晰、动作自然且安全。场景为{scene}。"
+        f"一张竖版 3:4 的真实宠物商业摄影照片。采用以下独特视觉路线：{direction}。"
+        f"画面中产品必须清楚呈现为{product}，宠物正在{interaction}，互动因果清晰。场景为{scene}。"
         + (f"产品可见结构与材质：{structure}。" if structure else "")
         + (f"核心视觉亮点：{highlight}。" if highlight else "")
         + f"参考信息：{details}。自然生活方式摄影，真实毛发与材质，高质量光影，主体完整，社交媒体传播感。"
     )
-    return {"creative_core": f"宠物通过{interaction}使用{product}", "must_keep": must_keep, "can_change": can_change, "final_prompt": final_prompt}
+    return {"common_layer": common_layer, "difference_layer": difference_layer, "exclusion_layer": exclusion_layer, "final_prompt": final_prompt}
 
 
 def build_image_creative_plan(material: dict[str, Any], style: str = "", llm_client: Any = None) -> dict[str, Any]:
@@ -285,11 +298,11 @@ def build_image_creative_plan(material: dict[str, Any], style: str = "", llm_cli
         plan = json.loads(str(raw or "").strip())
         if not isinstance(plan, dict) or not _clean(plan.get("final_prompt"), 8000):
             return fallback
-        must_keep = [_clean(value, 500) for value in plan.get("must_keep", []) if _clean(value, 500)]
-        plan = {
-            "creative_core": _clean(plan.get("creative_core"), 1000) or fallback["creative_core"],
-            "must_keep": must_keep or fallback["must_keep"],
-            "can_change": [_clean(value, 500) for value in plan.get("can_change", []) if _clean(value, 500)] or fallback["can_change"],
+        layers: dict[str, list[str]] = {}
+        for key in ("common_layer", "difference_layer", "exclusion_layer"):
+            model_values = [_clean(value, 500) for value in plan.get(key, []) if _clean(value, 500)]
+            layers[key] = list(dict.fromkeys([*fallback[key], *model_values]))
+        plan = layers | {
             "final_prompt": _clean(plan.get("final_prompt"), 8000),
         }
         return plan
@@ -305,15 +318,11 @@ def build_image_prompt(
         if enhance or llm_client is not None
         else _fallback_creative_plan(material, style)
     )
-    must_keep = "；".join(plan["must_keep"])
-    can_change = "；".join(plan["can_change"])
     return (
         f"{plan['final_prompt']}\n\n"
-        f"核心创意：{plan['creative_core']}。\n"
-        f"必须准确保留：{must_keep}。\n"
-        f"允许变化：{can_change}。\n"
-        "硬性限制：不得改变产品类别或互动机制；不复制品牌、Logo、文字、水印或独特外观；"
-        "不要文字、Logo、水印、拼贴、边框；单张完整画面；竖版 3:4。"
+        f"共性层：{'；'.join(plan['common_layer'])}。\n"
+        f"差异层：{'；'.join(plan['difference_layer'])}。\n"
+        f"互斥层：{'；'.join(plan['exclusion_layer'])}。"
     ).strip()
 
 

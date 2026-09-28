@@ -47,9 +47,9 @@ class PetContentOperationsServiceTest(unittest.TestCase):
             def chat(self, **kwargs):
                 self.kwargs = kwargs
                 return json.dumps({
-                    "creative_core": "猫咪追逐轨道里的球",
-                    "must_keep": ["环形轨道", "猫爪拨球"],
-                    "can_change": ["颜色", "猫咪品种"],
+                    "common_layer": ["真实宠物摄影", "竖版3:4"],
+                    "difference_layer": ["环形轨道", "猫爪拨球"],
+                    "exclusion_layer": ["不要羽毛逗猫棒", "不要暖色木地板"],
                     "final_prompt": "一只猫用前爪拨动环形轨道里的球，真实摄影。",
                 }, ensure_ascii=False)
 
@@ -61,8 +61,23 @@ class PetContentOperationsServiceTest(unittest.TestCase):
         }, llm_client=client)
         self.assertIn("环形轨道", prompt)
         self.assertIn("猫爪拨球", prompt)
+        self.assertIn("共性层", prompt)
+        self.assertIn("差异层", prompt)
+        self.assertIn("互斥层", prompt)
         self.assertIn("不得改变产品类别或互动机制", prompt)
         self.assertIn("产品形状/功能结构", client.kwargs["user_prompt"])
+
+    def test_different_materials_receive_different_visual_routes(self):
+        first = service.build_image_prompt({
+            "id": 20, "product_type": "电动毛绒猫玩具", "pet_action": "猫咪观察玩具",
+        })
+        second = service.build_image_prompt({
+            "id": 22, "product_type": "自动逗猫棒", "pet_action": "猫咪扑击玩具",
+        })
+        self.assertNotEqual(first, second)
+        self.assertIn("低机位动态抓拍", first)
+        self.assertIn("近距离特写", second)
+        self.assertIn("不得使用橘猫、浅木地板", first)
 
     def test_generate_image_calls_volcengine_ark(self):
         response = unittest.mock.Mock()
