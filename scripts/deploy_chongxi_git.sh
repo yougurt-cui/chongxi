@@ -89,7 +89,6 @@ git pull --ff-only origin "$REMOTE_BRANCH"
   scripts/filter_catfood_choice_comments.py \
   comment_pipeline/common/cleaner.py \
   comment_pipeline/common/db.py \
-  comment_pipeline/common/llm_client.py \
   comment_pipeline/router.py \
   comment_pipeline/pipelines/choice_pipeline.py \
   comment_pipeline/pipelines/product_preference_pipeline.py \

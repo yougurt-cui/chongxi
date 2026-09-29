@@ -75,7 +75,7 @@ class CommentPipelineTest(unittest.TestCase):
         self.assertFalse(medical.choice or medical.product_preference)
         self.assertFalse(monitor.choice or monitor.product_preference)
 
-    def test_router_skips_clearly_irrelevant_comment_without_llm(self):
+    def test_router_skips_clearly_irrelevant_comment(self):
         comment = make_comment("今天下雨，记得带伞")
         route = route_comment(comment)
         self.assertFalse(route.choice)
@@ -90,17 +90,11 @@ class CommentPipelineTest(unittest.TestCase):
         route = route_comment(clean_source_row(SPEC, row, {}))
         self.assertFalse(route.product_preference)
 
-    def test_ambiguous_router_uses_llm_multilabel_result(self):
-        class FakeLlm:
-            available = True
-
-            def complete(self, _system_prompt, _payload):
-                return {"choice": True, "product_preference": True}
-
-        route = route_comment(make_comment("我家猫最近有点纠结"), FakeLlm())
-        self.assertTrue(route.choice)
-        self.assertTrue(route.product_preference)
-        self.assertEqual(route.router_source, "llm")
+    def test_ambiguous_router_stays_unmatched_without_model(self):
+        route = route_comment(make_comment("我家猫最近有点纠结"))
+        self.assertFalse(route.choice)
+        self.assertFalse(route.product_preference)
+        self.assertEqual(route.router_source, "rule")
 
     def test_preference_fallback_extracts_example(self):
         comment = make_comment("这个毛绒小鱼我家猫特别喜欢抱着蹬，但是玩两天线头就出来了")

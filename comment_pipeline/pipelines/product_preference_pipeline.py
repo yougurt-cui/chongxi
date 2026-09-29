@@ -1,4 +1,4 @@
-"""Extract product preference events with LLM and deterministic fallback."""
+"""Extract product preference events with deterministic rules."""
 
 from __future__ import annotations
 
@@ -7,21 +7,6 @@ import re
 from typing import Any
 
 from comment_pipeline.common.cleaner import is_low_information, strip_platform_noise
-from comment_pipeline.common.llm_client import JsonLlmClient
-
-
-PREFERENCE_SYSTEM_PROMPT = """
-你是宠物产品偏好信息抽取器。只提取评论明确表达的信息，不推测品牌或属性。
-输出严格 JSON，字段：material 字符串数组、shape 字符串、size 字符串、function 字符串数组、
-structure 字符串数组、interaction 字符串数组、benefit 字符串数组、
-user_proof 字符串数组、pain_point 字符串数组、pet_action 字符串数组、
-preference（positive/negative/mixed/neutral）、reason 字符串数组、durability 字符串、
-evidence_text 字符串、confidence 0到1。evidence_text必须来自输入评论原文。
-structure只写可观察的产品结构或反馈机制；interaction只写宠物与产品的具体动作；
-benefit只写评论明确体现的使用收益；user_proof写能够证明真实使用强度或持续性的事实；
-pain_point写用户明确抱怨的问题。每个数组项使用简短、可聚合的中文短语，不得重复原句或推测。
-""".strip()
-
 MATERIAL_WORDS = ("毛绒", "塑料", "硅胶", "木质", "纸板", "瓦楞纸", "金属", "橡胶", "陶瓷")
 FUNCTION_WORDS = ("自动", "漏食", "发射零食", "磨牙", "抓挠", "饮水", "投食", "互动", "发声", "滚动")
 ACTION_WORDS = ("抱", "后腿蹬", "蹬", "追", "扑", "咬", "抓", "舔", "闻", "吃", "玩", "钻")
@@ -120,39 +105,12 @@ def fallback_extract(comment: Any) -> dict[str, Any]:
     }
 
 
-def extract_preference(comment: Any, llm_client: JsonLlmClient | None = None) -> dict[str, Any] | None:
+def extract_preference(comment: Any) -> dict[str, Any] | None:
     """抽取偏好事件；正文清洗后信息量不足则返回 None，由调用方跳过落库。"""
     text = extract_text(comment)
     if is_low_information(text):
         return None
-    fallback = fallback_extract(comment)
-    if llm_client is None or not llm_client.available:
-        return fallback
-    try:
-        result = llm_client.complete(PREFERENCE_SYSTEM_PROMPT, {
-            "comment": text,
-            "recognized_product": comment.product_name,
-            "recognized_category": comment.product_category,
-        })
-        allowed_preference = {"positive", "negative", "mixed", "neutral"}
-        result["preference"] = result.get("preference") if result.get("preference") in allowed_preference else fallback["preference"]
-        result["evidence_text"] = str(result.get("evidence_text") or text)[:4000]
-        try:
-            result["confidence"] = max(0.0, min(1.0, float(result.get("confidence") or 0)))
-        except (TypeError, ValueError):
-            result["confidence"] = fallback["confidence"]
-        for key in (
-            "material", "function", "structure", "interaction", "benefit",
-            "user_proof", "pain_point", "pet_action", "reason",
-        ):
-            value = result.get(key)
-            result[key] = value if isinstance(value, list) else ([str(value)] if value else [])
-        for key in ("shape", "size", "durability"):
-            result[key] = str(result.get(key) or fallback.get(key) or "")
-        result["extraction_source"] = "llm"
-        return result
-    except Exception:
-        return fallback
+    return fallback_extract(comment)
 
 
 def _safe_table_name(table_name: str) -> str:

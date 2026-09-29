@@ -1,13 +1,10 @@
-"""Multi-label router: high-confidence rules first, LLM only for ambiguity."""
+"""Deterministic multi-label router for comment pipelines."""
 
 from __future__ import annotations
 
 import re
 from dataclasses import dataclass
 from typing import Any
-
-from comment_pipeline.common.llm_client import JsonLlmClient
-
 
 CHOICE_STRONG_RE = re.compile(
     r"选.{0,8}粮|粮.{0,8}选|换粮|换成|换到|改喂|想换|打算换|准备换|"
@@ -51,17 +48,6 @@ FOOD_EXPERIENCE_RE = re.compile(
 RESERVED_MEDICAL_RE = re.compile(r"药品|药物|处方药|保健品|营养补充剂|医疗器械|雾化器", re.IGNORECASE)
 RESERVED_MONITOR_RE = re.compile(r"智能项圈|定位器|摄像头|监控设备|健康监测|饮水监测|体重秤|传感器", re.IGNORECASE)
 
-ROUTER_SYSTEM_PROMPT = """
-你是宠物评论多标签路由器，只判断评论应进入哪些处理管线，不抽取实体。
-choice：猫粮、罐头、冻干、猫条、零食等食品相关的Need、Decision、Experience、Switch，
-包括选粮、换粮、品牌选择、购买决策、价格、适口性和食用反馈。
-product_preference：只用于宠物玩具、猫抓板、隧道等非食品用品的结构、互动、耐用性和偏好评价。
-医疗用品、药品以及定位器、摄像头、健康监测设备暂不进入上述两个偏好管线。
-一条评论可以同时为 true。只根据原文判断，不推测。严格输出 JSON：
-{"choice": false, "product_preference": false}
-""".strip()
-
-
 @dataclass(frozen=True)
 class RouteResult:
     choice: bool
@@ -101,20 +87,9 @@ def rule_route(
     return result, not clearly_irrelevant
 
 
-def route_comment(comment: Any, llm_client: JsonLlmClient | None = None) -> RouteResult:
+def route_comment(comment: Any) -> RouteResult:
     source_context = " ".join(filter(None, [comment.source_title, comment.source_content, comment.source_keyword]))
-    result, ambiguous = rule_route(
+    result, _ambiguous = rule_route(
         comment.clean_text, comment.brand, comment.product_category, source_context,
     )
-    if not ambiguous:
-        return result
-    if llm_client is None or not llm_client.available:
-        return RouteResult(result.choice, result.product_preference, "rule_fallback")
-    try:
-        parsed = llm_client.complete(ROUTER_SYSTEM_PROMPT, {
-            "comment": comment.clean_text,
-            "post_context": source_context[:2000],
-        })
-        return RouteResult(bool(parsed.get("choice")), bool(parsed.get("product_preference")), "llm")
-    except Exception:
-        return RouteResult(result.choice, result.product_preference, "rule_fallback")
+    return result

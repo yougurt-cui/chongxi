@@ -15,14 +15,13 @@ class CommentCleanSyncServiceTest(unittest.TestCase):
         run.return_value = subprocess.CompletedProcess([], 0, stdout='{"ok": true}')
 
         result = _run_clean(
-            dry_run=True, limit=25, no_llm=True, reprocess=True, timeout=90,
+            dry_run=True, limit=25, reprocess=True, timeout=90,
         )
 
         self.assertTrue(result["ok"])
         command = run.call_args.args[0]
         self.assertEqual(command[1:3], ["-m", "comment_pipeline.run_pipeline"])
         self.assertIn("--dry-run", command)
-        self.assertIn("--no-llm", command)
         self.assertIn("--reprocess", command)
         self.assertEqual(command[command.index("--limit") + 1], "25")
 
@@ -32,11 +31,11 @@ class CommentCleanSyncServiceTest(unittest.TestCase):
         run_clean.return_value = {"ok": True, "returncode": 0, "log_tail": []}
         sync_tables.return_value = {"ok": True, "status": "ok", "results": []}
 
-        result = clean_and_sync_comments(no_llm=True, reprocess=True)
+        result = clean_and_sync_comments(reprocess=True)
 
         self.assertTrue(result["ok"])
         run_clean.assert_called_once_with(
-            dry_run=False, limit=0, no_llm=True, reprocess=True, timeout=1800,
+            dry_run=False, limit=0, reprocess=True, timeout=1800,
         )
         sync_tables.assert_called_once_with(tables=OUTPUT_TABLES, dry_run=False)
 

@@ -19,7 +19,6 @@ from comment_pipeline.common.db import (
     upsert_clean_comment,
     upsert_route,
 )
-from comment_pipeline.common.llm_client import JsonLlmClient
 from comment_pipeline.pipelines.choice_pipeline import ensure_choice_table, extract_choice, save_choice
 from comment_pipeline.pipelines.product_preference_pipeline import (
     ensure_table as ensure_preference_table,
@@ -46,8 +45,7 @@ def parse_args() -> argparse.Namespace:
         help="猫粮Choice Pipeline输出表",
     )
     parser.add_argument("--output-dir", default=str(ARTIFACT_ROOT), help="本轮 CSV 和摘要目录")
-    parser.add_argument("--model", default="", help="Router/偏好抽取模型，默认使用项目 QWEN_MODEL")
-    parser.add_argument("--no-llm", action="store_true", help="仅使用规则，不调用大模型")
+    parser.add_argument("--no-llm", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--reprocess", action="store_true", help="重新路由并覆盖已处理评论")
     parser.add_argument("--dry-run", action="store_true", help="执行清洗和路由但不建表、不写数据库")
     return parser.parse_args()
@@ -74,7 +72,6 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     run_dir = Path(args.output_dir) / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
     conn = connect()
-    llm_client = None if args.no_llm else JsonLlmClient(args.model)
     summary: dict[str, Any] = {
         "run_id": run_id, "dry_run": bool(args.dry_run), "sources": {},
         "cleaned": 0, "filtered_empty_or_noise": 0, "deduplicated_or_existing": 0,
@@ -128,10 +125,10 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                             str(existing_route["router_source"]),
                         )
                     else:
-                        route = route_comment(comment, llm_client)
+                        route = route_comment(comment)
                         upsert_route(conn, comment_id, route)
                 else:
-                    route = route_comment(comment, llm_client)
+                    route = route_comment(comment)
                 # Deliberately use two independent if blocks: a comment may enter both.
                 if route.choice:
                     summary["choice_routed"] += 1
@@ -150,7 +147,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                     if comment_id in historical_preference_ids and not args.reprocess:
                         summary["preference_skipped_historical"] += 1
                     else:
-                        event = extract_preference(comment, llm_client)
+                        event = extract_preference(comment)
                         if event is None:
                             summary["preference_skipped_low_information"] += 1
                         else:

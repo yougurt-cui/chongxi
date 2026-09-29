@@ -1,6 +1,6 @@
 # Comment Pipeline
 
-轻量评论处理链路：原始评论 → 公共清洗层 → 规则优先的多标签 Router → Choice / Product Preference。
+轻量评论处理链路：原始评论 → 公共清洗层 → 纯规则多标签 Router → Choice / Product Preference。
 
 ## Router 定义
 
@@ -8,7 +8,8 @@
 - `product_preference`：宠物玩具、逗猫棒、猫抓板、轨道球、隧道等非食品用品的结构、互动、耐用性和偏好，输出到 `product_preference_events`。
 - 药品、医疗器械、定位器、摄像头和健康监测设备属于保留领域，当前不进入上述两条 Pipeline，后续增加独立标签和处理器。
 
-Router 优先使用明确领域词和行为/反馈词分流。只有存在宠物上下文、但规则无法明确判断领域时才调用大模型。
+Router 只使用明确领域词和行为/反馈词分流；规则无法明确判断的评论保留为未命中，不调用大模型。
+Product Preference 的所有字段也都由确定性规则抽取，不调用大模型。
 
 ## 公共清洗层
 
@@ -28,13 +29,13 @@ Router 优先使用明确领域词和行为/反馈词分流。只有存在宠物
 
 ## 运行
 
-先用少量数据验证（仅规则，不调用大模型）：
+先用少量数据验证：
 
 ```bash
-python -m comment_pipeline.run_pipeline --limit 100 --no-llm
+python -m comment_pipeline.run_pipeline --limit 100
 ```
 
-正式运行（模糊评论由项目配置的 Qwen 模型兜底）：
+正式运行：
 
 ```bash
 python -m comment_pipeline.run_pipeline
@@ -43,10 +44,10 @@ python -m comment_pipeline.run_pipeline
 只验证、不建表和写库：
 
 ```bash
-python -m comment_pipeline.run_pipeline --limit 100 --dry-run --no-llm
+python -m comment_pipeline.run_pipeline --limit 100 --dry-run
 ```
 
-默认跳过已经写入 `comment_router_result` 的评论，避免重复调用模型。需要重新路由时使用
+默认复用已经写入 `comment_router_result` 的评论。需要重新路由时使用
 `--reprocess`。
 
 ## 输出

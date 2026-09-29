@@ -34,7 +34,6 @@ DEFAULT_TIMEOUT = 1800  # cleaning can take a while for large comment sets
 def _run_clean(
     dry_run: bool = False,
     limit: int = 0,
-    no_llm: bool = False,
     reprocess: bool = False,
     timeout: int = DEFAULT_TIMEOUT,
 ) -> dict[str, Any]:
@@ -47,8 +46,6 @@ def _run_clean(
         cmd.append("--dry-run")
     if limit and limit > 0:
         cmd.extend(["--limit", str(limit)])
-    if no_llm:
-        cmd.append("--no-llm")
     if reprocess:
         cmd.append("--reprocess")
 
@@ -84,7 +81,6 @@ def clean_and_sync_comments(
     limit: int = 0,
     skip_clean: bool = False,
     skip_sync: bool = False,
-    no_llm: bool = False,
     reprocess: bool = False,
     timeout: int = DEFAULT_TIMEOUT,
 ) -> dict[str, Any]:
@@ -95,7 +91,6 @@ def clean_and_sync_comments(
         limit:       debug limit per source table for the cleaning step; 0 = all.
         skip_clean:  skip the cleaning step, only sync to remote.
         skip_sync:   skip the sync step, only run cleaning.
-        no_llm:      only use deterministic router/extraction rules.
         reprocess:   reroute existing clean comments and refresh outputs.
         timeout:     per-step subprocess timeout for the cleaning script.
 
@@ -108,8 +103,7 @@ def clean_and_sync_comments(
     # Step 1: Clean
     if not skip_clean:
         clean_result = _run_clean(
-            dry_run=dry_run, limit=limit, no_llm=no_llm,
-            reprocess=reprocess, timeout=timeout,
+            dry_run=dry_run, limit=limit, reprocess=reprocess, timeout=timeout,
         )
         steps["clean"] = {
             "module": PIPELINE_MODULE,
