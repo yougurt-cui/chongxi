@@ -37,6 +37,7 @@ git pull --ff-only origin "$REMOTE_BRANCH"
   api/consumer_api.py \
   api/miniprogram_api.py \
   api/pet_content_api.py \
+  api/comment_clean_sync_api.py \
   api/pipeline_api.py \
   api/product_identity_api.py \
   api/product_catalog_api.py \
@@ -62,6 +63,8 @@ git pull --ff-only origin "$REMOTE_BRANCH"
   services/miniprogram_moment_service.py \
   services/miniprogram_moment_report_service.py \
   services/pet_content_operations_service.py \
+  services/comment_clean_sync_service.py \
+  services/db_sync_service.py \
   services/product_function_service.py \
   services/product_identity_service.py \
   services/taobao_sku_import_service.py \
@@ -83,6 +86,14 @@ git pull --ff-only origin "$REMOTE_BRANCH"
   scripts/rebuild_protein_source_from_profiles.py \
   scripts/generate_pet_content.py \
   scripts/pet_material_onefile.py \
+  scripts/filter_catfood_choice_comments.py \
+  comment_pipeline/common/cleaner.py \
+  comment_pipeline/common/db.py \
+  comment_pipeline/common/llm_client.py \
+  comment_pipeline/router.py \
+  comment_pipeline/pipelines/choice_pipeline.py \
+  comment_pipeline/pipelines/product_preference_pipeline.py \
+  comment_pipeline/run_pipeline.py \
   vendor/csv_mysql_labeling/src/parse_catfood_ocr.py \
   vendor/csv_mysql_labeling/src/extract_catfood_brand_relations.py \
   vendor/feature_score_pipeline/scripts/brand_normalizer.py

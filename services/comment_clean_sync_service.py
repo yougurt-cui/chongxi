@@ -1,12 +1,10 @@
-"""Comment cleaning and remote sync pipeline.
+"""Unified comment routing and remote sync pipeline.
 
 Two-step pipeline:
-    1. Clean — run ``filter_catfood_choice_comments.py`` as a subprocess to
-               scan raw comment tables (xiaohongshu / douyin) and append matching
-               choice comments into ``catfood_choice_comments_filtered_v2``.
-    2. Sync  — call ``db_sync_service.sync_tables()`` to push the local
-               ``catfood_choice_comments_filtered_v2`` to the remote server
-               (8.130.170.148) via SSH tunnel, append-only by business key.
+    1. Pipeline — run ``comment_pipeline.run_pipeline`` to clean raw comments,
+                  route them, and execute Choice / Product Preference pipelines.
+    2. Sync     — sync the shared clean layer, router results, and both pipeline
+                  outputs to the remote server in dependency order.
 
 Steps run sequentially; a failure in step 1 skips step 2.
 """
@@ -22,10 +20,13 @@ from typing import Any
 from services.db_sync_service import sync_tables
 
 BASE_DIR = Path(__file__).resolve().parents[1]
-SCRIPT_DIR = BASE_DIR / "scripts"
-
-CLEAN_SCRIPT = "filter_catfood_choice_comments.py"
-OUTPUT_TABLE = "catfood_choice_comments_filtered_v2"
+PIPELINE_MODULE = "comment_pipeline.run_pipeline"
+OUTPUT_TABLES = [
+    "comment_clean_base",
+    "comment_router_result",
+    "catfood_choice_comments_filtered_v2",
+    "product_preference_events",
+]
 
 DEFAULT_TIMEOUT = 1800  # cleaning can take a while for large comment sets
 
@@ -33,18 +34,23 @@ DEFAULT_TIMEOUT = 1800  # cleaning can take a while for large comment sets
 def _run_clean(
     dry_run: bool = False,
     limit: int = 0,
+    no_llm: bool = False,
+    reprocess: bool = False,
     timeout: int = DEFAULT_TIMEOUT,
 ) -> dict[str, Any]:
-    """Run the comment filtering script as a subprocess."""
+    """Run the unified comment pipeline as a subprocess."""
     cmd = [
         sys.executable,
-        str(SCRIPT_DIR / CLEAN_SCRIPT),
-        "--output-table", OUTPUT_TABLE,
+        "-m", PIPELINE_MODULE,
     ]
     if dry_run:
         cmd.append("--dry-run")
     if limit and limit > 0:
         cmd.extend(["--limit", str(limit)])
+    if no_llm:
+        cmd.append("--no-llm")
+    if reprocess:
+        cmd.append("--reprocess")
 
     try:
         proc = subprocess.run(
@@ -78,15 +84,19 @@ def clean_and_sync_comments(
     limit: int = 0,
     skip_clean: bool = False,
     skip_sync: bool = False,
+    no_llm: bool = False,
+    reprocess: bool = False,
     timeout: int = DEFAULT_TIMEOUT,
 ) -> dict[str, Any]:
-    """Run the clean → sync pipeline for ``catfood_choice_comments_filtered_v2``.
+    """Run the shared-clean → route → two-pipeline → sync workflow.
 
     Args:
         dry_run:     both steps run in dry-run mode (no writes, no remote inserts).
         limit:       debug limit per source table for the cleaning step; 0 = all.
         skip_clean:  skip the cleaning step, only sync to remote.
         skip_sync:   skip the sync step, only run cleaning.
+        no_llm:      only use deterministic router/extraction rules.
+        reprocess:   reroute existing clean comments and refresh outputs.
         timeout:     per-step subprocess timeout for the cleaning script.
 
     Returns:
@@ -97,10 +107,13 @@ def clean_and_sync_comments(
 
     # Step 1: Clean
     if not skip_clean:
-        clean_result = _run_clean(dry_run=dry_run, limit=limit, timeout=timeout)
+        clean_result = _run_clean(
+            dry_run=dry_run, limit=limit, no_llm=no_llm,
+            reprocess=reprocess, timeout=timeout,
+        )
         steps["clean"] = {
-            "script": CLEAN_SCRIPT,
-            "output_table": OUTPUT_TABLE,
+            "module": PIPELINE_MODULE,
+            "output_tables": OUTPUT_TABLES,
             "dry_run": dry_run,
             **clean_result,
         }
@@ -116,7 +129,7 @@ def clean_and_sync_comments(
     if not skip_sync:
         try:
             sync_result = sync_tables(
-                tables=[OUTPUT_TABLE],
+                tables=OUTPUT_TABLES,
                 dry_run=dry_run,
             )
             steps["sync"] = {

@@ -93,6 +93,50 @@ SYNC_TABLES = {
             "source_comment_time", "source_keyword", "inserted_at",
         ],
     },
+    "comment_clean_base": {
+        "watermark_col": "updated_at",
+        "key_cols": ["comment_id"],
+        "select_cols": [
+            "comment_id", "platform", "source_table", "source_id", "source_row_id",
+            "raw_text", "clean_text", "text_hash", "brand", "product_name",
+            "product_category", "source_title", "source_content", "source_keyword",
+            "source_created_at", "source_like_count", "created_at", "updated_at",
+        ],
+        "insert_cols": [
+            "comment_id", "platform", "source_table", "source_id", "source_row_id",
+            "raw_text", "clean_text", "text_hash", "brand", "product_name",
+            "product_category", "source_title", "source_content", "source_keyword",
+            "source_created_at", "source_like_count", "created_at", "updated_at",
+        ],
+    },
+    "comment_router_result": {
+        "watermark_col": "updated_at",
+        "key_cols": ["comment_id"],
+        "select_cols": [
+            "id", "comment_id", "choice_match", "product_preference_match",
+            "router_source", "route_labels", "created_at", "updated_at",
+        ],
+        "insert_cols": [
+            "id", "comment_id", "choice_match", "product_preference_match",
+            "router_source", "route_labels", "created_at", "updated_at",
+        ],
+    },
+    "product_preference_events": {
+        "watermark_col": "updated_at",
+        "key_cols": ["comment_id"],
+        "select_cols": [
+            "id", "comment_id", "material", "shape", "size", "function",
+            "pain_point", "user_proof", "benefit", "structure", "interaction",
+            "pet_action", "preference", "reason", "durability", "evidence_text",
+            "confidence", "extraction_source", "created_at", "updated_at",
+        ],
+        "insert_cols": [
+            "id", "comment_id", "material", "shape", "size", "function",
+            "pain_point", "user_proof", "benefit", "structure", "interaction",
+            "pet_action", "preference", "reason", "durability", "evidence_text",
+            "confidence", "extraction_source", "created_at", "updated_at",
+        ],
+    },
 }
 
 BATCH_SIZE = 500
@@ -200,6 +244,24 @@ def _count_local_table_rows(local_engine, table: str) -> int:
     """Count local rows for reporting; table names come from SYNC_TABLES."""
     with local_engine.connect() as conn:
         return int(conn.execute(text(f"SELECT COUNT(*) FROM `{table}`")).scalar() or 0)
+
+
+def _ensure_remote_table(local_engine, remote_conn, table: str) -> None:
+    """Create a missing remote pipeline table from the trusted local schema."""
+    cur = remote_conn.cursor()
+    try:
+        cur.execute("SHOW TABLES LIKE %s", (table,))
+        if cur.fetchone():
+            return
+        with local_engine.connect() as local_conn:
+            row = local_conn.execute(text(f"SHOW CREATE TABLE `{table}`")).fetchone()
+        if not row:
+            raise RuntimeError(f"Local table does not exist: {table}")
+        create_sql = str(row[1]).replace("CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ", 1)
+        cur.execute(create_sql)
+        remote_conn.commit()
+    finally:
+        cur.close()
 
 
 def _row_key(row: tuple, select_cols: List[str], key_cols: List[str]) -> tuple:
@@ -384,11 +446,12 @@ def sync_tables(
             for table in tables_to_sync:
                 spec = SYNC_TABLES[table]
                 wm_col = spec["watermark_col"]
-
-                watermark = _get_remote_watermark(remote_conn, table, wm_col)
-                local_rows = _count_local_table_rows(local_engine, table)
-
+                watermark = None
                 try:
+                    if not dry_run:
+                        _ensure_remote_table(local_engine, remote_conn, table)
+                    watermark = _get_remote_watermark(remote_conn, table, wm_col)
+                    local_rows = _count_local_table_rows(local_engine, table)
                     result = _sync_one_table(
                         local_engine, remote_conn, table, spec, dry_run=dry_run,
                     )

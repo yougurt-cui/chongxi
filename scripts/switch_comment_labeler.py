@@ -16,6 +16,7 @@ if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
 
 from app_config import get_mysql_config  # noqa: E402
+from comment_pipeline.common.cleaner import normalize_text as clean_comment_text  # noqa: E402
 
 
 DEFAULT_SOURCE_TABLE = "catfood_choice_comments_filtered_v2"
@@ -99,6 +100,41 @@ def normalize_text(text):
     except (TypeError, ValueError):
         pass
     return re.sub(r"\s+", " ", str(text).replace("\u3000", " ")).strip()
+
+
+def load_existing_hashes(conn, target_table):
+    """目标表已有内容哈希，用于跳过历史行。
+
+    优先读 ``content_hash`` 列；该列尚未建出（首次非 dry-run 才由 ``ensure_target_table``
+    补列并回填）时，直接按 ``comment_text`` 现算 MD5 —— 与建列回填口径一致，
+    因此历史行同样会被跳过，不需要回填或改表。
+    """
+    statements = (
+        f"SELECT DISTINCT content_hash AS h FROM {quote_ident(target_table)} "
+        f"WHERE label_version = %s AND content_hash != ''",
+        f"SELECT DISTINCT MD5(comment_text) AS h FROM {quote_ident(target_table)} "
+        f"WHERE label_version = %s",
+    )
+    with conn.cursor() as cur:
+        for sql in statements:
+            try:
+                cur.execute(sql, (LABEL_VERSION,))
+                return {r["h"] for r in cur.fetchall()}
+            except (pymysql.err.ProgrammingError, pymysql.err.OperationalError):
+                continue
+    return set()
+
+
+def source_text(row):
+    """打标用文本：优先清洗后的 normalized_text，缺失时回退原文 comment_text。
+
+    传入的文本会再走一次公共清洗层，因此历史脏行（带 @提及 / [表情] / emoji / #话题#）
+    无需回填源表也能取得干净文本。
+    注意：``content_hash`` 仍按原文 ``comment_text`` 计算 —— 历史行的哈希就是这么回填的，
+    口径保持一致，已打标评论才会继续被跳过，从而不动历史数据。
+    """
+    return clean_comment_text(normalize_text(row.get("label_text") or row.get("comment_text")))
+
 
 def unique(items):
     return list(dict.fromkeys(items))
@@ -373,13 +409,29 @@ def ensure_target_table(conn, target_table):
 
 
 def iter_source_rows(source_table, *, all_rows=False, limit=0):
+    """逐行产出待打标评论。
+
+    文本列取 ``normalized_text``（清洗后）并别名为 ``label_text``，源表没有该列时回退
+    ``comment_text``；``content_hash`` 依旧由原文 ``comment_text`` 计算，保证历史行可被跳过。
+    """
     conn = connect_mysql(cursorclass=pymysql.cursors.SSDictCursor)
     try:
+        with conn.cursor() as probe:
+            probe.execute(
+                "SELECT COUNT(*) AS n FROM information_schema.columns "
+                "WHERE table_schema = %s AND table_name = %s AND column_name = 'normalized_text'",
+                (get_mysql_config()["database"], source_table),
+            )
+            has_normalized = bool((probe.fetchone() or {}).get("n"))
+        label_expr = (
+            "COALESCE(NULLIF(TRIM(normalized_text), ''), comment_text)"
+            if has_normalized else "comment_text"
+        )
         sql = f"""
             SELECT id, source_platform, source_table, source_record_key,
-                   external_id, comment_text, intent_labels
+                   external_id, comment_text, {label_expr} AS label_text, intent_labels
             FROM {quote_ident(source_table)}
-            WHERE comment_text IS NOT NULL AND TRIM(comment_text) <> ''
+            WHERE {label_expr} IS NOT NULL AND TRIM({label_expr}) <> ''
         """
         params = []
         if not all_rows:
@@ -397,14 +449,15 @@ def iter_source_rows(source_table, *, all_rows=False, limit=0):
 
 
 def build_db_row(row):
-    result = label_switch_comment(row.get("comment_text"))
+    text = source_text(row)
+    result = label_switch_comment(text)
     return {
         "source_comment_id": row.get("id"),
         "source_platform": normalize_text(row.get("source_platform")),
         "source_table": normalize_text(row.get("source_table")),
         "source_record_key": normalize_text(row.get("source_record_key")),
         "external_id": normalize_text(row.get("external_id")) or None,
-        "comment_text": normalize_text(row.get("comment_text")),
+        "comment_text": text,
         "content_hash": hashlib.md5(normalize_text(row.get("comment_text")).encode("utf-8")).hexdigest(),
         "intent_labels": normalize_text(row.get("intent_labels")),
         "switch_from_brand": result["from_brand"],
@@ -466,14 +519,8 @@ def run_database(source_table, target_table, *, all_rows=False, limit=0, dry_run
     try:
         if not dry_run:
             ensure_target_table(output_conn, target_table)
-            with output_conn.cursor() as cur:
-                cur.execute(
-                    f"SELECT DISTINCT content_hash FROM {quote_ident(target_table)} "
-                    f"WHERE label_version = %s AND content_hash != ''",
-                    (LABEL_VERSION,),
-                )
-                for r in cur.fetchall():
-                    existing_hashes.add(r["content_hash"])
+        # 历史哈希在 dry-run 下也加载，便于先看清有多少历史行会被跳过。
+        existing_hashes = load_existing_hashes(output_conn, target_table)
         for row in iter_source_rows(source_table, all_rows=all_rows, limit=limit):
             scanned += 1
             _text = normalize_text(row.get("comment_text"))

@@ -23,12 +23,16 @@ def run_comment_clean_sync():
         limit: int          debug limit per source table for cleaning; 0 = all.
         skip_clean: bool    skip cleaning, only sync to remote.
         skip_sync: bool     skip sync, only run cleaning.
+        no_llm: bool        only use deterministic routing/extraction rules.
+        reprocess: bool     reroute existing comments and refresh outputs.
         timeout: int        per-step subprocess timeout in seconds.
     """
     payload = request.get_json(silent=True) or {}
     dry_run = bool(payload.get("dry_run", False))
     skip_clean = bool(payload.get("skip_clean", False))
     skip_sync = bool(payload.get("skip_sync", False))
+    no_llm = bool(payload.get("no_llm", False))
+    reprocess = bool(payload.get("reprocess", False))
 
     try:
         limit = int(payload.get("limit", 0))
@@ -46,6 +50,8 @@ def run_comment_clean_sync():
             limit=limit,
             skip_clean=skip_clean,
             skip_sync=skip_sync,
+            no_llm=no_llm,
+            reprocess=reprocess,
             timeout=timeout,
         )
         status_code = 200 if result.get("ok") else 500

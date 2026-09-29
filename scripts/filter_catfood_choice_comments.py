@@ -21,6 +21,10 @@ if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
 
 from app_config import get_mysql_config  # noqa: E402
+# 复用公共清洗层：统一剥离 #话题# / [表情占位符] / emoji / @提及。
+# 此前本脚本自带一份只折叠空白的 normalize_text，导致 @昵称、[吐血] 这类
+# 平台噪音既参与分类判定，又被原样写进 normalized_text。
+from comment_pipeline.common.cleaner import normalize_text  # noqa: E402
 
 
 SOURCE_TABLES = ("xiaohongshu_raw_comments", "douyin_raw_comments")
@@ -171,14 +175,24 @@ CAT_ENTITY_TERMS = (
 )
 
 
+# 单独一个"吐"字会在"吐槽/吐司/吐露/吐舌"等非病症语境里误命中病症。
+# 词表本身要保留"吐"以维持召回（"吃完就吐""吐黄水"），所以只在该词命中时加否前瞻。
+BARE_VOMIT_GUARD = r"吐(?!槽|司|露|舌)"
+
+
+def keyword_pattern(keyword: str) -> str:
+    """把词表条目转成正则片段，对高危单字附加语境否定。"""
+    return BARE_VOMIT_GUARD if keyword == "吐" else re.escape(keyword)
+
+
 def _flatten_symptom_keywords() -> str:
     flat: set[str] = set()
     for sub in SYMPTOM_KEYWORDS.values():
         for keywords in sub.values():
             flat.update(keywords)
-    # 长度降序拼接，避免短词先匹配
-    escaped_sorted = sorted((re.escape(k) for k in flat), key=len, reverse=True)
-    return "|".join(escaped_sorted)
+    # 长度降序拼接，避免短词先匹配；同长度按字典序，保证跨进程结果稳定
+    ordered = sorted(flat, key=lambda k: (-len(k), k))
+    return "|".join(keyword_pattern(k) for k in ordered)
 
 
 NEED_SYMPTOM_TERMS = _flatten_symptom_keywords()
@@ -310,12 +324,6 @@ def quote_ident(name: str) -> str:
     return f"`{name}`"
 
 
-def normalize_text(value: Any) -> str:
-    if value is None:
-        return ""
-    return re.sub(r"\s+", " ", str(value)).strip()
-
-
 def re_search(pattern: str, text: str) -> bool:
     return bool(re.search(pattern, text, flags=re.IGNORECASE))
 
@@ -335,7 +343,11 @@ def find_condition_matches(text: Any) -> list[tuple[str, str, str]]:
             if symptom == "增重/长肉" and (has_failure_to_gain or has_excess_weight):
                 continue
             hit = next(
-                (keyword for keyword in sorted(keywords, key=len, reverse=True) if re_search(re.escape(keyword), value)),
+                (
+                    keyword
+                    for keyword in sorted(keywords, key=lambda k: (-len(k), k))
+                    if re_search(keyword_pattern(keyword), value)
+                ),
                 None,
             )
             if hit and (category, symptom) not in seen:
@@ -625,7 +637,8 @@ def source_context_for_row(spec: SourceSpec, row: dict[str, Any]) -> str:
 
 def build_output_row(run_id: str, spec: SourceSpec, row: dict[str, Any], signals: list[str], intents: list[str], score: int, mentions_brand: bool, mentions_condition: bool) -> dict[str, Any]:
     text = normalize_text(row.get("comment_text"))
-    external_id = normalize_text(row.get(spec.external_id_col))
+    # external_id 是业务主键，不做噪音剥离，避免误改键值
+    external_id = normalize_text(row.get(spec.external_id_col), strip_noise=False)
     source_record_key = external_id or f"row:{row.get(spec.id_col)}"
     condition = condition_metadata(text, source_context_for_row(spec, row))
     return {

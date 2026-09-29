@@ -27,6 +27,7 @@ if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
 
 from app_config import get_mysql_config  # noqa: E402
+from comment_pipeline.common.cleaner import normalize_text as clean_comment_text  # noqa: E402
 
 DEFAULT_SOURCE_TABLE = "catfood_choice_comments_filtered_v2"
 DEFAULT_TARGET_TABLE = "catfood_experience_comment_labels"
@@ -200,6 +201,17 @@ def normalize_text(text):
     except (TypeError, ValueError):
         pass
     return re.sub(r"\s+", " ", str(text)).strip()
+
+
+def source_text(row):
+    """打标用文本：优先清洗后的 normalized_text，缺失时回退原文 comment_text。
+
+    传入的文本会再走一次公共清洗层，因此历史脏行（带 @提及 / [表情] / emoji / #话题#）
+    无需回填源表也能取得干净文本。
+    历史数据不动：``run_database`` 会跳过目标表里已存在的 ``source_comment_id``，
+    所以旧行不会被本次文本口径切换改写。
+    """
+    return clean_comment_text(normalize_text(row.get("label_text") or row.get("comment_text")))
 
 
 def unique(items):
@@ -628,13 +640,29 @@ def ensure_target_table(conn, target_table):
 
 
 def iter_source_rows(source_table, *, all_rows=False, limit=0):
+    """逐行产出待打标评论。
+
+    文本列取 ``normalized_text``（清洗后）并别名为 ``label_text``，源表没有该列时回退
+    ``comment_text``。
+    """
     conn = connect_mysql(cursorclass=pymysql.cursors.SSDictCursor)
     try:
+        with conn.cursor() as probe:
+            probe.execute(
+                "SELECT COUNT(*) AS n FROM information_schema.columns "
+                "WHERE table_schema = %s AND table_name = %s AND column_name = 'normalized_text'",
+                (get_mysql_config()["database"], source_table),
+            )
+            has_normalized = bool((probe.fetchone() or {}).get("n"))
+        label_expr = (
+            "COALESCE(NULLIF(TRIM(normalized_text), ''), comment_text)"
+            if has_normalized else "comment_text"
+        )
         sql = f"""
             SELECT id, source_platform, source_table, source_record_key,
-                   external_id, comment_text, intent_labels
+                   external_id, comment_text, {label_expr} AS label_text, intent_labels
             FROM {quote_ident(source_table)}
-            WHERE comment_text IS NOT NULL AND TRIM(comment_text) <> ''
+            WHERE {label_expr} IS NOT NULL AND TRIM({label_expr}) <> ''
         """
         params = []
         if not all_rows:
@@ -652,14 +680,15 @@ def iter_source_rows(source_table, *, all_rows=False, limit=0):
 
 
 def build_db_row(row):
-    result = label_experience_comment(row.get("comment_text"))
+    text = source_text(row)
+    result = label_experience_comment(text)
     return {
         "source_comment_id": row.get("id"),
         "source_platform": normalize_text(row.get("source_platform")),
         "source_table": normalize_text(row.get("source_table")),
         "source_record_key": normalize_text(row.get("source_record_key")),
         "external_id": normalize_text(row.get("external_id")) or None,
-        "comment_text": normalize_text(row.get("comment_text")),
+        "comment_text": text,
         "intent_labels": normalize_text(row.get("intent_labels")),
         "primary_symptom_primary": result["primary_symptom_primary"],
         "primary_symptom": result["primary_symptom"],
@@ -710,14 +739,31 @@ def upsert_batch(conn, target_table, rows):
 
 def run_database(source_table, target_table, *, all_rows=False, limit=0, dry_run=False):
     output_conn = connect_mysql()
-    scanned = labeled = detailed = 0
+    scanned = labeled = detailed = skipped_existing = 0
     primary_counts = defaultdict(int)
     pending = []
+    existing_ids: set[int] = set()
     try:
         if not dry_run:
             ensure_target_table(output_conn, target_table)
+        # 增量跳过：目标表已有的 source_comment_id 不再重算，避免用新文本口径
+        # 覆盖历史打标结果（本脚本的 upsert 是覆盖式，没有这层保护就会改写历史行）。
+        # dry-run 也加载，便于先看清会跳过多少历史行。
+        with output_conn.cursor() as cur:
+            try:
+                cur.execute(
+                    f"SELECT source_comment_id FROM {quote_ident(target_table)} "
+                    f"WHERE label_version = %s",
+                    (LABEL_VERSION,),
+                )
+                existing_ids = {r["source_comment_id"] for r in cur.fetchall()}
+            except pymysql.err.ProgrammingError:
+                existing_ids = set()
         for row in iter_source_rows(source_table, all_rows=all_rows, limit=limit):
             scanned += 1
+            if row.get("id") in existing_ids:
+                skipped_existing += 1
+                continue
             output_row = build_db_row(row)
             labeled += 1
             detailed += output_row["exp_detail_labeled"]
@@ -742,6 +788,7 @@ def run_database(source_table, target_table, *, all_rows=False, limit=0, dry_run
         "all_rows": all_rows,
         "dry_run": dry_run,
         "scanned": scanned,
+        "skipped_existing": skipped_existing,
         "labeled": labeled,
         "exp_detail_labeled": detailed,
     }
