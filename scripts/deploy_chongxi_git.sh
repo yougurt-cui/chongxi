@@ -86,6 +86,7 @@ git pull --ff-only origin "$REMOTE_BRANCH"
   scripts/rebuild_protein_source_from_profiles.py \
   scripts/generate_pet_content.py \
   scripts/pet_material_onefile.py \
+  scripts/extract_product_preference_qwen.py \
   scripts/filter_catfood_choice_comments.py \
   comment_pipeline/common/cleaner.py \
   comment_pipeline/common/db.py \
