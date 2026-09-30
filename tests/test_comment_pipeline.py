@@ -13,10 +13,10 @@ SPEC = SimpleNamespace(
 )
 
 
-def make_comment(text):
+def make_comment(text, *, keyword="宠物玩具", title="宠物用品分享", content=""):
     return clean_source_row(SPEC, {
-        "id": 1, "external_id": "x1", "title": "宠物用品分享", "content": "",
-        "like_count": 3, "comment_time": "2026-09-28", "query_keyword": "宠物玩具",
+        "id": 1, "external_id": "x1", "title": title, "content": content,
+        "like_count": 3, "comment_time": "2026-09-28", "query_keyword": keyword,
         "comment_text": text,
     }, {"皇家": "皇家"})
 
@@ -53,6 +53,41 @@ class CommentPipelineTest(unittest.TestCase):
         self.assertTrue(food.choice)
         self.assertFalse(food.product_preference)
         toy = route_comment(make_comment("这个逗猫棒有羽毛，我家猫每天都喜欢追着玩"))
+        self.assertFalse(toy.choice)
+        self.assertTrue(toy.product_preference)
+
+    def test_search_keyword_supplies_domain_but_body_supplies_signal(self):
+        toy = route_comment(make_comment(
+            "我家猫每天都喜欢追着玩，但玩两天就开线了",
+            keyword="猫薄荷毛绒玩具",
+        ))
+        self.assertFalse(toy.choice)
+        self.assertTrue(toy.product_preference)
+
+        food = route_comment(make_comment(
+            "吃了半年，适口性不错，但偶尔软便",
+            keyword="皇家猫粮",
+        ))
+        self.assertTrue(food.choice)
+        self.assertFalse(food.product_preference)
+
+    def test_search_keyword_alone_is_not_enough_to_enter_pipeline(self):
+        route = route_comment(make_comment("好可爱，求链接", keyword="猫薄荷毛绒玩具"))
+        self.assertFalse(route.choice)
+        self.assertFalse(route.product_preference)
+
+    def test_body_product_domain_overrides_conflicting_search_keyword(self):
+        food = route_comment(make_comment(
+            "这款猫粮吃了半年，适口性不错",
+            keyword="逗猫棒推荐",
+        ))
+        self.assertTrue(food.choice)
+        self.assertFalse(food.product_preference)
+
+        toy = route_comment(make_comment(
+            "这个逗猫棒很耐用，我家猫喜欢追",
+            keyword="猫粮推荐",
+        ))
         self.assertFalse(toy.choice)
         self.assertTrue(toy.product_preference)
 

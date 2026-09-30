@@ -56,19 +56,47 @@ class RouteResult:
 
 
 def rule_route(
-    text: str, brand: str = "", product_category: str = "", source_context: str = "",
+    text: str,
+    brand: str = "",
+    product_category: str = "",
+    source_keyword: str = "",
+    source_title: str = "",
+    source_content: str = "",
 ) -> tuple[RouteResult, bool]:
-    pet_context = bool(PET_CONTEXT_RE.search(text) or PET_CONTEXT_RE.search(source_context))
-    combined = f"{text} {source_context}"
-    reserved = bool(RESERVED_MEDICAL_RE.search(combined) or RESERVED_MONITOR_RE.search(combined))
+    post_context = " ".join(filter(None, [source_title, source_content]))
+    pet_context = bool(
+        PET_CONTEXT_RE.search(text)
+        or PET_CONTEXT_RE.search(source_keyword)
+        or PET_CONTEXT_RE.search(post_context)
+    )
     toy_in_text = bool(TOY_CONTEXT_RE.search(text))
     food_in_text = bool(FOOD_CONTEXT_RE.search(text))
-    toy_context = bool(
-        toy_in_text or (not food_in_text and TOY_CONTEXT_RE.search(source_context))
-    ) and not reserved
-    food_context = bool(
-        food_in_text or (not toy_in_text and FOOD_CONTEXT_RE.search(source_context))
-    ) and not reserved
+    reserved_in_text = bool(RESERVED_MEDICAL_RE.search(text) or RESERVED_MONITOR_RE.search(text))
+
+    # 产品领域只按三级优先级补足：评论正文 > 采集检索关键词 > 帖子标题/内容。
+    # 低优先级上下文不能覆盖评论正文已经明确的产品类型。
+    if toy_in_text or food_in_text or reserved_in_text:
+        toy_context, food_context, reserved = toy_in_text, food_in_text, reserved_in_text
+    else:
+        toy_in_keyword = bool(TOY_CONTEXT_RE.search(source_keyword))
+        food_in_keyword = bool(FOOD_CONTEXT_RE.search(source_keyword))
+        reserved_in_keyword = bool(
+            RESERVED_MEDICAL_RE.search(source_keyword) or RESERVED_MONITOR_RE.search(source_keyword)
+        )
+        if toy_in_keyword or food_in_keyword or reserved_in_keyword:
+            toy_context, food_context, reserved = (
+                toy_in_keyword, food_in_keyword, reserved_in_keyword,
+            )
+        else:
+            toy_context = bool(TOY_CONTEXT_RE.search(post_context))
+            food_context = bool(FOOD_CONTEXT_RE.search(post_context))
+            reserved = bool(
+                RESERVED_MEDICAL_RE.search(post_context) or RESERVED_MONITOR_RE.search(post_context)
+            )
+
+    if reserved:
+        toy_context = False
+        food_context = False
     # 品牌只能补足“未明确写猫粮”的食品语境；通用宠物品牌也可能销售玩具，
     # 因此明确出现玩具时不能仅凭品牌把评论送进 Choice。
     choice_context = bool(food_context or (brand and not toy_context))
@@ -88,8 +116,12 @@ def rule_route(
 
 
 def route_comment(comment: Any) -> RouteResult:
-    source_context = " ".join(filter(None, [comment.source_title, comment.source_content, comment.source_keyword]))
     result, _ambiguous = rule_route(
-        comment.clean_text, comment.brand, comment.product_category, source_context,
+        comment.clean_text,
+        comment.brand,
+        comment.product_category,
+        comment.source_keyword,
+        comment.source_title,
+        comment.source_content,
     )
     return result
