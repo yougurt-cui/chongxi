@@ -103,6 +103,31 @@ class MiniProgramChatServiceTest(unittest.TestCase):
         self.assertEqual(question["response_type"], "text")
         self.assertFalse(question["options"])
 
+    def test_soft_stool_text_routes_to_specialized_pipeline(self):
+        state = service._default_state("c1")
+        self.assertTrue(service._should_route_soft_stool("重重今天软便了", state))
+        state["slots"][service.SOFT_STOOL_STATE_SLOT] = {"pet_id": "pet-1"}
+        self.assertTrue(service._should_route_soft_stool("没有呕吐", state))
+        state["slots"].pop(service.SOFT_STOOL_STATE_SLOT)
+        self.assertFalse(service._should_route_soft_stool("今天精神不错", state))
+
+    @patch.object(service, "handle_soft_stool_turn")
+    def test_specialized_pipeline_state_is_persisted_between_turns(self, handle_turn):
+        handle_turn.return_value = {
+            "status": "need_more_info", "reply": "最近有换粮吗？",
+            "pattern": "with_baseline_diet", "next_group": "recent_diet_change_group",
+            "state": {"pet_id": "pet-1", "turn": 1}, "disclaimer": "仅供参考",
+        }
+        state = service._default_state("c1")
+        reply = service._handle_soft_stool_message(
+            "user-1", {"pet_id": "pet-1"}, "软便了", state,
+        )
+        self.assertEqual(reply["result"]["pipeline"], "soft_stool")
+        self.assertEqual(
+            state["slots"][service.SOFT_STOOL_STATE_SLOT],
+            {"pet_id": "pet-1", "turn": 1},
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

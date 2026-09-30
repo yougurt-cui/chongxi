@@ -33,6 +33,8 @@ import json
 import re
 from datetime import datetime
 
+import pymysql
+
 from .db import query_all, query_one
 
 # =========================================================
@@ -117,6 +119,16 @@ def _top_level_label(value):
     """function_tags_json / warning_tags_json 里的 level 归一化。"""
     m = {"strong": "强", "medium": "中", "weak": "弱"}
     return m.get(str(value).lower(), value)
+
+
+def _optional_query_one(sql, params=None):
+    """Return no feature data when an optional enrichment table is absent."""
+    try:
+        return query_one(sql, params)
+    except pymysql.MySQLError as exc:
+        if exc.args and exc.args[0] == 1146:
+            return None
+        raise
 
 
 # =========================================================
@@ -417,7 +429,7 @@ def _build_product(catalog: dict, with_risk: bool = True) -> dict:
         (product_key,),
     ) or {}
 
-    biotic = query_one(
+    biotic = _optional_query_one(
         f"""
         select biotic_structure, biotic_type, prebiotic_details, probiotic_details
         from {T_BIOTIC}
@@ -575,6 +587,8 @@ def _profile_food_ref(pet: dict):
     if food.get("food_product_id"):
         return food["food_product_id"], "cat_profile.food_product_id"
     if food.get("food_product"):
+        if food.get("food_brand"):
+            return f"{food['food_brand']}||{food['food_product']}", "cat_profile.food_brand+food_product"
         return food["food_product"], "cat_profile.food_product"
     return None, None
 

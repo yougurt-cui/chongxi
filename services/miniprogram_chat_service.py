@@ -19,6 +19,7 @@ from services.miniprogram_food_change_service import (
     list_standard_product_candidates,
 )
 from services.miniprogram_food_submission_service import get_food_submission, list_food_submissions
+from services.soft_stool_assistant_service import handle_turn as handle_soft_stool_turn
 
 
 CONVERSATION_TABLE = "miniprogram_chat_conversation"
@@ -26,6 +27,8 @@ STATE_TABLE = "miniprogram_chat_state"
 MESSAGE_TABLE = "miniprogram_chat_message"
 PROMPT_VERSION = "pet-manager-chat-v1"
 MAX_MESSAGE_LENGTH = 4000
+SOFT_STOOL_STATE_SLOT = "_soft_stool_pipeline_state"
+SOFT_STOOL_TRIGGER_RE = re.compile(r"软便|便软|稀便|拉稀|腹泻")
 
 VALID_INTENTS = {
     "symptom_consult", "food_switch", "food_analysis",
@@ -349,6 +352,47 @@ def _warning_signs_from_text(message: str) -> list[str]:
     return found or ["unclear"]
 
 
+def _should_route_soft_stool(message: str, state: dict[str, Any]) -> bool:
+    slots = state.get("slots") or {}
+    return bool(slots.get(SOFT_STOOL_STATE_SLOT) or SOFT_STOOL_TRIGGER_RE.search(message or ""))
+
+
+def _handle_soft_stool_message(
+    user_id: str,
+    conversation: dict[str, Any],
+    message: str,
+    state: dict[str, Any],
+) -> dict[str, Any]:
+    pipeline_state = (state.get("slots") or {}).get(SOFT_STOOL_STATE_SLOT)
+    result = handle_soft_stool_turn(user_id, {
+        "pet_id": conversation.get("pet_id"),
+        "message": message,
+        "state": pipeline_state,
+    })
+    state["primary_intent"] = "symptom_consult"
+    state["secondary_intent"] = "food_switch"
+    state["slots"]["symptom"] = "软便"
+    state["turn_count"] += 1
+    state["current_step"] = result.get("next_group")
+    state["missing_slots"] = [result["next_group"]] if result.get("next_group") else []
+    if result.get("status") == "need_more_info":
+        state["slots"][SOFT_STOOL_STATE_SLOT] = result["state"]
+    else:
+        state["slots"].pop(SOFT_STOOL_STATE_SLOT, None)
+    return {
+        "response_type": "text" if result.get("status") == "need_more_info" else "result_card",
+        "reply": result["reply"],
+        "result": {
+            "pipeline": "soft_stool",
+            "status": result.get("status"),
+            "pattern": result.get("pattern"),
+            "next_group": result.get("next_group"),
+            "disclaimer": result.get("disclaimer"),
+        },
+        "disclaimer": result.get("disclaimer"),
+    }
+
+
 def _normalize_daily_records(value: Any) -> list[dict[str, Any]]:
     records = value if isinstance(value, list) else []
     result = []
@@ -500,6 +544,23 @@ def handle_message(user_id: Any, conversation_id: Any, payload: dict[str, Any]) 
                   interaction=interaction,attachments=attachments)
     state = _load_state(conversation_id)
     model_name = None
+    if message and not interaction and not attachments and conversation.get("pet_id") and _should_route_soft_stool(message, state):
+        reply = _handle_soft_stool_message(user_id, conversation, message, state)
+        _save_state(state)
+        with _connect() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    f"UPDATE {CONVERSATION_TABLE} SET primary_intent=%s,updated_at=%s WHERE id=%s AND user_id=%s",
+                    (state.get("primary_intent"), _now(), conversation_id, user_id),
+                )
+            conn.commit()
+        saved = _save_message(
+            conversation_id=conversation_id, user_id=user_id, role="assistant",
+            content=reply["reply"], response_type=reply.get("response_type"),
+            result=reply.get("result"), model_name=None,
+        )
+        saved["disclaimer"] = reply.get("disclaimer")
+        return {"ok": True, "message": saved}
     if interaction:
         slot = _clean(interaction.get("slot"),64)
         if not slot: raise ValueError("interaction.slot 不能为空")
