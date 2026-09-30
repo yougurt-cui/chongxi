@@ -19,6 +19,9 @@ class PetContentOperationsServiceTest(unittest.TestCase):
         self.assertIn("【物理结构硬约束】", prompt)
         self.assertIn("不得悬空", prompt)
         self.assertIn("禁止漂浮、穿模", prompt)
+        self.assertIn("【注意力硬约束】", prompt)
+        self.assertIn("双眼瞳孔和视线", prompt)
+        self.assertIn("正在运动的羽毛、挂件或逗引端", prompt)
 
     def test_serializers_parse_json_fields(self):
         material = service._serialize_material({"visual_tags": '["猫咪", "玩具"]'})
@@ -79,6 +82,7 @@ class PetContentOperationsServiceTest(unittest.TestCase):
                     "common_layer": ["真实宠物摄影", "竖版3:4"],
                     "difference_layer": ["环形轨道", "猫爪拨球"],
                     "exclusion_layer": ["不要羽毛逗猫棒", "不要暖色木地板"],
+                    "attention_layer": ["猫的视线跟随轨道球"],
                     "final_prompt": "一只猫用前爪拨动环形轨道里的球，真实摄影。",
                 }, ensure_ascii=False)
 
@@ -93,6 +97,8 @@ class PetContentOperationsServiceTest(unittest.TestCase):
         self.assertIn("共性层", prompt)
         self.assertIn("差异层", prompt)
         self.assertIn("互斥层", prompt)
+        self.assertIn("注意力约束层", prompt)
+        self.assertIn("猫的视线跟随轨道球", prompt)
         self.assertIn("不得改变产品类别或互动机制", prompt)
         self.assertIn("产品形状/功能结构", client.kwargs["user_prompt"])
 
@@ -126,7 +132,19 @@ class PetContentOperationsServiceTest(unittest.TestCase):
         self.assertIn("出粮口", prompt)
         self.assertIn("【互斥限制】", prompt)
         self.assertIn("不要将其表现为追逐扑击类互动玩具", prompt)
+        self.assertIn("出粮口、正在掉落的零食颗粒", prompt)
         self.assertNotIn("本产品的核心类别是普通逗猫玩具", prompt)
+
+    def test_attention_target_for_laser_is_spot_not_emitter(self):
+        prompt = service.build_image_prompt({
+            "id": 31,
+            "sub_category": "激光玩具",
+            "product_type": "猫用激光发射器",
+            "pet_action": "猫扑向地面激光点",
+        })
+        self.assertIn("地面上清晰可见的激光点", prompt)
+        self.assertIn("不是激光发射器外壳", prompt)
+        self.assertIn("视线与爪子相反", prompt)
 
     def test_generate_image_calls_volcengine_ark(self):
         response = unittest.mock.Mock()

@@ -346,19 +346,20 @@ def delete_material(material_id: Any) -> dict[str, Any]:
 CREATIVE_PLAN_SYSTEM_PROMPT = """你是一名宠物内容视觉策划和生图提示词专家。
 根据输入的宠物素材分析结果，提炼核心创意并生成新的生图提示词。素材字段是事实依据，不得把产品类别、功能结构、宠物动作和互动机制改成别的东西。
 
-必须把创作要求拆成三层：
+必须把创作要求拆成三层，并额外输出注意力约束模块：
 1. 共性层 common_layer：只写所有运营图都必须满足的最低标准，例如真实、安全、产品与互动清晰、竖版3:4、无文字。不要在这里固定猫的品种、地板、绿植、暖光或机位。
 2. 差异层 difference_layer：写本图独有且必须被一眼看出的产品结构、互动动作、场景、构图、色调和情绪。至少包含一个与其他图明显不同的场景或镜头方案。
 3. 互斥层 exclusion_layer：明确本图绝对不能出现的主体、产品形态、互动方式和模板化视觉组合，并禁止偏离指定视觉路线。
+4. 注意力约束 attention_layer：明确猫的唯一主要注意目标，并约束眼睛视线、头部转向、耳朵朝向、躯干和前爪动作与该目标保持同一互动因果链。
 
 文本优先校正规则：原始产品标题、搜索关键词、人工类目中的明确产品定义，优先级高于图片视觉分析产生的模糊分类。视觉分析只能补充形状、材质和画面证据，不能把投食器改写成逗猫玩具，也不能用宠物当前动作反推错误的产品类别。
-final_prompt 必须依次写清楚：产品主属性、功能机制、视觉证据、互斥限制，然后才能描述摄影风格。
+final_prompt 必须依次写清楚：产品主属性、功能机制、视觉证据、猫的注意目标与视线动作链、互斥限制，然后才能描述摄影风格。
 
 不得复制品牌、Logo、文字、水印、原图的独特产品外观或完全相同构图。不要凭空增加素材没有表达的产品功能，不要把互动产品弱化为普通摆件。
 避免反复使用“橘猫、浅木地板、窗边绿植、左侧暖光、居中构图”这一默认组合。除非输入明确要求，不要加入奶瓶、眼镜、梳子、遥控器等无关配件，也不要使用“亲子陪伴”等与宠物互动无关的叙事。
 
 严格返回 JSON，不要输出解释或 Markdown：
-{"common_layer":["最低共性要求"],"difference_layer":["本图独特要求"],"exclusion_layer":["本图禁止内容"],"final_prompt":"可直接用于中文生图模型的具体提示词"}
+{"common_layer":["最低共性要求"],"difference_layer":["本图独特要求"],"exclusion_layer":["本图禁止内容"],"attention_layer":["注意目标和视线动作约束"],"final_prompt":"可直接用于中文生图模型的具体提示词"}
 """.strip()
 
 VISUAL_DIRECTIONS = (
@@ -375,6 +376,12 @@ PHYSICAL_STRUCTURE_CONSTRAINT = (
     "不得为了表现运动而凭空增加素材没有的机械零件。猫只能接触现实中可触及的部位，猫爪、玩具和地面之间的距离、遮挡、接触点和运动方向必须自然。"
     "禁止漂浮、穿模、肢体或零件互相穿透、错误铰接、断裂连接、重复部件、无法承重、重心失衡和违反重力的姿态。"
     "最终产品必须像真实存在、可以制造并安全使用的宠物玩具，不得呈现为概念设计、魔法物体或超现实装置。"
+)
+
+ATTENTION_BASE_CONSTRAINT = (
+    "猫的注意力必须有唯一、明确且与产品功能直接相关的主要目标。"
+    "双眼瞳孔和视线必须自然汇聚在该目标或它的运动轨迹上，头部转向、耳朵朝向、鼻尖、胸口、躯干和前爪动作应与视线形成同一条可理解的互动因果链。"
+    "准备互动时必须先注视目标，扑击或拨动时视线必须跟随接触点或下一个运动位置，不得出现眼睛看向画外、直视镜头、视线与爪子相反、斜视、斗鸡眼、空洞视线或被无关物体吸引。"
 )
 
 MATERIAL_PROMPT_FIELDS = (
@@ -394,6 +401,28 @@ FEEDING_PRODUCT_TERMS = (
     "自动投食", "自动喂食", "零食发射", "零食投放", "投食器", "喂食器", "粮食分配",
     "treat dispenser", "treat launcher", "food dispenser", "automatic feeder", "snack dispenser",
 )
+
+
+def _attention_constraint(material: dict[str, Any]) -> str:
+    evidence = " ".join(
+        _clean(material.get(key), 1000)
+        for key in (
+            "title", "search_keyword", "sub_category", "product_type", "main_subject",
+            "product_shape", "pet_action", "interaction_type", "standout_element",
+        )
+        if material.get(key)
+    ).lower()
+    if any(term in evidence for term in FEEDING_PRODUCT_TERMS):
+        target = "出粮口、正在掉落的零食颗粒或已落在可取食位置的食物，不是设备外壳或画外"
+    elif any(term in evidence for term in ("激光", "laser")):
+        target = "地面上清晰可见的激光点或其即将到达的位置，不是激光发射器外壳"
+    elif any(term in evidence for term in ("逗猫棒", "羽毛", "挂件", "弹簧")):
+        target = "正在运动的羽毛、挂件或逗引端，不是底座、支撑杆或画外"
+    elif any(term in evidence for term in ("轨道球", "球", "滚动")):
+        target = "轨道内或地面上正在运动的球体及其下一个运动位置"
+    else:
+        target = "产品当前真正产生互动反馈的部件、接触点或运动轨迹，不是无关背景"
+    return f"本图的主要注意目标是：{target}。{ATTENTION_BASE_CONSTRAINT}"
 
 
 def _product_semantic_brief(material: dict[str, Any]) -> dict[str, str]:
@@ -441,6 +470,7 @@ def _fallback_creative_plan(material: dict[str, Any], style: str = "") -> dict[s
     highlight = _clean(material.get("standout_element") or material.get("emotion"), 500)
     scene = _clean(material.get("usage_scene") or "符合指定视觉路线的简洁环境", 500)
     direction = asset["指定视觉路线"]
+    attention = _attention_constraint(material)
     common_layer = [
         "真实宠物商业摄影", "产品类别与互动机制清晰", "动作自然安全",
         "单张竖版 3:4 画面", "无文字、Logo、水印、拼贴和边框",
@@ -459,6 +489,7 @@ def _fallback_creative_plan(material: dict[str, Any], style: str = "") -> dict[s
         "不得出现悬浮、穿模、错误铰接、断裂连接、重复肢体或违反重力的结构",
         semantics["exclusion"],
     ]
+    attention_layer = [attention]
     details = "；".join(f"{key}：{value}" for key, value in asset.items())
     final_prompt = (
         f"【视觉路线】{direction}。一张竖版 3:4 的真实宠物商业摄影照片，互动因果清晰，场景为{scene}。"
@@ -466,7 +497,13 @@ def _fallback_creative_plan(material: dict[str, Any], style: str = "") -> dict[s
         + (f"核心视觉亮点：{highlight}。" if highlight else "")
         + f"参考信息：{details}。自然生活方式摄影，真实毛发与材质，高质量光影，主体完整，社交媒体传播感。"
     )
-    return {"common_layer": common_layer, "difference_layer": difference_layer, "exclusion_layer": exclusion_layer, "final_prompt": final_prompt}
+    return {
+        "common_layer": common_layer,
+        "difference_layer": difference_layer,
+        "exclusion_layer": exclusion_layer,
+        "attention_layer": attention_layer,
+        "final_prompt": final_prompt,
+    }
 
 
 def build_image_creative_plan(material: dict[str, Any], style: str = "", llm_client: Any = None) -> dict[str, Any]:
@@ -492,7 +529,7 @@ def build_image_creative_plan(material: dict[str, Any], style: str = "", llm_cli
         if not isinstance(plan, dict) or not _clean(plan.get("final_prompt"), 8000):
             return fallback
         layers: dict[str, list[str]] = {}
-        for key in ("common_layer", "difference_layer", "exclusion_layer"):
+        for key in ("common_layer", "difference_layer", "exclusion_layer", "attention_layer"):
             model_values = [_clean(value, 500) for value in plan.get(key, []) if _clean(value, 500)]
             layers[key] = list(dict.fromkeys([*fallback[key], *model_values]))
         plan = layers | {
@@ -512,6 +549,7 @@ def build_image_prompt(
         else _fallback_creative_plan(material, style)
     )
     semantics = _product_semantic_brief(material)
+    attention = _attention_constraint(material)
     semantic_block = (
         f"【产品主属性】{semantics['primary_attribute']}。\n"
         f"【功能机制】{semantics['mechanism']}。\n"
@@ -524,6 +562,8 @@ def build_image_prompt(
         f"共性层：{'；'.join(plan['common_layer'])}。\n"
         f"差异层：{'；'.join(plan['difference_layer'])}。\n"
         f"互斥层：{'；'.join(plan['exclusion_layer'])}。\n"
+        f"注意力约束层：{'；'.join(plan['attention_layer'])}。\n"
+        f"【注意力硬约束】{attention}\n"
         f"【物理结构硬约束】{PHYSICAL_STRUCTURE_CONSTRAINT}"
     ).strip()
 
