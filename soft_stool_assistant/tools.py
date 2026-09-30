@@ -604,17 +604,32 @@ def get_latest_food_change_intent(pet_id: str):
     if not user_id:
         return None
 
+    # A user may own multiple pets. User-level history must never be assigned to
+    # an arbitrary pet; only use this source when the table has a real pet key.
+    pet_column = query_one(
+        """
+        select 1 as found from information_schema.columns
+        where table_schema = 'csv_labeling'
+          and table_name = 'miniprogram_food_change_intent'
+          and column_name = 'pet_id'
+        limit 1
+        """
+    )
+    if not pet_column:
+        return None
+
     row = query_one(
         f"""
         select id, session_id, user_message, extracted_brand, extracted_product,
                matched_catalog_key, matched_brand, matched_product_name,
                match_status, model_result_json, created_at
         from {T_FOOD_CHANGE}
-        where user_id = %s and is_food_change_intent = 1 and status = 'completed'
+        where user_id = %s and pet_id = %s
+          and is_food_change_intent = 1 and status = 'completed'
         order by created_at desc
         limit 1
         """,
-        (user_id,),
+        (user_id, pet_id),
     )
     if not row:
         return None
@@ -642,7 +657,10 @@ def get_baseline_diet(pet_id: str, override=None) -> dict:
     """
     读取「基础饮食」= 这只猫平时在吃什么（v2 的 DIET_DB）。
 
-    优先级：override > cat_profile.food_* > 最近换粮意图里的原粮
+    优先级：override > cat_profile.food_*。
+
+    历史换粮意图只有在表内存在 pet_id 且明确属于当前宠物时，才允许
+    作为宠物级数据使用；当前基础饮食不再用无法归属的用户级记录兜底。
     """
     pet = get_pet_profile(pet_id)
 
@@ -667,11 +685,6 @@ def get_baseline_diet(pet_id: str, override=None) -> dict:
         if ref:
             entries = [{"ref": ref, "ratio": 1.0}]
             source = src
-        else:
-            intent = get_latest_food_change_intent(pet_id)
-            if intent and intent.get("previous_brand"):
-                entries = [{"ref": intent["previous_brand"], "ratio": 1.0}]
-                source = "food_change_intent.previous_food"
 
     products = []
     unresolved = []

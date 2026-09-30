@@ -364,6 +364,11 @@ def _handle_soft_stool_message(
     state: dict[str, Any],
 ) -> dict[str, Any]:
     pipeline_state = (state.get("slots") or {}).get(SOFT_STOOL_STATE_SLOT)
+    baseline_source = (
+        ((pipeline_state or {}).get("context") or {}).get("baseline_diet") or {}
+    ).get("source")
+    if baseline_source == "food_change_intent.previous_food":
+        pipeline_state = None
     result = handle_soft_stool_turn(user_id, {
         "pet_id": conversation.get("pet_id"),
         "message": message,

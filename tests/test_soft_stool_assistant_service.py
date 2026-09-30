@@ -3,6 +3,7 @@ from unittest.mock import patch
 
 from services import soft_stool_assistant_service as service
 from soft_stool_assistant import llm
+from soft_stool_assistant import tools
 
 
 class SoftStoolAssistantServiceTest(unittest.TestCase):
@@ -41,6 +42,21 @@ class SoftStoolAssistantServiceTest(unittest.TestCase):
                 service.handle_turn("user-1", {
                     "pet_id": "pet-1", "message": "软便了", "state": {"pet_id": "pet-2"},
                 })
+
+    @patch.object(tools, "get_product_detail")
+    @patch.object(tools, "get_pet_profile")
+    def test_pet_without_profile_food_does_not_inherit_user_history(self, get_pet, get_product):
+        get_pet.return_value = {
+            "user_id": "user-1",
+            "current_food": {
+                "food_brand": None, "food_product": None,
+                "food_product_id": None, "food_formula_id": None,
+            },
+        }
+        result = tools.get_baseline_diet("pet-1")
+        self.assertFalse(result["has_diet_data"])
+        self.assertIsNone(result["source"])
+        get_product.assert_not_called()
 
 
 if __name__ == "__main__":

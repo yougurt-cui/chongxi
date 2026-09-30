@@ -128,6 +128,21 @@ class MiniProgramChatServiceTest(unittest.TestCase):
             {"pet_id": "pet-1", "turn": 1},
         )
 
+    @patch.object(service, "handle_soft_stool_turn")
+    def test_legacy_user_level_food_state_is_discarded(self, handle_turn):
+        handle_turn.return_value = {
+            "status": "need_more_info", "reply": "最近有换粮吗？",
+            "pattern": "without_baseline_diet", "next_group": "recent_diet_change_group",
+            "state": {"pet_id": "pet-1", "turn": 1}, "disclaimer": "仅供参考",
+        }
+        state = service._default_state("c1")
+        state["slots"][service.SOFT_STOOL_STATE_SLOT] = {
+            "pet_id": "pet-1",
+            "context": {"baseline_diet": {"source": "food_change_intent.previous_food"}},
+        }
+        service._handle_soft_stool_message("user-1", {"pet_id": "pet-1"}, "没有换粮", state)
+        self.assertIsNone(handle_turn.call_args.args[1]["state"])
+
 
 if __name__ == "__main__":
     unittest.main()
