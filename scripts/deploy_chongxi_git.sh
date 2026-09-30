@@ -60,6 +60,7 @@ git pull --ff-only origin "$REMOTE_BRANCH"
   services/cat_food_task_service.py \
   services/cat_food_product_catalog_service.py \
   services/miniprogram_content_review_service.py \
+  services/soft_stool_assistant_service.py \
   services/miniprogram_moment_service.py \
   services/miniprogram_moment_report_service.py \
   services/pet_content_operations_service.py \
@@ -94,6 +95,10 @@ git pull --ff-only origin "$REMOTE_BRANCH"
   comment_pipeline/pipelines/choice_pipeline.py \
   comment_pipeline/pipelines/product_preference_pipeline.py \
   comment_pipeline/run_pipeline.py \
+  soft_stool_assistant/db.py \
+  soft_stool_assistant/llm.py \
+  soft_stool_assistant/pipeline.py \
+  soft_stool_assistant/tools.py \
   vendor/csv_mysql_labeling/src/parse_catfood_ocr.py \
   vendor/csv_mysql_labeling/src/extract_catfood_brand_relations.py \
   vendor/feature_score_pipeline/scripts/brand_normalizer.py

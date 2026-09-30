@@ -36,6 +36,10 @@ from services.miniprogram_food_submission_service import (
     get_submission_image,
     list_food_submissions,
 )
+from services.soft_stool_assistant_service import (
+    find_products as find_soft_stool_products,
+    handle_turn as handle_soft_stool_turn,
+)
 from services.miniprogram_moment_service import (
     create_moment_comment,
     create_moment,
@@ -338,6 +342,38 @@ def delete_chat_conversation_endpoint(conversation_id: str):
         return _auth_error_response(exc)
     except LookupError as exc:
         return jsonify({"ok": False, "error": str(exc)}), 404
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@miniprogram_api.post("/soft-stool-assistant/turn")
+def soft_stool_assistant_turn_endpoint():
+    try:
+        payload = _json_payload()
+        return jsonify(handle_soft_stool_turn(
+            _user_id_from_request(payload, required=True), payload,
+        )), 200
+    except PermissionError as exc:
+        return _auth_error_response(exc)
+    except LookupError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 404
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@miniprogram_api.get("/soft-stool-assistant/products")
+def soft_stool_assistant_products_endpoint():
+    try:
+        _user_id_from_request(required=True)
+        return jsonify(find_soft_stool_products(
+            request.args.get("q"), request.args.get("limit") or 15,
+        )), 200
+    except PermissionError as exc:
+        return _auth_error_response(exc)
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
     except Exception as exc:
         return jsonify({"ok": False, "error": str(exc)}), 500
 
