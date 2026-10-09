@@ -27,7 +27,7 @@ from .tools import (
     build_manual_old_new_compare,
     get_recent_diet_change,
 )
-from .llm import extract_user_info, generate_response_from_plan
+from .llm import extract_user_info, generate_response_from_plan, generate_two_stage_response
 
 
 PATTERN_WITH_BASELINE = "with_baseline_diet"
@@ -165,11 +165,61 @@ def summarize_baseline_diet(state: dict) -> str:
         food_desc = f"目前记录里是混合饮食，主要包括 {names}"
 
     if not summary:
-        return (
+        evidence = []
+        detailed = baseline.get("detailed_products") or []
+        protein_sources = sorted({
+            source for product in detailed for source in (product.get("protein_sources") or [])
+        })
+        fat_sources = sorted({
+            source for product in detailed for source in (product.get("fat_sources") or [])
+        })
+        if protein_sources:
+            evidence.append("主要蛋白来源包括" + "、".join(protein_sources))
+        if fat_sources:
+            evidence.append("脂肪来源包括" + "、".join(fat_sources))
+
+        scored = next((
+            p for p in detailed if isinstance(p.get("gut_friendly_score"), (int, float))
+        ), None)
+        if scored:
+            evidence.append(f"数据库中的肠胃友好评分为 {scored['gut_friendly_score']:.1f}")
+
+        risk_product = next((p for p in detailed if (p.get("soft_stool_risk") or {}).get("risk_level")), None)
+        if risk_product:
+            risk = risk_product["soft_stool_risk"]
+            risk_text = f"软便风险辅助模型标记为「{risk['risk_level']}」"
+            if risk.get("risk_index") is not None:
+                risk_text += f"（风险指数 {risk['risk_index']}）"
+            evidence.append(risk_text + "，这只用于提示多留意，不代表产品一定会引起软便")
+
+        mechanism_product = next((p for p in detailed if p.get("soft_stool_mechanisms")), None)
+        if mechanism_product:
+            analysis = mechanism_product["soft_stool_mechanisms"]
+            primary = [
+                item["mechanism"] for item in analysis.get("mechanisms", [])
+                if item.get("role") == "primary"
+            ]
+            secondary = [
+                item["mechanism"] for item in analysis.get("mechanisms", [])
+                if item.get("role") == "secondary"
+            ]
+            amplifiers = [item["mechanism"] for item in analysis.get("amplifiers", [])]
+            if primary:
+                evidence.append("相对值模型显示" + "和".join(primary) + "共同构成主要关注机制")
+            if secondary:
+                evidence.append(secondary[0] + "属于次要观察机制")
+            if amplifiers:
+                evidence.append("同时存在" + "、".join(amplifiers) + "，可能放大软便表现")
+            if analysis.get("confidence") == "limited":
+                evidence.append(f"当前历史参考池只有 {analysis.get('reference_pool_size')} 个产品，结论需要保留不确定性")
+
+        text = (
             f"我先看了一下历史饮食，{food_desc}。"
-            "但这只产品的保证值（蛋白/脂肪/粗纤维）在库里还没补齐，"
-            "所以暂时只能做定性比较。"
+            "目前库里的蛋白、脂肪和粗纤维保证值还不完整，暂时不能精确计算营养变化。"
         )
+        if evidence:
+            text += "不过现有数据仍能提供一些参考：" + "；".join(evidence) + "。"
+        return text
 
     basis = summary.get("nutrition_basis")
     basis_text = f"（{basis}口径）" if basis else ""
@@ -261,6 +311,16 @@ def build_current_summary(state: dict) -> str:
         parts.append("另外目前还有：" + "、".join(risk_signals) + "。")
 
     return " ".join(parts).strip()
+
+
+def _has_urgent_risk(state: dict) -> bool:
+    slots = state.get("slots") or {}
+    return bool(
+        slots.get("vomiting") is True
+        or slots.get("blood_in_stool") is True
+        or slots.get("appetite") == "poor"
+        or slots.get("energy") == "poor"
+    )
 
 
 # =========================================================
@@ -487,15 +547,35 @@ def run_soft_stool_turn(
     # 7. 下一槽位组
     group_name, question = choose_next_question_group(state)
 
+    # Risk signals take precedence over product-mechanism explanation.
+    if _has_urgent_risk(state):
+        assessment = build_final_assessment(state)
+        reply = generate_response_from_plan(state, current_summary, assessment)
+        return {
+            "status": "answered",
+            "reply": reply,
+            "reply_parts": [{"response_type": "risk_alert", "reply": reply}],
+            "pattern": state["pattern"],
+            "next_group": None,
+            "state": state,
+        }
+
     if question:
-        reply = generate_response_from_plan(
-            state=state,
-            current_summary=current_summary,
-            question=question,
-        )
+        if state["turn"] == 1 and (state["context"]["baseline_diet"].get("detailed_products") or []):
+            reply_parts = generate_two_stage_response(
+                state=state,
+                evidence_summary=summarize_baseline_diet(state),
+                current_summary=current_summary,
+                question=question,
+            )
+            reply = "\n\n".join(part["reply"] for part in reply_parts)
+        else:
+            reply = generate_response_from_plan(state, current_summary, question)
+            reply_parts = [{"response_type": "text", "reply": reply}]
         return {
             "status": "need_more_info",
             "reply": reply,
+            "reply_parts": reply_parts,
             "pattern": state["pattern"],
             "next_group": group_name,
             "state": state,
@@ -512,6 +592,7 @@ def run_soft_stool_turn(
     return {
         "status": "answered",
         "reply": reply,
+        "reply_parts": [{"response_type": "result_card", "reply": reply}],
         "pattern": state["pattern"],
         "next_group": None,
         "state": state,

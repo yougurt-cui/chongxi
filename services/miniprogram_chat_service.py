@@ -384,16 +384,34 @@ def _handle_soft_stool_message(
         state["slots"][SOFT_STOOL_STATE_SLOT] = result["state"]
     else:
         state["slots"].pop(SOFT_STOOL_STATE_SLOT, None)
+    result_meta = {
+        "pipeline": "soft_stool",
+        "status": result.get("status"),
+        "pattern": result.get("pattern"),
+        "next_group": result.get("next_group"),
+        "disclaimer": result.get("disclaimer"),
+    }
+    parts = result.get("reply_parts") if isinstance(result.get("reply_parts"), list) else []
+    messages = [
+        {
+            "response_type": _clean(part.get("response_type"), 32) or "text",
+            "reply": _clean(part.get("reply"), MAX_MESSAGE_LENGTH),
+            "result": {**result_meta, "sequence_no": index, "message_kind": part.get("response_type")},
+        }
+        for index, part in enumerate(parts, 1)
+        if isinstance(part, dict) and _clean(part.get("reply"), MAX_MESSAGE_LENGTH)
+    ]
+    if not messages:
+        messages = [{
+            "response_type": "text" if result.get("status") == "need_more_info" else "result_card",
+            "reply": result["reply"],
+            "result": result_meta,
+        }]
     return {
-        "response_type": "text" if result.get("status") == "need_more_info" else "result_card",
+        "response_type": messages[-1]["response_type"],
         "reply": result["reply"],
-        "result": {
-            "pipeline": "soft_stool",
-            "status": result.get("status"),
-            "pattern": result.get("pattern"),
-            "next_group": result.get("next_group"),
-            "disclaimer": result.get("disclaimer"),
-        },
+        "result": result_meta,
+        "messages": messages,
         "disclaimer": result.get("disclaimer"),
     }
 
@@ -559,13 +577,18 @@ def handle_message(user_id: Any, conversation_id: Any, payload: dict[str, Any]) 
                     (state.get("primary_intent"), _now(), conversation_id, user_id),
                 )
             conn.commit()
-        saved = _save_message(
-            conversation_id=conversation_id, user_id=user_id, role="assistant",
-            content=reply["reply"], response_type=reply.get("response_type"),
-            result=reply.get("result"), model_name=None,
-        )
-        saved["disclaimer"] = reply.get("disclaimer")
-        return {"ok": True, "message": saved}
+        saved_messages = []
+        for item in reply.get("messages") or [reply]:
+            saved = _save_message(
+                conversation_id=conversation_id, user_id=user_id, role="assistant",
+                content=item["reply"], response_type=item.get("response_type"),
+                result=item.get("result") or reply.get("result"), model_name=None,
+            )
+            saved["disclaimer"] = reply.get("disclaimer")
+            saved_messages.append(saved)
+        # Keep `message` for older mini-program clients; upgraded clients render
+        # `messages` in order as separate assistant bubbles.
+        return {"ok": True, "message": saved_messages[-1], "messages": saved_messages}
     if interaction:
         slot = _clean(interaction.get("slot"),64)
         if not slot: raise ValueError("interaction.slot 不能为空")

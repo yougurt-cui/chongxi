@@ -50,6 +50,12 @@ T_BIOTIC = "csv_labeling.catfood_feature_biotic_labels"
 T_SOFT_STOOL_RISK = "protein_feature_platform.sku_soft_stool_compound_risk"
 T_SYMPTOM_PROB = "protein_feature_platform.sku_symptom_probability_wide"
 T_BRAND_STOOL_STATS = "protein_feature_platform.brand_soft_stool_stats"
+T_SKU_FEATURE = "protein_feature_platform.sku_feature_input"
+T_REFERENCE_POOL = "protein_feature_platform.reference_sku_pool_snapshot"
+T_RISK_RESULT = "protein_feature_platform.sku_risk_score_result"
+T_FAT_SCORED = "protein_feature_platform.catfood_fat_material_features_scored"
+T_FIBER_SCORE = "protein_feature_platform.catfood_fiber_feature_score"
+T_FIBER_JSON = "protein_feature_platform.catfood_fiber_feature_json"
 
 NUTRIENT_METRICS = ("粗蛋白", "粗脂肪", "粗纤维")
 
@@ -278,6 +284,158 @@ def get_brand_soft_stool_stats(brand: str) -> dict:
     }
 
 
+def _percentile(value, values) -> float | None:
+    value = _to_float(value)
+    cleaned = [_to_float(item) for item in values]
+    cleaned = [item for item in cleaned if item is not None]
+    if value is None or not cleaned:
+        return None
+    return sum(item <= value for item in cleaned) / len(cleaned)
+
+
+def get_product_soft_stool_mechanisms(formula_id, source: dict, fat: dict) -> dict:
+    """Rank soft-stool mechanisms against the model's historical reference pool."""
+    if not formula_id:
+        return {}
+    try:
+        latest = query_one(
+            f"""select reference_pool_version from {T_RISK_RESULT}
+                where formula_id=%s and score_model_version like 'SOFT_STOOL%%'
+                order by calculated_at desc limit 1""",
+            (formula_id,),
+        ) or {}
+        reference_version = latest.get("reference_pool_version")
+        target = query_one(
+            f"""select s.protein_score,s.carb_score,
+                       coalesce(fs.fat_score,s.fat_score) fat_score,
+                       s.antioxidant_score,
+                       f.p_form_score,f.p_bulk_score,
+                       coalesce(s.p_buffer,f.p_buffer_score) p_buffer_score,
+                       coalesce(s.q_feed,f.q_feed_score) q_feed_score,
+                       coalesce(s.q_scfa,f.q_scfa_score) q_scfa_score
+                from {T_SKU_FEATURE} s
+                left join {T_FAT_SCORED} fs on fs.formula_id=s.formula_id
+                left join {T_FIBER_SCORE} f on f.formula_id=s.formula_id
+                where s.formula_id=%s and s.feature_version='soft_v1'
+                order by s.created_at desc limit 1""",
+            (formula_id,),
+        ) or {}
+        if not target or not reference_version:
+            return {}
+        reference = query_all(
+            f"""select s.protein_score,s.carb_score,
+                       coalesce(fs.fat_score,s.fat_score) fat_score,
+                       s.antioxidant_score,
+                       f.p_form_score,f.p_bulk_score,
+                       coalesce(s.p_buffer,f.p_buffer_score) p_buffer_score,
+                       coalesce(s.q_feed,f.q_feed_score) q_feed_score,
+                       coalesce(s.q_scfa,f.q_scfa_score) q_scfa_score
+                from {T_REFERENCE_POOL} p
+                join {T_SKU_FEATURE} s on p.feature_version=s.feature_version
+                 and ((p.formula_id is not null and p.formula_id=s.formula_id)
+                   or (p.formula_id is null and p.sku_id=s.sku_id))
+                left join {T_FAT_SCORED} fs on fs.formula_id=s.formula_id
+                left join {T_FIBER_SCORE} f on f.formula_id=s.formula_id
+                where p.reference_pool_version=%s and p.feature_version='soft_v1'""",
+            (reference_version,),
+        )
+        if not reference:
+            return {}
+
+        def derived(row):
+            p_form, p_bulk, p_buffer = (_to_float(row.get(k)) for k in (
+                "p_form_score", "p_bulk_score", "p_buffer_score"
+            ))
+            q_feed, q_scfa = (_to_float(row.get(k)) for k in ("q_feed_score", "q_scfa_score"))
+            return {
+                **row,
+                "stool_support": (
+                    0.45 * p_form + 0.30 * p_bulk + 0.25 * p_buffer
+                    if None not in (p_form, p_bulk, p_buffer) else None
+                ),
+                "microbiome_support": (
+                    0.55 * q_scfa + 0.45 * q_feed
+                    if None not in (q_feed, q_scfa) else None
+                ),
+                "feed_excess": max(q_feed - q_scfa, 0) if None not in (q_feed, q_scfa) else None,
+            }
+
+        target_d = derived(target)
+        reference_d = [derived(row) for row in reference]
+        pct = {
+            key: _percentile(target_d.get(key), [row.get(key) for row in reference_d])
+            for key in (
+                "protein_score", "carb_score", "fat_score", "feed_excess",
+                "stool_support", "microbiome_support", "antioxidant_score",
+                "p_buffer_score",
+            )
+        }
+        contributions = {
+            "碳水结构压力": 0.26 * pct["carb_score"] if pct["carb_score"] is not None else None,
+            "蛋白消化压力": 0.22 * pct["protein_score"] if pct["protein_score"] is not None else None,
+            "脂肪消化负担": 0.18 * pct["fat_score"] if pct["fat_score"] is not None else None,
+            "供菌底物相对过量": 0.19 * pct["feed_excess"] if pct["feed_excess"] is not None else None,
+        }
+        ranked = sorted(
+            ((name, value) for name, value in contributions.items() if value is not None),
+            key=lambda item: item[1], reverse=True,
+        )
+        max_value = ranked[0][1] if ranked else 0
+
+        fiber_row = _optional_query_one(
+            f"select starch_ingredients_json from {T_FIBER_JSON} where formula_id=%s limit 1",
+            (formula_id,),
+        ) or {}
+        starch_items = _json_load(fiber_row.get("starch_ingredients_json"), [])
+        starch_sources = [item.get("ingredient_name") for item in starch_items if isinstance(item, dict) and item.get("ingredient_name")]
+        evidence = {
+            "碳水结构压力": starch_sources,
+            "蛋白消化压力": [
+                value for value in (
+                    source.get("animal_sources"), source.get("primary_meat_source_type"),
+                    source.get("plant_protein_interference"), source.get("protein_source_details"),
+                ) if value
+            ],
+            "脂肪消化负担": [
+                value for value in (fat.get("fat_sources"), fat.get("fat_source_types")) if value
+            ],
+            "供菌底物相对过量": [],
+        }
+        mechanisms = [{
+            "mechanism": name,
+            "contribution": round(value, 4),
+            "percentile": round({
+                "碳水结构压力": pct["carb_score"],
+                "蛋白消化压力": pct["protein_score"],
+                "脂肪消化负担": pct["fat_score"],
+                "供菌底物相对过量": pct["feed_excess"],
+            }[name], 4),
+            "role": "primary" if max_value and value >= max_value * 0.9 else "secondary",
+            "evidence": evidence[name],
+        } for name, value in ranked]
+
+        amplifiers = []
+        for label, key in (
+            ("便便成形支持偏弱", "stool_support"),
+            ("菌群代谢支持偏弱", "microbiome_support"),
+            ("刺激缓冲支持偏弱", "p_buffer_score"),
+        ):
+            value = pct.get(key)
+            if value is not None and value <= 0.30:
+                amplifiers.append({"mechanism": label, "percentile": round(value, 4)})
+
+        return {
+            "reference_pool_version": reference_version,
+            "reference_pool_size": len(reference),
+            "confidence": "limited" if len(reference) < 30 else "normal",
+            "mechanisms": mechanisms,
+            "amplifiers": amplifiers,
+            "reasoning_rule": "贡献最高为主机制；达到最高贡献90%以上时共同主导；保护项不高于30%分位时作为放大因素",
+        }
+    except pymysql.MySQLError:
+        return {}
+
+
 # =========================================================
 # 产品  ←  catalog + guarantee + protein_source + biotic
 # =========================================================
@@ -454,6 +612,7 @@ def _build_product(catalog: dict, with_risk: bool = True) -> dict:
     ]
 
     risk = get_product_soft_stool_risk(product_key) if with_risk else {}
+    mechanism_analysis = get_product_soft_stool_mechanisms(formula_id, source, fat) if with_risk else {}
 
     brand = catalog["standard_brand"]
     product_name = catalog["product_name"]
@@ -491,6 +650,7 @@ def _build_product(catalog: dict, with_risk: bool = True) -> dict:
         "function_display_text": catalog.get("function_display_text"),
         "warning_tags": warning_tags,
         "soft_stool_risk": risk,
+        "soft_stool_mechanisms": mechanism_analysis,
         "origin_type": catalog.get("origin_type"),
         "brand_tier": catalog.get("brand_tier"),
         "price": _to_float(catalog.get("price")),

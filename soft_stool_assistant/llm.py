@@ -19,6 +19,9 @@ Pattern 分流、槽位完整性、Tool 调用条件全部由 Python 控制，�
 import json
 import re
 
+from openai import OpenAI
+
+from app_config import get_chat_model_config
 from .tools import DEMO_PRODUCT_ALIAS
 
 MOCK_LLM = True
@@ -62,11 +65,24 @@ def _cn_to_int(value):
 
 
 def call_real_llm(system_prompt: str, user_prompt: str) -> str:
-    """
-    TODO：在这里接千问 / OpenAI / 本地模型，要求返回 JSON 字符串。
-    当前 Mock 模式不会走到这里。
-    """
-    raise NotImplementedError("请在 call_real_llm() 中接入真实大模型")
+    """Call the configured chat model through its OpenAI-compatible API."""
+    cfg = get_chat_model_config()
+    if not cfg.get("api_key"):
+        raise RuntimeError("聊天模型未配置")
+    options = {}
+    if cfg.get("provider") == "deepseek":
+        options["extra_body"] = {"thinking": {"type": "disabled"}}
+    response = OpenAI(
+        api_key=cfg["api_key"], base_url=cfg["base_url"], timeout=45,
+    ).chat.completions.create(
+        model=cfg["model"], temperature=0.2,
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+        **options,
+    )
+    return (response.choices[0].message.content or "").strip()
 
 
 # =========================================================
@@ -225,6 +241,18 @@ def _clean_product(raw: str):
     return raw or None
 
 
+def _parse_json_object(raw: str) -> dict:
+    text = (raw or "").strip()
+    fenced = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.I | re.S)
+    candidate = fenced.group(1) if fenced else text
+    try:
+        value = json.loads(candidate)
+    except json.JSONDecodeError:
+        start, end = text.find("{"), text.rfind("}")
+        value = json.loads(text[start:end + 1]) if start >= 0 and end > start else {}
+    return value if isinstance(value, dict) else {}
+
+
 # =========================================================
 # 2. 自然语言改写
 # =========================================================
@@ -233,13 +261,42 @@ def generate_response_from_plan(state: dict, current_summary: str, question: str
     真实大模型上线时，把 current_summary + question_plan 交给模型润色。
     当前版本直接拼接即可（Python 已经决定好"说什么"）。
     """
-    if not MOCK_LLM:
-        return call_real_llm(_REWRITE_SYSTEM_PROMPT, json.dumps({
+    baseline = ((state or {}).get("context") or {}).get("baseline_diet") or {}
+    product_evidence = []
+    for product in (baseline.get("detailed_products") or [])[:5]:
+        product_evidence.append({
+            "name": product.get("display_name") or product.get("name"),
+            "guarantee_values": product.get("nutrition_metrics") or {},
+            "protein_sources": product.get("protein_sources") or [],
+            "protein_source_detail": product.get("protein_source_detail"),
+            "fat_sources": product.get("fat_sources") or [],
+            "prebiotics": product.get("prebiotics") or [],
+            "gut_friendly_score": product.get("gut_friendly_score"),
+            "function_scores": product.get("function_scores") or {},
+            "soft_stool_risk": product.get("soft_stool_risk") or {},
+            "soft_stool_mechanism_analysis": product.get("soft_stool_mechanisms") or {},
+        })
+
+    payload = {
             "summary": current_summary,
             "question_or_assessment": question,
             "pattern": (state or {}).get("pattern"),
             "slots": (state or {}).get("slots", {}),
-        }, ensure_ascii=False))
+            "available_product_evidence": product_evidence,
+        }
+
+    # Slot extraction remains deterministic, while response wording uses the
+    # configured model.  Fall back to the verified plan if the model is absent
+    # or temporarily unavailable.
+    try:
+        if get_chat_model_config().get("api_key"):
+            rewritten = call_real_llm(
+                _REWRITE_SYSTEM_PROMPT, json.dumps(payload, ensure_ascii=False),
+            )
+            if rewritten:
+                return rewritten
+    except Exception:
+        pass
 
     summary = (current_summary or "").strip()
     question = (question or "").strip()
@@ -248,6 +305,90 @@ def generate_response_from_plan(state: dict, current_summary: str, question: str
     if not summary:
         return question
     return f"{summary}\n\n{question}"
+
+
+def _mechanism_fallback(state: dict) -> str:
+    baseline = ((state or {}).get("context") or {}).get("baseline_diet") or {}
+    product = next((
+        item for item in (baseline.get("detailed_products") or [])
+        if item.get("soft_stool_mechanisms")
+    ), None)
+    if not product:
+        return "目前只能先结合饮食变化和症状表现继续判断。"
+    analysis = product["soft_stool_mechanisms"]
+    primary = [
+        item["mechanism"] for item in analysis.get("mechanisms", [])
+        if item.get("role") == "primary"
+    ]
+    secondary = [
+        item["mechanism"] for item in analysis.get("mechanisms", [])
+        if item.get("role") == "secondary" and item.get("contribution", 0) >= 0.08
+    ]
+    amplifiers = [item["mechanism"] for item in analysis.get("amplifiers", [])]
+    parts = []
+    if primary:
+        parts.append("从相对值看，目前更需要关注" + "和".join(primary) + "，两者可能共同影响消化适应")
+    if secondary:
+        parts.append(secondary[0] + "是次要观察因素")
+    if amplifiers:
+        parts.append("另外" + "、".join(amplifiers) + "可能放大便便变软的表现")
+    if analysis.get("confidence") == "limited":
+        parts.append(f"不过历史参考池目前只有{analysis.get('reference_pool_size')}个产品，这个结论需要保留不确定性")
+    return "；".join(parts) + ("。" if parts else "")
+
+
+def generate_two_stage_response(
+    state: dict,
+    evidence_summary: str,
+    current_summary: str,
+    question: str,
+) -> list[dict]:
+    """Return an evidence bubble followed by reasoning plus the next question."""
+    baseline = ((state or {}).get("context") or {}).get("baseline_diet") or {}
+    product_evidence = []
+    for product in (baseline.get("detailed_products") or [])[:5]:
+        product_evidence.append({
+            "name": product.get("display_name") or product.get("name"),
+            "guarantee_values": product.get("nutrition_metrics") or {},
+            "protein_sources": product.get("protein_sources") or [],
+            "protein_source_detail": product.get("protein_source_detail"),
+            "fat_sources": product.get("fat_sources") or [],
+            "gut_friendly_score": product.get("gut_friendly_score"),
+            "function_scores": product.get("function_scores") or {},
+            "soft_stool_risk": product.get("soft_stool_risk") or {},
+            "soft_stool_mechanism_analysis": product.get("soft_stool_mechanisms") or {},
+        })
+    payload = {
+        "evidence_summary": evidence_summary,
+        "current_context_summary": current_summary,
+        "available_product_evidence": product_evidence,
+        "slots": (state or {}).get("slots", {}),
+        "next_question": question,
+        "output_schema": {
+            "evidence_message": "只陈述证据层事实的字符串",
+            "reasoning_message": "初步机制结论与证据边界的字符串",
+            "followup_question": "必须与next_question含义一致的字符串",
+        },
+    }
+    try:
+        if get_chat_model_config().get("api_key"):
+            raw = call_real_llm(_TWO_STAGE_SYSTEM_PROMPT, json.dumps(payload, ensure_ascii=False))
+            parsed = _parse_json_object(raw)
+            evidence = str(parsed.get("evidence_message") or "").strip()
+            reasoning = str(parsed.get("reasoning_message") or "").strip()
+            followup = str(parsed.get("followup_question") or "").strip()
+            if evidence and reasoning and followup:
+                return [
+                    {"response_type": "evidence_card", "reply": evidence},
+                    {"response_type": "reasoning_followup", "reply": f"{reasoning}\n\n{followup}"},
+                ]
+    except Exception:
+        pass
+    reasoning = _mechanism_fallback(state)
+    return [
+        {"response_type": "evidence_card", "reply": evidence_summary},
+        {"response_type": "reasoning_followup", "reply": f"{reasoning}\n\n{question}".strip()},
+    ]
 
 
 # =========================================================
@@ -278,6 +419,40 @@ _REWRITE_SYSTEM_PROMPT = """
 硬约束：
 - 不做确诊，只做「相关性判断」，必要时提醒线下就医；
 - 不改动 summary 里给出的事实与数字；
+- available_product_evidence 是可用的产品证据。即使保证值不完整，也要自然利用蛋白来源、脂肪来源、功能评分和软便风险等已有信息；
+- soft_stool_mechanism_analysis 已由规则层按历史参考池分位和模型权重计算。按其中 role、contribution、percentile、amplifiers 做总结和逻辑推理，不得自行改变主次顺序；
+- role=primary 且有两项时，应表述为“共同主导”，不要强行只选第一项；amplifiers 是可能放大表现的保护不足，不是独立病因；
+- confidence=limited 或 reference_pool_size<30 时，应自然提示“参考样本有限”，避免使用确定语气；
+- “风险等级/风险指数/肠胃友好评分”只能解释为数据库模型的辅助观察信号，不得说成该产品导致软便，也不得把它当成医学诊断；
+- 不要把“保证值不完整”写成“产品没有数据”，只需简短说明无法精确计算蛋白、脂肪和粗纤维变化；
+- 面向普通养宠用户解释，避免 formula_id、product_key、槽位、模型字段名等技术术语；
 - 若 question_or_assessment 是提问，就自然地问出来；若是结论，就地收尾，不要再反问；
 - 不要输出 JSON，不要输出 markdown 标题，直接给对话文本。
+"""
+
+_TWO_STAGE_SYSTEM_PROMPT = """
+你是宠物营养助手。规则层已经完成数据查询、历史分位计算、机制贡献排序和下一轮问题规划。
+你只负责把结果整理成两条自然、准确、普通养宠用户能理解的中文消息，并只输出合法JSON。
+
+第一条 evidence_message：
+- 只展示数据库事实、相对分位、评分和风险辅助信号，不下因果结论；
+- 清楚区分“保证值缺失”和“没有其他数据”；
+- 优先展示与软便有关的证据，其他功能评分可简洁归纳；
+- 说明风险模型和品牌反馈只是辅助证据，不能证明产品导致软便。
+
+第二条 reasoning_message：
+- 严格按照 soft_stool_mechanism_analysis 的 role、contribution、percentile 和 amplifiers 推理；
+- 两项 role=primary 时必须表述为共同主导，不得强行只选一个；
+- amplifiers 是保护不足或放大因素，不是独立病因；
+- 不得擅自改变机制排序，不得补充输入中不存在的事实；
+- 没有粗蛋白保证值时不得说“高蛋白”；没有实测消化率时不得说“消化率下降”；
+- confidence=limited 或参考池少于30个产品时，必须说明样本有限并保留不确定性；
+- 只能表述配方相关性，不得确诊，不得说“一定是这款粮导致”。
+
+followup_question：
+- 必须保留 next_question 的业务含义；
+- 不得遗漏或改成其他问题；
+- 如果输入已经提示便血、频繁呕吐、精神或食欲明显变差，应优先建议就医，不继续普通配方归因。
+
+输出必须正好包含 evidence_message、reasoning_message、followup_question 三个字符串字段，不要输出Markdown代码块。
 """
