@@ -1857,7 +1857,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (auth.user && ['data_admin', 'member'].includes(auth.user.role)){
       const requested = location.hash.replace(/^#/, '').split('?')[0];
       if (!requested || requested === 'login' || !requested.startsWith('admin-')){
-        navigate('admin-companies');
+        window.location.replace('/brand-growth-engine.html');
         return;
       }
     }
