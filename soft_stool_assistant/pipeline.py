@@ -26,12 +26,29 @@ from .tools import (
     compare_diets,
     build_manual_old_new_compare,
     get_recent_diet_change,
+    get_pet_profile,
 )
 from .llm import extract_user_info, generate_response_from_plan, generate_two_stage_response
 
 
 PATTERN_WITH_BASELINE = "with_baseline_diet"
 PATTERN_WITHOUT_BASELINE = "without_baseline_diet"
+
+
+def _compact_names(names: list, max_chars: int = 12) -> str:
+    """压缩档案名称，确保整句追问不超过30字。"""
+    result = ""
+    for raw in names:
+        name = str(raw).strip()
+        if not name:
+            continue
+        candidate = f"{result}、{name}" if result else name
+        if len(candidate) > max_chars:
+            break
+        result = candidate
+    if result:
+        return result
+    return str(names[0]).strip()[:max_chars] if names else ""
 
 
 def new_state(pet_id: str) -> dict:
@@ -49,6 +66,10 @@ def new_state(pet_id: str) -> dict:
             "prefill": True,
             "prefilled": False,
             "prefill_source": None,
+            "followup_context_loaded": False,
+            "history_food_names": [],
+            "disease_names": [],
+            "active_question_group": None,
         },
 
         "slots": {
@@ -68,6 +89,10 @@ def new_state(pet_id: str) -> dict:
             "blood_in_stool": None,
             "appetite": None,
             "energy": None,
+
+            # 自然语言追加询问
+            "history_foods_reviewed": None,
+            "disease_history_reviewed": None,
         },
 
         "analysis": {
@@ -141,6 +166,39 @@ def prefill_slots_from_history(state: dict):
         slots["recent_diet_change"] = True
         slots["change_type"] = slots["change_type"] or "main_food_change"
         state["context"]["prefill_source"] = "miniprogram_food_change_intent"
+
+
+def load_followup_context(state: dict):
+    """读取当前宠物的历史主粮和疾病档案，供自然语言追问使用。"""
+    context = state["context"]
+    if context.get("followup_context_loaded"):
+        return
+    context["followup_context_loaded"] = True
+
+    foods = []
+    baseline = context.get("baseline_diet") or {}
+    for product in baseline.get("products") or []:
+        name = product.get("display_name") or product.get("name")
+        if name and name not in foods:
+            foods.append(name)
+    try:
+        change = get_recent_diet_change(state["pet_id"])
+        if change.get("found"):
+            for name in (change.get("old_product"), change.get("new_product")):
+                if name and name not in foods:
+                    foods.append(name)
+    except Exception:
+        pass
+    context["history_food_names"] = foods
+
+    try:
+        profile = get_pet_profile(state["pet_id"])
+        context["disease_names"] = [
+            str(name).strip() for name in (profile.get("diseases") or [])
+            if str(name).strip()
+        ]
+    except Exception:
+        context["disease_names"] = []
 
 
 # =========================================================
@@ -333,18 +391,31 @@ def choose_next_question_group(state: dict):
     """
     slots = state["slots"]
 
+    # 先展示查询结果，再用短句收集遗漏信息。只问主粮，不使用按钮。
+    if slots["history_foods_reviewed"] is None:
+        foods = state["context"].get("history_food_names") or []
+        if foods:
+            names = _compact_names(foods)
+            return "history_food_group", f"记录显示吃过{names}，最近还吃过哪些主粮？"
+        return "history_food_group", "没查到饮食记录，最近吃过哪些主粮？"
+
+    if slots["disease_history_reviewed"] is None:
+        diseases = state["context"].get("disease_names") or []
+        if diseases:
+            names = _compact_names(diseases)
+            return "disease_history_group", f"记录显示有{names}，还得过其他疾病吗？"
+        return "disease_history_group", "没查到疾病记录，以前得过其他疾病吗？"
+
     # 1. 先补「近期饮食变化组」
     if slots["recent_diet_change"] is None:
         if state["pattern"] == PATTERN_WITH_BASELINE:
             return (
                 "recent_diet_change_group",
-                "最近有没有换粮、加罐头、零食或者其他新食物？"
-                "如果有，现在换成或加了什么，大概从什么时候开始、占日常饮食多少比例？",
+                "最近换过主粮吗？如果换过，现在吃什么主粮？",
             )
         return (
             "recent_diet_change_group",
-            "最近有没有换粮、加罐头、零食或者其他新食物？"
-            "如果有，原来主要吃什么、现在换成或加了什么，大概从什么时候开始、占多少比例？",
+            "最近换过主粮吗？如果换过，原来和现在吃什么主粮？",
         )
 
     # 2. 已确认有变化，但关键信息没收齐
@@ -523,13 +594,33 @@ def run_soft_stool_turn(
         state["context"]["prefill"] = prefill
 
     state = deepcopy(state)
+    # 兼容功能上线前已经保存在会话中的旧版 state。
+    context = state.setdefault("context", {})
+    for key, default in (
+        ("followup_context_loaded", False), ("history_food_names", []),
+        ("disease_names", []), ("active_question_group", None),
+    ):
+        context.setdefault(key, default)
+    slots = state.setdefault("slots", {})
+    slots.setdefault("history_foods_reviewed", None)
+    slots.setdefault("disease_history_reviewed", None)
     state["turn"] += 1
 
     # 1. 首轮加载基础饮食并完成一级分流
     load_baseline_context(state)
 
+    # 1.1 查询历史主粮与疾病档案，供后续自然语言追问
+    load_followup_context(state)
+
     # 2. 历史记录预填
     prefill_slots_from_history(state)
+
+    # 用户对上一轮自然语言追问作答后，即视为已补充；原文保留在槽位中。
+    active_group = state["context"].get("active_question_group")
+    if user_input and active_group == "history_food_group":
+        state["slots"]["history_foods_reviewed"] = user_input.strip()
+    elif user_input and active_group == "disease_history_group":
+        state["slots"]["disease_history_reviewed"] = user_input.strip()
 
     # 3. LLM 抽取
     extracted = extract_user_info(user_input, state)
@@ -546,6 +637,7 @@ def run_soft_stool_turn(
 
     # 7. 下一槽位组
     group_name, question = choose_next_question_group(state)
+    state["context"]["active_question_group"] = group_name
 
     # Risk signals take precedence over product-mechanism explanation.
     if _has_urgent_risk(state):

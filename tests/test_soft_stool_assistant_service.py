@@ -4,9 +4,26 @@ from unittest.mock import patch
 from services import soft_stool_assistant_service as service
 from soft_stool_assistant import llm
 from soft_stool_assistant import tools
+from soft_stool_assistant import pipeline
 
 
 class SoftStoolAssistantServiceTest(unittest.TestCase):
+    def test_history_followup_questions_are_short_and_natural(self):
+        state = pipeline.new_state("pet-1")
+        state["context"]["history_food_names"] = ["皇家 BK34", "很长很长的鸡肉主粮名称"]
+        group, question = pipeline.choose_next_question_group(state)
+        self.assertEqual(group, "history_food_group")
+        self.assertLessEqual(len(question), 30)
+        self.assertIn("主粮", question)
+        self.assertNotIn("零食", question)
+
+        state["slots"]["history_foods_reviewed"] = "还吃过A粮"
+        state["context"]["disease_names"] = ["慢性肠胃炎"]
+        group, question = pipeline.choose_next_question_group(state)
+        self.assertEqual(group, "disease_history_group")
+        self.assertLessEqual(len(question), 30)
+        self.assertIn("其他疾病", question)
+
     def test_rule_extraction_collects_grouped_slots(self):
         state = {"slots": {}, "pattern": "with_baseline_diet"}
         result = llm.extract_user_info(

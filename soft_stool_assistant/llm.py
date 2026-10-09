@@ -283,6 +283,10 @@ def generate_response_from_plan(state: dict, current_summary: str, question: str
             "pattern": (state or {}).get("pattern"),
             "slots": (state or {}).get("slots", {}),
             "available_product_evidence": product_evidence,
+            "pet_history_context": {
+                "history_food_names": ((state or {}).get("context") or {}).get("history_food_names", []),
+                "disease_names": ((state or {}).get("context") or {}).get("disease_names", []),
+            },
         }
 
     # Slot extraction remains deterministic, while response wording uses the
@@ -364,6 +368,10 @@ def generate_two_stage_response(
         "available_product_evidence": product_evidence,
         "slots": (state or {}).get("slots", {}),
         "next_question": question,
+        "pet_history_context": {
+            "history_food_names": ((state or {}).get("context") or {}).get("history_food_names", []),
+            "disease_names": ((state or {}).get("context") or {}).get("disease_names", []),
+        },
         "output_schema": {
             "evidence_message": "只陈述证据层事实的字符串",
             "reasoning_message": "初步机制结论与证据边界的字符串",
@@ -427,6 +435,9 @@ _REWRITE_SYSTEM_PROMPT = """
 - 不要把“保证值不完整”写成“产品没有数据”，只需简短说明无法精确计算蛋白、脂肪和粗纤维变化；
 - 面向普通养宠用户解释，避免 formula_id、product_key、槽位、模型字段名等技术术语；
 - 若 question_or_assessment 是提问，就自然地问出来；若是结论，就地收尾，不要再反问；
+- question_or_assessment 若询问历史主粮或其他疾病，必须原样保留该问句，不追加其他问题；
+- 历史饮食只问主粮，不询问罐头、零食、营养品、比例或混喂情况；
+- 追问不超过30个汉字，不使用按钮、选项、列表或表单话术；
 - 不要输出 JSON，不要输出 markdown 标题，直接给对话文本。
 """
 
@@ -452,6 +463,11 @@ _TWO_STAGE_SYSTEM_PROMPT = """
 followup_question：
 - 必须保留 next_question 的业务含义；
 - 不得遗漏或改成其他问题；
+- 需要追加收集信息时，先参考 pet_history_context 中查到的记录，再自然询问用户补充；
+- 历史饮食只问主粮，不询问罐头、零食、营养品、比例或混喂情况；
+- 有历史主粮时使用“记录显示吃过XXX，最近还吃过哪些主粮？”；没有时使用“没查到饮食记录，最近吃过哪些主粮？”；
+- 有疾病档案时使用“记录显示有XXX，还得过其他疾病吗？”；没有时使用“没查到疾病记录，以前得过其他疾病吗？”；
+- 每个追问不超过30个汉字，不使用按钮、选项、列表或表单话术；
 - 如果输入已经提示便血、频繁呕吐、精神或食欲明显变差，应优先建议就医，不继续普通配方归因。
 
 输出必须正好包含 evidence_message、reasoning_message、followup_question 三个字符串字段，不要输出Markdown代码块。
