@@ -30,7 +30,7 @@ def business_access_required(handler):
         user = session.get("workbench_user") or {}
         if not user:
             return jsonify({"ok": False, "error": "请先登录。"}), 401
-        if user.get("role") not in {"data_admin", "brand_growth"}:
+        if user.get("role") not in {"data_admin", "member", "brand_growth"}:
             return jsonify({"ok": False, "error": "当前账号无权访问该功能。"}), 403
         return handler(*args, **kwargs)
     return wrapped

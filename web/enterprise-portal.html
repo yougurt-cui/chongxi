@@ -1850,6 +1850,21 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   updateTopUser();
 
+  // Staff accounts have already authenticated at the outer workbench.  Reuse
+  // that session and enter the administration area without a second login.
+  try {
+    const auth = await api('/api/workbench-auth/me');
+    if (auth.user && ['data_admin', 'member'].includes(auth.user.role)){
+      const requested = location.hash.replace(/^#/, '').split('?')[0];
+      if (!requested || requested === 'login' || !requested.startsWith('admin-')){
+        navigate('admin-companies');
+        return;
+      }
+    }
+  } catch(e){
+    // Public enterprise registration/login remains available without a staff session.
+  }
+
   // 从URL参数获取company_id（新开窗口时传递登录状态）
   const urlParams = new URLSearchParams(location.search);
   const urlCompanyId = urlParams.get('company_id');

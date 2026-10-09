@@ -16,6 +16,11 @@ enterprise_api = Blueprint("enterprise_api", __name__, url_prefix="/api")
 def admin_required(handler):
     @wraps(handler)
     def wrapped(*args, **kwargs):
+        user = session.get("workbench_user") or {}
+        if user.get("role") in {"data_admin", "member"}:
+            return handler(*args, **kwargs)
+
+        # Keep token authentication for existing non-browser integrations.
         expected = (os.getenv("MINIPROGRAM_ADMIN_TOKEN") or "").strip()
         supplied = (request.headers.get("X-Admin-Token") or "").strip()
         if not expected:
@@ -93,6 +98,7 @@ def login_enterprise():
     if result["ok"]:
         company = result["company"]
         session.clear()
+        session.permanent = False
         session["workbench_user"] = {
             "username": company["contact_phone"],
             "name": company["company_name"],
