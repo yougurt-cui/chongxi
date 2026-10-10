@@ -8,21 +8,27 @@ from soft_stool_assistant import pipeline
 
 
 class SoftStoolAssistantServiceTest(unittest.TestCase):
-    def test_history_followup_questions_are_short_and_natural(self):
+    def test_history_food_and_disease_are_asked_in_one_turn(self):
         state = pipeline.new_state("pet-1")
         state["context"]["history_food_names"] = ["皇家 BK34", "很长很长的鸡肉主粮名称"]
-        group, question = pipeline.choose_next_question_group(state)
-        self.assertEqual(group, "history_food_group")
-        self.assertLessEqual(len(question), 30)
-        self.assertIn("主粮", question)
-        self.assertNotIn("零食", question)
-
-        state["slots"]["history_foods_reviewed"] = "还吃过A粮"
         state["context"]["disease_names"] = ["慢性肠胃炎"]
         group, question = pipeline.choose_next_question_group(state)
-        self.assertEqual(group, "disease_history_group")
-        self.assertLessEqual(len(question), 30)
+        self.assertEqual(group, "history_and_disease_group")
+        self.assertIn("主粮", question)
         self.assertIn("其他疾病", question)
+        self.assertNotIn("零食", question)
+
+    def test_reference_pool_details_are_hidden_from_model_payload(self):
+        analysis = {
+            "reference_pool_version": "soft-v1",
+            "reference_pool_size": 13,
+            "confidence": "limited",
+            "mechanisms": [{"mechanism": "脂肪消化负担"}],
+        }
+        self.assertEqual(
+            llm._public_mechanism_analysis(analysis),
+            {"mechanisms": [{"mechanism": "脂肪消化负担"}]},
+        )
 
     def test_rule_extraction_collects_grouped_slots(self):
         state = {"slots": {}, "pattern": "with_baseline_diet"}

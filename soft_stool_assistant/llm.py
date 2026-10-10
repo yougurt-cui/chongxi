@@ -274,7 +274,9 @@ def generate_response_from_plan(state: dict, current_summary: str, question: str
             "gut_friendly_score": product.get("gut_friendly_score"),
             "function_scores": product.get("function_scores") or {},
             "soft_stool_risk": product.get("soft_stool_risk") or {},
-            "soft_stool_mechanism_analysis": product.get("soft_stool_mechanisms") or {},
+            "soft_stool_mechanism_analysis": _public_mechanism_analysis(
+                product.get("soft_stool_mechanisms") or {}
+            ),
         })
 
     payload = {
@@ -336,9 +338,15 @@ def _mechanism_fallback(state: dict) -> str:
         parts.append(secondary[0] + "是次要观察因素")
     if amplifiers:
         parts.append("另外" + "、".join(amplifiers) + "可能放大便便变软的表现")
-    if analysis.get("confidence") == "limited":
-        parts.append(f"不过历史参考池目前只有{analysis.get('reference_pool_size')}个产品，这个结论需要保留不确定性")
     return "；".join(parts) + ("。" if parts else "")
+
+
+def _public_mechanism_analysis(analysis: dict) -> dict:
+    """Keep mechanism evidence while hiding internal reference-pool metadata."""
+    return {
+        key: value for key, value in analysis.items()
+        if key not in {"reference_pool_version", "reference_pool_size", "confidence"}
+    }
 
 
 def generate_two_stage_response(
@@ -360,7 +368,9 @@ def generate_two_stage_response(
             "gut_friendly_score": product.get("gut_friendly_score"),
             "function_scores": product.get("function_scores") or {},
             "soft_stool_risk": product.get("soft_stool_risk") or {},
-            "soft_stool_mechanism_analysis": product.get("soft_stool_mechanisms") or {},
+            "soft_stool_mechanism_analysis": _public_mechanism_analysis(
+                product.get("soft_stool_mechanisms") or {}
+            ),
         })
     payload = {
         "evidence_summary": evidence_summary,
@@ -428,16 +438,16 @@ _REWRITE_SYSTEM_PROMPT = """
 - 不做确诊，只做「相关性判断」，必要时提醒线下就医；
 - 不改动 summary 里给出的事实与数字；
 - available_product_evidence 是可用的产品证据。即使保证值不完整，也要自然利用蛋白来源、脂肪来源、功能评分和软便风险等已有信息；
-- soft_stool_mechanism_analysis 已由规则层按历史参考池分位和模型权重计算。按其中 role、contribution、percentile、amplifiers 做总结和逻辑推理，不得自行改变主次顺序；
+- soft_stool_mechanism_analysis 已由规则层按相对分位和模型权重计算。按其中 role、contribution、percentile、amplifiers 做总结和逻辑推理，不得自行改变主次顺序；
 - role=primary 且有两项时，应表述为“共同主导”，不要强行只选第一项；amplifiers 是可能放大表现的保护不足，不是独立病因；
-- confidence=limited 或 reference_pool_size<30 时，应自然提示“参考样本有限”，避免使用确定语气；
+- 不向用户提及参考池、参考样本数量、参考池版本或置信度字段；
 - “风险等级/风险指数/肠胃友好评分”只能解释为数据库模型的辅助观察信号，不得说成该产品导致软便，也不得把它当成医学诊断；
 - 不要把“保证值不完整”写成“产品没有数据”，只需简短说明无法精确计算蛋白、脂肪和粗纤维变化；
 - 面向普通养宠用户解释，避免 formula_id、product_key、槽位、模型字段名等技术术语；
 - 若 question_or_assessment 是提问，就自然地问出来；若是结论，就地收尾，不要再反问；
-- question_or_assessment 若询问历史主粮或其他疾病，必须原样保留该问句，不追加其他问题；
+- question_or_assessment 若同时询问历史主粮和其他疾病，必须原样保留两个问题，不得拆成两轮或遗漏其一；
 - 历史饮食只问主粮，不询问罐头、零食、营养品、比例或混喂情况；
-- 追问不超过30个汉字，不使用按钮、选项、列表或表单话术；
+- 追问保持简短，不使用按钮、选项、列表或表单话术；
 - 不要输出 JSON，不要输出 markdown 标题，直接给对话文本。
 """
 
@@ -457,7 +467,7 @@ _TWO_STAGE_SYSTEM_PROMPT = """
 - amplifiers 是保护不足或放大因素，不是独立病因；
 - 不得擅自改变机制排序，不得补充输入中不存在的事实；
 - 没有粗蛋白保证值时不得说“高蛋白”；没有实测消化率时不得说“消化率下降”；
-- confidence=limited 或参考池少于30个产品时，必须说明样本有限并保留不确定性；
+- 不向用户提及参考池、参考样本数量、参考池版本或置信度字段；
 - 只能表述配方相关性，不得确诊，不得说“一定是这款粮导致”。
 
 followup_question：
@@ -465,9 +475,8 @@ followup_question：
 - 不得遗漏或改成其他问题；
 - 需要追加收集信息时，先参考 pet_history_context 中查到的记录，再自然询问用户补充；
 - 历史饮食只问主粮，不询问罐头、零食、营养品、比例或混喂情况；
-- 有历史主粮时使用“记录显示吃过XXX，最近还吃过哪些主粮？”；没有时使用“没查到饮食记录，最近吃过哪些主粮？”；
-- 有疾病档案时使用“记录显示有XXX，还得过其他疾病吗？”；没有时使用“没查到疾病记录，以前得过其他疾病吗？”；
-- 每个追问不超过30个汉字，不使用按钮、选项、列表或表单话术；
+- 历史主粮和其他疾病必须在同一个 followup_question 中一次问完，不得拆成两个轮次；
+- followup_question 应原样保留 next_question 的两部分含义，不使用按钮、选项、列表或表单话术；
 - 如果输入已经提示便血、频繁呕吐、精神或食欲明显变差，应优先建议就医，不继续普通配方归因。
 
 输出必须正好包含 evidence_message、reasoning_message、followup_question 三个字符串字段，不要输出Markdown代码块。

@@ -268,9 +268,6 @@ def summarize_baseline_diet(state: dict) -> str:
                 evidence.append(secondary[0] + "属于次要观察机制")
             if amplifiers:
                 evidence.append("同时存在" + "、".join(amplifiers) + "，可能放大软便表现")
-            if analysis.get("confidence") == "limited":
-                evidence.append(f"当前历史参考池只有 {analysis.get('reference_pool_size')} 个产品，结论需要保留不确定性")
-
         text = (
             f"我先看了一下历史饮食，{food_desc}。"
             "目前库里的蛋白、脂肪和粗纤维保证值还不完整，暂时不能精确计算营养变化。"
@@ -391,20 +388,22 @@ def choose_next_question_group(state: dict):
     """
     slots = state["slots"]
 
-    # 先展示查询结果，再用短句收集遗漏信息。只问主粮，不使用按钮。
-    if slots["history_foods_reviewed"] is None:
+    # 历史主粮和疾病一次问完，减少一个对话轮次。
+    if slots["history_foods_reviewed"] is None or slots["disease_history_reviewed"] is None:
         foods = state["context"].get("history_food_names") or []
-        if foods:
-            names = _compact_names(foods)
-            return "history_food_group", f"记录显示吃过{names}，最近还吃过哪些主粮？"
-        return "history_food_group", "没查到饮食记录，最近吃过哪些主粮？"
-
-    if slots["disease_history_reviewed"] is None:
         diseases = state["context"].get("disease_names") or []
+        if foods:
+            food_part = f"记录显示吃过{_compact_names(foods, 10)}"
+        else:
+            food_part = "没查到历史主粮"
         if diseases:
-            names = _compact_names(diseases)
-            return "disease_history_group", f"记录显示有{names}，还得过其他疾病吗？"
-        return "disease_history_group", "没查到疾病记录，以前得过其他疾病吗？"
+            disease_part = f"疾病记录有{_compact_names(diseases, 8)}"
+        else:
+            disease_part = "没查到疾病记录"
+        return (
+            "history_and_disease_group",
+            f"{food_part}，{disease_part}。还吃过哪些主粮，或得过其他疾病？",
+        )
 
     # 1. 先补「近期饮食变化组」
     if slots["recent_diet_change"] is None:
@@ -617,7 +616,10 @@ def run_soft_stool_turn(
 
     # 用户对上一轮自然语言追问作答后，即视为已补充；原文保留在槽位中。
     active_group = state["context"].get("active_question_group")
-    if user_input and active_group == "history_food_group":
+    if user_input and active_group == "history_and_disease_group":
+        state["slots"]["history_foods_reviewed"] = user_input.strip()
+        state["slots"]["disease_history_reviewed"] = user_input.strip()
+    elif user_input and active_group == "history_food_group":
         state["slots"]["history_foods_reviewed"] = user_input.strip()
     elif user_input and active_group == "disease_history_group":
         state["slots"]["disease_history_reviewed"] = user_input.strip()
