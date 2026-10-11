@@ -148,6 +148,8 @@ class MiniProgramCatProfileServiceTest(unittest.TestCase):
         }
         with (
             patch.object(service, "init_miniprogram_cat_profile_tables"),
+            patch("services.miniprogram_diet_history_service.init_diet_history_table"),
+            patch("services.miniprogram_diet_history_service.record_profile_diet"),
             patch.object(service, "_connect_app", return_value=connection),
             patch.object(service, "_resolve_food_formula", return_value={
                 "standard_brand_name": "皇家", "standard_product_name": "肠胃舒适",

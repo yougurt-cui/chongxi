@@ -114,15 +114,26 @@ def load_followup_context(state):
         )}
         context["disease_names"] = [str(x) for x in profile.get("diseases") or []]
     except DATA_ERRORS:
+        profile = {}
         _warn(state, "health_history_unavailable")
+    try:
+        from services.miniprogram_diet_history_service import list_diet_history, compact_diet_context
+        if not profile.get("user_id"):
+            raise LookupError("Pet owner unavailable")
+        history = list_diet_history(profile["user_id"], state["pet_id"], limit=10)
+        context["diet_history"] = compact_diet_context(history["items"])
+        context["diet_association_note"] = history["association_note"]
+        context["history_food_names"] = list(dict.fromkeys(
+            " ".join(filter(None, (item["brand"], item["product"])))
+            for item in history["items"] if not item["is_current"]
+        ))
+    except DATA_ERRORS:
+        _warn(state, "diet_history_unavailable")
     if not context.get("prefill", True):
         return
     try:
         change = get_recent_diet_change(state["pet_id"])
         if change.get("found"):
-            context["history_food_names"] = list(dict.fromkeys(
-                x for x in (change.get("old_product"), change.get("new_product")) if x
-            ))
             # An intent and its creation date are not confirmed feeding events.
             context["diet_intent_reference"] = {key: change.get(key) for key in (
                 "old_product", "new_product", "source", "created_at",

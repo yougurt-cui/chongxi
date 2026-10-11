@@ -522,6 +522,8 @@ def generate_two_stage_response(state, evidence_summary, current_summary, questi
         "facts": current_summary, "available_product_evidence": _product_evidence(state),
         "slots": state.get("slots", {}), "slot_status": state.get("slot_status", {}),
         "pet_profile": state.get("context", {}).get("pet_profile", {}),
+        "diet_history": state.get("context", {}).get("diet_history", []),
+        "diet_association_note": state.get("context", {}).get("diet_association_note"),
         "assessment_plan": plan, "next_question": question,
         "new_facts": evidence_summary,
         "show_product_evidence": state.get("analysis", {}).get("show_product_evidence", True),
@@ -619,5 +621,6 @@ show_product_evidence为true且有mechanisms时，解释其中主要配方因素
 参考池和可信度用于内部判断；confidence=limited时使用“资料有限”等克制表达，不展示内部版本和样本数。
 不要推荐库外具体产品、药物、剂量、禁食、停药或没有规则依据的精确天数、比例和喂食量。
 使用已有事实，不能猜测新产品数据、基础疾病或营养值。具体病历信息只作背景，不自行推导诊断。
+diet_history为确认的吃粮记录；health_topics只是同期咨询话题，不能当成已确诊问题、负面吃粮表现或粮食导致症状的证据。
 行动建议需要说明用户接下来做什么、记录什么、何时复评，避免只有泛泛的指标解释。
 """

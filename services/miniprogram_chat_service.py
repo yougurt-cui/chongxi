@@ -19,6 +19,8 @@ from services.miniprogram_food_change_service import (
     list_standard_product_candidates,
 )
 from services.miniprogram_food_submission_service import get_food_submission, list_food_submissions
+from services.miniprogram_diet_history_service import list_diet_history, compact_diet_context
+from services.guardian_recommendation_service import recommend_guardian_foods, explicit_preferences
 from services.soft_stool_assistant_service import handle_turn as handle_soft_stool_turn
 from services.guardian_workflow import FlowStrategy, select_strategy, requested_flow, build_handoff
 
@@ -43,7 +45,8 @@ INTENT_SLOTS = {
         "blood_in_stool", "mental_status", "appetite_status", "warning_signs",
         "recent_food_change", "symptom_context",
     },
-    "food_switch": {"current_food", "switch_reason", "target_food", "target_requirement", "recent_symptom"},
+    "food_switch": {"current_food", "switch_reason", "target_food", "target_requirement", "recent_symptom",
+                    "budget_per_jin", "preferred_brand", "origin_type"},
     "food_analysis": {"food_name", "catalog_key"},
     "ingredient_analysis": {"ingredient_name", "food_name", "ingredient_source"},
     "general_pet_qa": {"topic"},
@@ -336,7 +339,7 @@ def _extract_intent(message: str, state: dict[str, Any]) -> tuple[dict[str, Any]
     try:
         response = OpenAI(api_key=cfg["api_key"], base_url=cfg["base_url"], timeout=45).chat.completions.create(
             model=cfg["model"], temperature=0, response_format={"type":"json_object"}, messages=[
-                {"role":"system","content":"你是宠物咨询的意图与信息抽取模块。只提取用户明确表达的信息，不回答问题，只输出JSON。"},
+                {"role":"system","content":"你是宠物咨询的意图与信息抽取模块。只提取用户明确表达的信息，不回答问题，只输出JSON。选粮slots可包含budget_per_jin（明确每斤预算才填数字，不能把每袋预算当每斤）、preferred_brand（明确品牌）、origin_type（domestic/imported）。未说明不要猜测。"},
                 {"role":"user","content":_json_dumps(prompt)},
             ], **_provider_options(cfg))
         parsed = _parse_model_json(response.choices[0].message.content or "")
@@ -562,6 +565,7 @@ def _build_context(user_id: str, conversation: dict[str, Any], state: dict[str, 
     context: dict[str, Any] = {
         "pet_profile": pet, "current_food": None, "food_list": [], "recent_daily_records": [],
         "food_candidates": [], "food_analysis": None, "food_submission": None,
+        "diet_history": [], "diet_history_status": "unavailable",
     }
     packet = (state.get("slots") or {}).get(GUARDIAN_CONTEXT_SLOT)
     if isinstance(packet, dict) and packet.get("pet_id") == conversation.get("pet_id"):
@@ -569,9 +573,28 @@ def _build_context(user_id: str, conversation: dict[str, Any], state: dict[str, 
     supplied_context = client_context if isinstance(client_context, dict) else {}
     context["recent_daily_records"] = _normalize_daily_records(supplied_context.get("recent_daily_records"))
     if pet and (pet.get("food_brand") or pet.get("food_product")):
+        signature = [pet.get(key) for key in ("food_brand", "food_product", "food_formula_id")]
+        previous_signature = state["slots"].get("_profile_diet_signature")
+        if previous_signature is not None and previous_signature != signature:
+            state["slots"].pop("current_food", None)
+            pipeline = state["slots"].get(SOFT_STOOL_STATE_SLOT)
+            if isinstance(pipeline, dict):
+                pipeline.setdefault("context", {}).update(baseline_loaded=False, followup_context_loaded=False)
+                pipeline.setdefault("slots", {}).pop("current_product", None)
+                pipeline.setdefault("slot_status", {}).pop("current_product", None)
+        state["slots"]["_profile_diet_signature"] = signature
         context["current_food"] = {"brand":pet.get("food_brand"),"product_name":pet.get("food_product")}
+        state["slots"]["profile_current_food"] = " ".join(filter(None,[pet.get("food_brand"),pet.get("food_product")]))
         if not state["slots"].get("current_food"):
-            state["slots"]["current_food"] = " ".join(filter(None,[pet.get("food_brand"),pet.get("food_product")]))
+            state["slots"]["current_food"] = state["slots"]["profile_current_food"]
+    if pet and conversation.get("pet_id"):
+        try:
+            history = list_diet_history(user_id, conversation["pet_id"], limit=10)
+            context["diet_history"] = compact_diet_context(history["items"])
+            context["diet_history_status"] = "available" if history["items"] else "no_records"
+            context["diet_association_note"] = history["association_note"]
+        except (pymysql.MySQLError, LookupError):
+            pass
     try:
         foods = list_food_submissions(user_id, limit=20).get("items") or []
         context["food_list"] = [
@@ -652,6 +675,8 @@ def _generate_answer(message: str, state: dict[str, Any], context: dict[str, Any
             "2. 先对照以前吃得适应的粮，比较候选粮的蛋白来源、脂肪和纤维资料，避免同时新增多种食物。\n"
             "3. 可以告诉我你考虑的品牌或具体粮款、预算与偏好，我再帮你对比；已有疾病需结合医生的饮食要求。"
         )
+        if context.get("recommendation"):
+            fallback += "\n" + context["recommendation"]["note"]
     if not cfg["api_key"]:
         return fallback, None
     payload = {
@@ -670,6 +695,8 @@ def _generate_answer(message: str, state: dict[str, Any], context: dict[str, Any
                     "只依据提供的数据回答，不得编造产品、配料、评分或疾病结论。"
                     "回答前综合pet_profile、current_food、food_list和recent_daily_records；明确区分没有记录与数值为零，"
                     "guardian_context含前一个场景的事实与来源，切换选粮时沿用这些信息，不重复开展症状问诊。"
+                    "diet_history是已确认的宠物吃粮记录；food_list仅为用户上传的产品，不代表吃过。"
+                    "health_topics只表示同期咨询话题，不能推断疾病或粮食导致症状。日期未知不推断，资料不可用不当作没有。"
                     "只有food_candidates中已有且有适用依据的产品才能作为具体候选；没有候选就给筛选方向，不编造品牌推荐。"
                     "有饮水、进食、排便次数或便便形态记录时应优先结合其近期变化，但不要虚构正常参考值。"
                     "只输出合法JSON，且必须正好包含context、care、watch三个字符串字段。"
@@ -732,10 +759,20 @@ def _handle_context_message(user_id, conversation, message, state, source_messag
     if attachments and not state.get("primary_intent"):
         state["primary_intent"] = "ingredient_analysis"
     context = _build_context(user_id, conversation, state, attachments, client_context)
+    if state.get("primary_intent") == "food_switch":
+        state["slots"].update(explicit_preferences(message))
     submission = context.get("food_submission")
     if submission and submission.get("recognition_status") in {"pending","processing"}:
-        reply = {"response_type":"processing","reply":"配料表正在识别，完成后我会继续分析。",
+        reply = {"response_type":"processing","reply":submission.get("recognition_message") or "配料表正在识别，请稍后刷新投稿后再交给我分析。",
                  "result":{"resource":"food_submission","id":submission["id"],"interval_ms":2000}}
+    elif submission and (submission.get("status") == "cancelled" or
+                         submission.get("recognition_status") != "success" or
+                         not _clean(submission.get("ingredient_composition"))):
+        reply = {"response_type": "text", "reply": submission.get("recognition_message") or
+                 "还没有可分析的配料表。请拍包装背面的配料表近照，让文字完整、清晰、不反光，再重新上传。",
+                 "result": {"resource": "food_submission", "id": submission["id"],
+                            "recognition_status": submission.get("recognition_status"),
+                            "can_reupload": submission.get("can_reupload", False)}}
     else:
         flow = _evaluate_flow(state, context)
         state["missing_slots"] = flow.get("missing_slots") or []
@@ -763,12 +800,18 @@ def _handle_context_message(user_id, conversation, message, state, source_messag
                      "result":{"risk":flow["risk"],"disclaimer":"AI内容仅供参考，不能替代兽医诊断"}}
         else:
             state["current_step"], state["risk_level"] = None, "low"
+            if state.get("primary_intent") == "food_switch":
+                recommendation = recommend_guardian_foods(context.get("pet_profile") or {}, state["slots"], context["diet_history"])
+                context["recommendation"] = recommendation
+                context["food_candidates"] = recommendation["items"]
             text, answer_model = _generate_answer(message,state,context,flow["status"]=="answer_with_limited_info")
             model_name = answer_model or model_name
             reply = {"response_type":"result_card","reply":text,
                      "result":{"intent":state.get("primary_intent"),"slots":state.get("slots"),
                                "limited_info":flow["status"]=="answer_with_limited_info",
                                "food_candidates":context.get("food_candidates") or [],
+                               "recommendation":context.get("recommendation"),
+                               "actions": [{"type": "diet_history", "label": "查看历史口粮", "pet_id": conversation.get("pet_id")}] if conversation.get("pet_id") else [],
                                "food_submission":submission},
                      "disclaimer":"AI内容仅供参考，不能替代兽医诊断"}
     result = {**(reply.get("result") or {}), "turn_no": state["turn_count"],
