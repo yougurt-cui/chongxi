@@ -4,12 +4,12 @@
 
 ## 交付状态
 
-| 项目 | 分支 | 合并目标 | 草稿 PR |
+| 项目 | 分支 | 合并目标 | PR 状态 |
 | --- | --- | --- | --- |
-| 后端 `chongxi` | `feature/guardian-p0` | `main` | [#2](https://github.com/yougurt-cui/chongxi/pull/2) |
-| 小程序 `xiaochengxu` | `feature/guardian-p0` | `dev` | [#1](https://github.com/yougurt-cui/xiaochengxu/pull/1) |
+| 后端 `chongxi` | `feature/guardian-p0` | `main` | [#2 已合并并部署](https://github.com/yougurt-cui/chongxi/pull/2) |
+| 小程序 `xiaochengxu` | `feature/guardian-p0` | `dev` | [#1 草稿，待处理](https://github.com/yougurt-cui/xiaochengxu/pull/1) |
 
-两个仓库各一个功能分支，共两个草稿 PR。同名分支属于不同仓库；当前没有合并或部署。本文描述分支上的预期行为，不表示线上已经具备这些功能。
+两个仓库各一个功能分支，同名分支属于不同仓库。后端已于 2026-10-11 合并到 main 并上线（功能提交 `3a5a7c7`），小程序仍待负责人 review、真机验收及发布。本文描述完整前后端配合后的体验；旧版小程序可继续使用，但暂不展示新候选卡、云端历史及补拍快捷入口。
 
 ## 1. 上传配料照片后，用户知道下一步怎么做
 

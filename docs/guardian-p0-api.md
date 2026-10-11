@@ -1,6 +1,6 @@
 # 管家 P0 小程序接口文档
 
-版本：`feature/guardian-p0`，2026-10-11。依据当前 Flask 路由、服务序列化和小程序调用整理；对应 [后端草稿 PR #2](https://github.com/yougurt-cui/chongxi/pull/2) 和 [小程序草稿 PR #1](https://github.com/yougurt-cui/xiaochengxu/pull/1)。尚未合并或部署。业务变化见 [按功能审查说明](guardian-p0-review.md)。
+版本：`main`，2026-10-11，功能发布提交 `3a5a7c7`。依据当前 Flask 路由、服务序列化和小程序调用整理；对应 [后端 PR #2（已合并并部署）](https://github.com/yougurt-cui/chongxi/pull/2) 和 [小程序草稿 PR #1（待处理、未发布）](https://github.com/yougurt-cui/xiaochengxu/pull/1)。业务变化见 [按功能审查说明](guardian-p0-review.md)。
 
 本文覆盖本次 P0 新增与调整的接口，不是整个小程序的全部接口清单。JSON 示例中的名称、ID、评分和时间为结构示例，不代表真实推荐产品。
 
@@ -417,7 +417,7 @@
 4. 点击候选后取消：不发 PATCH；再次确认已开始吃：PATCH 后刷新，旧粮进入历史。
 5. 切换账号/宠物：丢弃旧请求结果，确认旧对象不能读取或修改。
 
-应先部署后端，再发布配套小程序。本次已通过本地 API/auth/MySQL smoke 与离线推荐样例检查；真实产品资料、OCR/LLM、微信开发者工具编译及真机验收仍待完成。
+后端已先部署，生产历史表结构、服务及公开 HTTPS 鉴权检查通过；配套小程序仍待负责人发布。本次已通过本地 API/auth/MySQL smoke 与离线推荐样例检查；真实产品资料、OCR/LLM、微信开发者工具编译及真机验收仍待完成。
 
 新后端已通过改动前小程序 `2c4813f` 的兼容检查，可以独立先发布；旧版继续使用原接口与返回字段，暂不展示新候选卡、云端历史和补拍入口。固定版本、验证方式和生产预检限制见 [后端独立发布与旧版兼容](guardian-p0.md#后端独立发布与旧版兼容)。
 
