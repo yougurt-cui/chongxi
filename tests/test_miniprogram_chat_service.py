@@ -27,32 +27,25 @@ class MiniProgramChatServiceTest(unittest.TestCase):
         self.assertEqual(result["secondary_intent"], "food_switch")
         self.assertEqual(result["slots"]["symptom"], "软便")
 
-    def test_symptom_flow_asks_warning_signs_first(self):
+    def test_general_guardian_does_not_require_a_warning_sign_questionnaire(self):
         state = service._default_state("c1")
         state["primary_intent"] = "symptom_consult"
         state["slots"] = {"symptom": "软便"}
         flow = service._evaluate_flow(state, {})
-        self.assertEqual(flow["status"], "need_more_info")
-        self.assertEqual(flow["next_slot"], "warning_signs")
-        self.assertEqual(flow["question"]["response_type"], "text")
-        self.assertEqual(flow["question"]["options"], [])
-        self.assertIn("陪你一起理一理", flow["question"]["text"])
+        self.assertEqual(flow["status"], "ready_to_answer")
+        self.assertEqual(flow["missing_slots"], [])
 
-    def test_symptom_flow_uses_two_combined_clarification_rounds(self):
+    def test_missing_symptom_details_do_not_hold_up_guardian_advice(self):
         state = service._default_state("c1")
         state["primary_intent"] = "symptom_consult"
         state["slots"] = {"symptom": "软便", "warning_signs": ["none"]}
         state["followup_count"] = 1
         flow = service._evaluate_flow(state, {})
-        self.assertEqual(flow["status"], "need_more_info")
-        self.assertEqual(flow["next_slot"], "symptom_context")
-        self.assertTrue(flow["question"]["text"].startswith("好的，了解了。"))
-        self.assertIn("持续多久", flow["question"]["text"])
-        self.assertIn("换粮", flow["question"]["text"])
+        self.assertEqual(flow["status"], "ready_to_answer")
 
         state["followup_count"] = 2
         flow = service._evaluate_flow(state, {})
-        self.assertEqual(flow["status"], "answer_with_limited_info")
+        self.assertEqual(flow["status"], "ready_to_answer")
 
     def test_risk_interrupt_precedes_followup(self):
         state = service._default_state("c1")

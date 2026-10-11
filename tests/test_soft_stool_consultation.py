@@ -61,41 +61,40 @@ class ConsultationTest(unittest.TestCase):
 
     def test_grouped_dialogue_reaches_actionable_conclusion(self):
         result = self.turn("软便了")
-        self.assertEqual(result["next_group"], "recent_diet_change_group")
+        self.assertEqual(result["next_group"], "history_food_group")
         self.assertNotIn("主要关注", result["reply_parts"][0]["reply"])
         self.assertIn("碳水结构压力、蛋白消化压力", result["reply_parts"][1]["reply"])
         self.assertIn("数据有限", result["reply_parts"][1]["reply"])
+        self.assertIsNone(result["state"]["slots"]["soft_stool_days"])
         result = self.turn("没有", result["state"])
-        self.assertEqual(result["next_group"], "symptom_group")
-        result = self.turn("软便两天，没有呕吐没有血没有黏液", result["state"])
-        self.assertEqual(result["next_group"], "risk_group")
-        result = self.turn("都正常", result["state"])
-        self.assertEqual(result["next_group"], "history_and_disease_group")
+        self.assertEqual(result["next_group"], "medical_history_group")
         self.assertEqual(result["actions"][0]["type"], "medical_record")
-        result = self.turn("都没有", result["state"])
+        self.assertNotIn("碳水结构压力", result["reply"])
+        self.assertNotIn("呕吐", result["reply_parts"][1]["reply"])
+        result = self.turn("没有", result["state"])
         self.assertEqual(result["status"], "answered")
-        for label in ("下一步：", "观察：", "复评：", "不能优先归因到换粮"):
+        for label in ("下一步：", "观察：", "复评："):
             self.assertIn(label, result["reply"])
         self.assertEqual(result["state"]["status"], "answered")
+        self.assertEqual(result["actions"][0]["target_flow"], "food_switch")
 
     def test_unknowns_are_not_negative_or_repeated(self):
         result = self.turn("软便了")
         result = self.turn("不知道", result["state"])
-        self.assertEqual(result["next_group"], "symptom_group")
-        self.assertIsNone(result["state"]["slots"]["recent_diet_change"])
-        for _ in range(3):
-            result = self.turn("不知道", result["state"])
+        self.assertEqual(result["next_group"], "medical_history_group")
+        self.assertIsNone(result["state"]["slots"]["history_foods_reviewed"])
+        result = self.turn("不知道", result["state"])
         self.assertEqual(result["status"], "answered")
         self.assertTrue(result["limited_info"])
-        self.assertIn("有限信息", result["reply"])
+        self.assertEqual(result["state"]["slot_status"]["history_foods_reviewed"]["status"], "unknown")
         self.assertNotIn("没有明确近期饮食变化", result["reply"])
 
-    def test_bare_duration_uses_previous_group(self):
-        result = self.turn("没有饮食变化，软便了，没有呕吐没有血没有黏液，食欲精神都正常")
-        self.assertEqual(result["next_group"], "symptom_group")
-        result = self.turn("两天", result["state"])
-        self.assertEqual(result["state"]["slots"]["soft_stool_days"], 2)
-        self.assertIsNone(result["state"]["slots"]["change_days"])
+    def test_bare_duration_uses_previous_group_for_legacy_conversations(self):
+        state = pipeline.new_state("pet-1")
+        state["context"].update(active_question_group="symptom_group", active_question_fields=["soft_stool_days"])
+        slots = llm.extract_user_info("两天", state)
+        self.assertEqual(slots["soft_stool_days"], 2)
+        self.assertNotIn("change_days", slots)
 
     def test_partial_history_answer_does_not_complete_diseases(self):
         state = pipeline.new_state("pet-1")
@@ -119,7 +118,7 @@ class ConsultationTest(unittest.TestCase):
     def test_missing_tables_do_not_block_followup(self):
         with patch.object(pipeline, "build_baseline_diet_profile", side_effect=pymysql.OperationalError(1146, "table absent")):
             result = self.turn("软便了")
-        self.assertEqual(result["next_group"], "recent_diet_change_group")
+        self.assertEqual(result["next_group"], "current_food_group")
         self.assertIn("暂不可用", result["reply"])
 
     def test_intention_date_is_not_an_actual_food_change(self):
@@ -129,7 +128,7 @@ class ConsultationTest(unittest.TestCase):
             result = self.turn("软便了")
         self.assertIsNone(result["state"]["slots"]["recent_diet_change"])
         self.assertIsNone(result["state"]["slots"]["change_days"])
-        self.assertEqual(result["next_group"], "recent_diet_change_group")
+        self.assertEqual(result["next_group"], "history_food_group")
 
     def test_correction_removes_stale_comparison(self):
         result = self.turn("原来吃旧粮，现在换成BK34，三天前开始，一半，软便两天")

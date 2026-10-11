@@ -40,19 +40,25 @@ def new_state(pet_id):
 def update_slots(state, extracted):
     values = policy.validate_extraction(extracted)
     statuses = state.setdefault("slot_status", {})
+    changed = []
+    evidence = extracted.get("_field_evidence") or {}
     for key, value in values.items():
         if key == "unknown_fields":
             continue
         if key == "current_product" and state["slots"].get(key) != value:
             state["context"]["baseline_loaded"] = False
+        if state["slots"].get(key) != value or statuses.get(key, {}).get("status") != "confirmed":
+            changed.append(key)
         state["slots"][key] = value
-        statuses[key] = {"status": "confirmed", "source": "user_message", "turn": state["turn"]}
+        statuses[key] = {"status": "confirmed", "source": "user_message", "turn": state["turn"],
+                         "source_text": evidence.get(key)}
     for key in values.get("unknown_fields", []):
         # A user's explicit correction to unknown invalidates an older value.
         if key == "current_product":
             state["context"]["baseline_loaded"] = False
         state["slots"][key] = None
         statuses[key] = {"status": "unknown", "source": "user_message", "turn": state["turn"]}
+        changed.append(key)
     if state["slots"].get("recent_diet_change") is False:
         for key in ("change_type", "old_product", "new_product", "added_food", "change_days", "change_ratio"):
             state["slots"][key] = None
@@ -69,6 +75,7 @@ def update_slots(state, extracted):
     if flags and "recent_diet_change" not in values.get("unknown_fields", []):
         state["slots"]["recent_diet_change"] = True
         state["slots"]["change_type"] = flags[0][1] if len(flags) == 1 else "multiple"
+    state["analysis"]["changed_fields"] = changed
 
 
 def _warn(state, code):
@@ -90,6 +97,7 @@ def load_baseline_context(state):
         baseline = empty_baseline()
         _warn(state, "product_data_unavailable")
     context["baseline_diet"] = baseline
+    state["analysis"]["show_product_evidence"] = True
     context["baseline_loaded"] = True
     state["pattern"] = PATTERN_WITH_BASELINE if baseline.get("has_diet_data") else PATTERN_WITHOUT_BASELINE
 
@@ -162,14 +170,17 @@ def summarize_baseline_diet(state):
     return " ".join(parts)
 
 
-def build_current_summary(state):
+def build_current_summary(state, incremental=False):
     slots = state["slots"]
-    parts = [summarize_baseline_diet(state)] if state["turn"] == 1 else []
-    if slots.get("current_product"):
+    def visible(key):
+        return not incremental or key in state["analysis"].get("changed_fields", [])
+    show_product = not incremental or state["analysis"].get("show_product_evidence")
+    parts = [summarize_baseline_diet(state)] if show_product else []
+    if slots.get("current_product") and visible("current_product"):
         parts.append("你确认当前主粮是：" + slots["current_product"] + "。")
-    if slots.get("recent_diet_change") is False:
+    if slots.get("recent_diet_change") is False and visible("recent_diet_change"):
         parts.append("你确认近期没有饮食变化。")
-    elif slots.get("recent_diet_change") is True:
+    elif slots.get("recent_diet_change") is True and any(visible(k) for k in ("recent_diet_change", "old_product", "new_product", "added_food", "change_days", "change_ratio")):
         details = []
         if slots.get("main_food_changed") is True or slots.get("change_type") == "main_food_change":
             details.append("换主粮")
@@ -185,29 +196,29 @@ def build_current_summary(state):
             details.append(f"新食物占比约 {slots['change_ratio'] * 100:g}%")
         parts.append("近期有饮食变化" + ("：" + "；".join(details) if details else "") + "。")
     for key, label in (("soft_stool_days", "软便持续时间"),):
-        if slots.get(key) is not None:
-            parts.append(f"{label}约 {slots[key]} 天。")
+        if slots.get(key) is not None and visible(key):
+            parts.append("你确认软便今天开始。" if slots[key] == 0 else f"{label}约 {slots[key]} 天。")
     for key, label in (("vomiting", "呕吐"), ("blood_in_stool", "便血"), ("mucus_in_stool", "明显黏液")):
-        if slots.get(key) is not None:
+        if slots.get(key) is not None and visible(key):
             parts.append(("有" if slots[key] else "没有") + label + "。")
     for key, label in (("appetite", "食欲"), ("energy", "精神")):
-        if slots.get(key):
+        if slots.get(key) and visible(key):
             parts.append(label + ("下降。" if slots[key] == "poor" else "正常。"))
     for key, label in (("history_foods_reviewed", "历史饮食补充"), ("disease_history_reviewed", "疾病补充")):
-        if slots.get(key):
+        if slots.get(key) and visible(key):
             parts.append(label + "：" + slots[key] + "。")
     compare = state["analysis"].get("diet_compare") or {}
-    if compare:
+    if compare and (not incremental or any(visible(k) for k in ("old_product", "new_product"))):
         known = [f"{label}变化 {compare['delta'][key]:+g} 个百分点" for key, label in (
             ("protein", "蛋白"), ("fat", "脂肪"), ("fiber", "粗纤维"),
         ) if compare.get("delta", {}).get(key) is not None]
         parts.append("新旧粮标示保证值对比：" + ("；".join(known) if known else "保证值缺失或口径不同，无法计算营养差异") + "。")
-    if state["analysis"].get("data_warnings"):
+    if state["analysis"].get("data_warnings") and show_product:
         parts.append("部分产品或历史资料暂不可用，以下分析只使用已取得的信息。")
     unknown = [key for key, meta in state["slot_status"].items() if meta["status"] in ("unknown", "deferred")]
-    if unknown:
+    if unknown and not incremental:
         parts.append("有部分信息尚不确定，本轮按信息有限处理。")
-    return " ".join(parts) or "本轮没有新增的已确认信息。"
+    return " ".join(parts) or "这部分暂时没有补充资料，我会沿用已经确认的信息继续分析。"
 
 
 def _has_urgent_risk(state):
@@ -268,14 +279,19 @@ def build_assessment_plan(state):
             judgment = "近期有饮食变化，但时间关系尚不清楚，暂不能确定关联。"
         step = "先不继续增加新食物比例，记录原粮、新粮及罐头零食的变化，避免同时新增多种食物。"
     elif changed is False:
-        judgment = "没有明确近期饮食变化，不能优先归因到换粮；需要结合症状和已有疾病信息。"
+        judgment = "没有明确近期饮食变化，不能优先归因到换粮；先对照历史吃粮表现和已有健康背景。"
         step = "记录现有喂食与排便情况，避免同时引入新的食物，以便观察变化。"
     else:
-        judgment = "饮食变化及部分症状信息尚不明确，本次只能给出有限信息下的初步判断。"
-        step = "先补记最近吃了什么、何时出现软便，以及已有病历，方便后续复评。"
+        judgment = "当前配方只能提供参考，还需结合它以前吃粮的表现和已有健康背景，不能直接认定是这款粮造成软便。"
+        step = "保持饮食记录，暂不同时添加多种新食物；对照以前吃得适应的粮，整理后续选粮的参考。"
     limited_products = any((p.get("soft_stool_mechanisms") or {}).get("confidence") == "limited" for p in (state["context"].get("baseline_diet") or {}).get("detailed_products", []))
-    return {"risk": "limited" if limited_products or bool(state["analysis"].get("data_warnings")) or any(policy.unanswered(state, k) or state["slot_status"].get(k, {}).get("status") in ("unknown", "deferred")
-                                         for k in ("recent_diet_change", "soft_stool_days", "vomiting", "blood_in_stool", "appetite", "energy")) else "routine",
+    history = slots.get("history_foods_reviewed")
+    if history and history != "没有其他主粮记录":
+        judgment += " 以前吃粮的表现可作为个体耐受参考，不能只按配方评分选择。"
+    if state["context"].get("disease_names") or (slots.get("disease_history_reviewed") and slots["disease_history_reviewed"] != "没有其他病历补充"):
+        judgment += " 已有健康背景需要作为饮食选择的约束，不能单靠配方分析代替病历评估。"
+    return {"risk": "limited" if limited_products or bool(state["analysis"].get("data_warnings")) or not (state["context"].get("baseline_diet") or {}).get("has_diet_data") or any(state["slot_status"].get(k, {}).get("status") in ("unknown", "deferred")
+                                         for k in ("current_product", "history_foods_reviewed", "disease_history_reviewed")) else "routine",
             "judgment": judgment, "next_steps": [step],
             "observe": ["记录便便形态和次数，以及呕吐、食欲和精神表现；新出现的黏液也要记录。"],
             "review": "持续、加重或出现便血、呕吐、食欲下降、精神变差时，联系宠物医院评估；有新记录可继续这次咨询。"}
@@ -286,7 +302,19 @@ def build_final_assessment(state):
     return " ".join([plan["judgment"], *plan["next_steps"], *plan["observe"], plan["review"]])
 
 
-def run_soft_stool_turn(pet_id, user_input, state=None, diet_override=None, prefill=True):
+def upgrade_state(state):
+    if state.get("rule_version") != policy.RULE_VERSION:
+        for key in ("soft_stool_days", "change_days"):
+            if state.get("slots", {}).get(key) == 0 and not state.get("slot_status", {}).get(key, {}).get("source_text"):
+                state["slots"][key] = None
+                state.get("slot_status", {}).pop(key, None)
+                state["summary"] = {}
+                for cached in ("last_reasoning", "current_summary", "assessment_plan"):
+                    state.get("analysis", {}).pop(cached, None)
+    state["rule_version"] = policy.RULE_VERSION
+
+
+def run_soft_stool_turn(pet_id, user_input, state=None, diet_override=None, prefill=True, extracted=None):
     defaults = new_state(pet_id)
     state = deepcopy(state) if state else defaults
     for key, value in defaults.items():
@@ -295,16 +323,18 @@ def run_soft_stool_turn(pet_id, user_input, state=None, diet_override=None, pref
         state["context"].setdefault(key, deepcopy(value))
     for key in policy.SLOT_DEFAULTS:
         state["slots"].setdefault(key, None)
-    state["rule_version"] = policy.RULE_VERSION
+    # v3 accepted model-default zero as confirmed; preserve all other facts.
+    upgrade_state(state)
     if not state["turn"]:
         state["context"].update(diet_override=diet_override, prefill=prefill)
     state["turn"] += 1
-    update_slots(state, extract_user_info(user_input, state))
+    state["analysis"]["show_product_evidence"] = state["turn"] == 1
+    update_slots(state, extract_user_info(user_input, state) if extracted is None else extracted)
     # No model generation or product/history queries before an urgent response.
     if _has_urgent_risk(state):
         summary = build_current_summary(state)
         plan = build_assessment_plan(state)
-        state["analysis"].update(generation_source="rule", model_name=None)
+        state["analysis"].update(generation_source="rule", model_name=None, fallback_reason=None)
         parts = [{"response_type": "evidence_card", "reply": summary},
                  {"response_type": "risk_alert", "reply": build_final_assessment(state)}]
         group = None
@@ -314,20 +344,19 @@ def run_soft_stool_turn(pet_id, user_input, state=None, diet_override=None, pref
         run_required_tools(state)
         summary = build_current_summary(state)
         group, question = choose_next_question_group(state)
-        # Do not endlessly repeat a question when the user cannot answer it.
+        # Ask each optional background step once; a non-answer never holds up
+        # advice. Explicit answers or corrections can still arrive in later turns.
+        while group and state["question_attempts"].get(group, 0) >= 1:
+            for key in state["context"]["active_question_fields"]:
+                state["slot_status"][key] = {"status": "deferred", "source": "unanswered_question", "turn": state["turn"]}
+            group, question = choose_next_question_group(state)
         if group:
-            fingerprint = group + ":" + ",".join(state["context"]["active_question_fields"])
-            if state["question_attempts"].get(fingerprint, 0) >= 2:
-                for key in state["context"]["active_question_fields"]:
-                    state["slot_status"][key] = {"status": "deferred", "source": "unanswered_question", "turn": state["turn"]}
-                group, question = choose_next_question_group(state)
-                summary = build_current_summary(state)
-            if group:
-                fingerprint = group + ":" + ",".join(state["context"]["active_question_fields"])
-                state["question_attempts"][fingerprint] = state["question_attempts"].get(fingerprint, 0) + 1
+            state["question_attempts"][group] = state["question_attempts"].get(group, 0) + 1
+        summary = build_current_summary(state)
         plan = build_assessment_plan(state)
         state["analysis"]["assessment_plan"] = plan
-        parts = generate_two_stage_response(state, summary, summary, question)
+        state["analysis"]["next_group"] = group
+        parts = generate_two_stage_response(state, build_current_summary(state, incremental=True), summary, question)
     state["context"]["active_question_group"] = group
     state["status"] = "active" if group else "answered"
     state["analysis"].update(current_summary=summary, assessment_plan=plan)
@@ -337,7 +366,9 @@ def run_soft_stool_turn(pet_id, user_input, state=None, diet_override=None, pref
             "reply_parts": parts, "pattern": state["pattern"], "next_group": group,
             "rule_version": policy.RULE_VERSION, "limited_info": plan["risk"] == "limited",
             "actions": ([{"type": "medical_record", "label": "补充病历", "pet_id": pet_id}]
-                        if group == "history_and_disease_group" else []),
+                        if group == "medical_history_group" else
+                        ([{"type": "flow_handoff", "target_flow": "food_switch", "label": "继续聊选粮", "message": "帮我选一款适合的主粮"}]
+                         if not group and plan["risk"] != "high" else [])),
             "state": state}
 
 

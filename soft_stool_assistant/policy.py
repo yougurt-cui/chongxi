@@ -1,8 +1,9 @@
 """Versioned consultation fields and question groups; no clinical scoring changes."""
 
 import math
+from services.guardian_workflow import Step, next_step
 
-RULE_VERSION = "soft-stool-consultation-v3"
+RULE_VERSION = "guardian-soft-stool-v4"
 SLOT_DEFAULTS = dict.fromkeys((
     "recent_diet_change", "change_type", "main_food_changed", "wet_food_added",
     "snack_added", "other_food_added", "current_product", "old_product", "new_product",
@@ -14,21 +15,38 @@ BOOLEAN_FIELDS = {
     "recent_diet_change", "main_food_changed", "wet_food_added", "snack_added",
     "other_food_added", "vomiting", "blood_in_stool", "mucus_in_stool",
 }
-QUESTION_GROUPS = (
-    ("recent_diet_change_group", ("recent_diet_change", "current_product"),
-     {"recent_diet_change": "最近有没有换主粮，或添加罐头、零食等新食物", "current_product": "目前主要吃什么主粮"}),
-    ("diet_change_detail_group", ("old_product", "new_product", "added_food", "change_days", "change_ratio"),
-     {"old_product": "原来吃什么主粮", "new_product": "现在换成什么主粮",
-      "added_food": "新加的食物是什么", "change_days": "从几天前开始变化",
-      "change_ratio": "新食物大约占每天饮食的多少"}),
-    ("symptom_group", ("soft_stool_days", "vomiting", "blood_in_stool", "mucus_in_stool"),
-     {"soft_stool_days": "软便持续多久", "vomiting": "有没有呕吐",
-      "blood_in_stool": "有没有便血", "mucus_in_stool": "有没有明显黏液"}),
-    ("risk_group", ("appetite", "energy"),
-     {"appetite": "食欲有没有下降", "energy": "精神有没有变差"}),
-    ("history_and_disease_group", ("history_foods_reviewed", "disease_history_reviewed"),
-     {"history_foods_reviewed": "以前吃过哪些主粮、吃后怎么样",
-      "disease_history_reviewed": "有没有基础疾病或其他病历需要补充"}),
+
+
+def _history_question(state, fields):
+    return "以前吃过哪些主粮，吃的时候便便怎么样？没有其他记录也可以直接告诉我。"
+
+
+def _medical_question(state, fields):
+    diseases = state["context"].get("disease_names") or []
+    prefix = "档案里已有" + "、".join(diseases)[:100] + "。" if diseases else ""
+    return prefix + "之前有确诊疾病或相关病历需要补充吗？没有或暂时不清楚也没关系。"
+
+
+def _change_question(state, fields):
+    labels = {"old_product": "原来吃什么主粮", "new_product": "现在换成什么主粮",
+              "added_food": "新加的食物是什么", "change_days": "这次饮食变化从什么时候开始"}
+    return "；".join(labels[key] for key in fields) + "？"
+
+
+def _main_change(state):
+    slots = state["slots"]
+    return slots.get("recent_diet_change") is True and (slots.get("main_food_changed") is True or slots.get("change_type") == "main_food_change")
+
+
+STEPS = (
+    Step("current_food_group", ("current_product",),
+         lambda state, fields: "它现在主要吃哪款主粮？有品牌和具体名称的话，我可以先帮你看看配方。",
+         lambda state: not (state["context"].get("baseline_diet") or {}).get("has_diet_data")),
+    Step("diet_change_detail_group", ("old_product", "new_product", "change_days"), _change_question, _main_change),
+    Step("added_food_detail_group", ("added_food", "change_days"), _change_question,
+         lambda state: state["slots"].get("recent_diet_change") is True and not _main_change(state)),
+    Step("history_food_group", ("history_foods_reviewed",), _history_question),
+    Step("medical_history_group", ("disease_history_reviewed",), _medical_question),
 )
 
 
@@ -74,25 +92,4 @@ def unanswered(state, key):
 
 
 def next_question(state):
-    slots = state["slots"]
-    for group, keys, labels in QUESTION_GROUPS:
-        if group == "recent_diet_change_group" and (state["context"].get("baseline_diet") or {}).get("has_diet_data"):
-            keys = ("recent_diet_change",)
-        if group == "diet_change_detail_group":
-            if slots.get("recent_diet_change") is not True:
-                continue
-            main_change = slots.get("main_food_changed") is True or slots.get("change_type") == "main_food_change"
-            keys = tuple(k for k in keys if (
-                k in ("change_days", "change_ratio")
-                or (main_change and k in ("old_product", "new_product"))
-                or (k == "added_food" and (not main_change or any(slots.get(f) is True for f in ("wet_food_added", "snack_added", "other_food_added"))))
-            ))
-        missing = [key for key in keys if unanswered(state, key)]
-        if missing:
-            question = "；".join(labels[key] for key in missing) + "？"
-            if group == "history_and_disease_group":
-                diseases = state["context"].get("disease_names") or []
-                if diseases:
-                    question = "档案已有" + "、".join(diseases)[:100] + "。" + question
-            return group, question, missing
-    return None, None, []
+    return next_step(state, STEPS, unanswered)
