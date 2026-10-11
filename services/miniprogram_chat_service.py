@@ -20,14 +20,16 @@ from services.miniprogram_food_change_service import (
 )
 from services.miniprogram_food_submission_service import get_food_submission, list_food_submissions
 from services.soft_stool_assistant_service import handle_turn as handle_soft_stool_turn
+from services.guardian_workflow import FlowStrategy, select_strategy, requested_flow, build_handoff
 
 
 CONVERSATION_TABLE = "miniprogram_chat_conversation"
 STATE_TABLE = "miniprogram_chat_state"
 MESSAGE_TABLE = "miniprogram_chat_message"
-PROMPT_VERSION = "pet-manager-chat-v1"
+PROMPT_VERSION = "pet-manager-chat-v2"
 MAX_MESSAGE_LENGTH = 4000
 SOFT_STOOL_STATE_SLOT = "_soft_stool_pipeline_state"
+GUARDIAN_CONTEXT_SLOT = "_guardian_context"
 SOFT_STOOL_TRIGGER_RE = re.compile(r"软便|便软|稀便|拉稀|腹泻")
 
 VALID_INTENTS = {
@@ -49,9 +51,9 @@ INTENT_SLOTS = {
 
 FLOW_CONFIG = {
     "symptom_consult": {
-        "required": ["symptom", "warning_signs", "symptom_context"],
-        "priority": ["warning_signs", "symptom_context"],
-        "max_followups": 2,
+        "required": ["symptom"],
+        "priority": [],
+        "max_followups": 0,
     },
     "food_switch": {
         "required": ["current_food", "switch_reason", "target_requirement"],
@@ -301,7 +303,16 @@ def _parse_model_json(raw: str) -> dict[str, Any]:
 def _fallback_extraction(message: str, state: dict[str, Any]) -> dict[str, Any]:
     if any(word in message for word in ("软便", "腹泻", "呕吐", "便血", "没精神", "食欲")):
         symptom = next((word for word in ("软便", "腹泻", "呕吐", "便血") if word in message), "不适")
-        return {"primary_intent": "symptom_consult", "secondary_intent": "food_switch" if "换粮" in message else None, "slots": {"symptom": symptom}, "confidence": 0.7}
+        from soft_stool_assistant.llm import _extract_rule_info
+        explicit = _extract_rule_info(message, {})
+        warning = [name for name, present in (
+            ("blood_in_stool", explicit.get("blood_in_stool") is True),
+            ("poor_mental_status", explicit.get("energy") == "poor"),
+        ) if present]
+        slots = {"symptom": symptom}
+        if warning:
+            slots["warning_signs"] = warning
+        return {"primary_intent": "symptom_consult", "secondary_intent": "food_switch" if "换粮" in message else None, "slots": slots, "confidence": 0.7}
     if any(word in message for word in ("换粮", "低敏粮", "换猫粮")):
         return {"primary_intent": "food_switch", "secondary_intent": None, "slots": {}, "confidence": 0.7}
     if "配料" in message or "原料" in message:
@@ -320,7 +331,7 @@ def _extract_intent(message: str, state: dict[str, Any]) -> tuple[dict[str, Any]
     if not cfg["api_key"]:
         return _fallback_extraction(message, state), None
     prompt = {"allowed_intents": sorted(VALID_INTENTS), "current_intent": state.get("primary_intent"),
-              "current_step": state.get("current_step"), "current_slots": state.get("slots"), "latest_message": message,
+              "current_step": state.get("current_step"), "current_slots": {key: value for key, value in (state.get("slots") or {}).items() if not key.startswith("_")}, "latest_message": message,
               "output": {"primary_intent": "", "secondary_intent": None, "slots": {}, "confidence": 0.0}}
     try:
         response = OpenAI(api_key=cfg["api_key"], base_url=cfg["base_url"], timeout=45).chat.completions.create(
@@ -362,12 +373,14 @@ SOFT_STOOL_FOLLOWUP_RE = re.compile(r"继续|接下来|下一步|复评|建议|�
 def _should_route_soft_stool(message: str, state: dict[str, Any]) -> bool:
     text = message or ""
     pipeline = (state.get("slots") or {}).get(SOFT_STOOL_STATE_SLOT)
-    if pipeline:
+    if pipeline or SOFT_STOOL_TRIGGER_RE.search(text):
         from soft_stool_assistant.llm import _extract_rule_info
         from soft_stool_assistant.policy import urgent_risk
-        if urgent_risk(_extract_rule_info(text, pipeline)):
+        if urgent_risk(_extract_rule_info(text, pipeline or {})):
             return True
     if SOFT_STOOL_PAUSE_RE.search(text) or SOFT_STOOL_OTHER_TOPIC_RE.search(text):
+        return False
+    if requested_flow(text) == "food_switch":
         return False
     if SOFT_STOOL_TRIGGER_RE.search(text):
         return True
@@ -380,7 +393,7 @@ def _should_route_soft_stool(message: str, state: dict[str, Any]) -> bool:
 
 def _pause_soft_stool(state):
     pipeline = state.get("slots", {}).get(SOFT_STOOL_STATE_SLOT)
-    if not pipeline:
+    if not pipeline or pipeline.get("status") == "paused":
         return
     pipeline["status"] = "paused"
     state.update(primary_intent=None, secondary_intent=None, current_step=None,
@@ -395,6 +408,7 @@ def _handle_soft_stool_message(
     message: str,
     state: dict[str, Any],
     source_message_id: str | None = None,
+    **kwargs,
 ) -> dict[str, Any]:
     pipeline_state = (state.get("slots") or {}).get(SOFT_STOOL_STATE_SLOT)
     baseline_source = (
@@ -405,11 +419,21 @@ def _handle_soft_stool_message(
         and re.search(r"(?:又|再次|重新).{0,8}(?:软便|拉稀|腹泻)", message)
     ):
         pipeline_state = None
-    result = handle_soft_stool_turn(user_id, {
+    if pipeline_state and pipeline_state.get("status") == "paused":
+        pipeline_state = deepcopy(pipeline_state)
+        pending = (pipeline_state.get("context") or {}).get("active_question_group")
+        # Changing topics is not a failed answer to the old question. Resume
+        # the pending background step, without reopening completed steps.
+        if pending:
+            pipeline_state.get("question_attempts", {}).pop(pending, None)
+    turn_payload = {
         "pet_id": conversation.get("pet_id"),
         "message": message,
         "state": pipeline_state,
-    })
+    }
+    recognized = kwargs.get("intent_result")
+    extracted = recognized[0].get("_soft_extraction") if recognized else None
+    result = handle_soft_stool_turn(user_id, turn_payload, **({"extracted": extracted} if extracted is not None else {}))
     if source_message_id:
         for meta in result["state"].get("slot_status", {}).values():
             if meta.get("turn") == result["state"].get("turn"):
@@ -434,6 +458,7 @@ def _handle_soft_stool_message(
         "turn_no": state["turn_count"],
         "generation_source": result["state"].get("analysis", {}).get("generation_source", "fallback"),
         "model_name": result["state"].get("analysis", {}).get("model_name"),
+        "fallback_reason": result["state"].get("analysis", {}).get("fallback_reason"),
         "limited_info": result.get("limited_info", False),
         "actions": result.get("actions") or [],
     }
@@ -442,7 +467,9 @@ def _handle_soft_stool_message(
         {
             "response_type": _clean(part.get("response_type"), 32) or "text",
             "reply": _clean(part.get("reply"), MAX_MESSAGE_LENGTH),
-            "result": {**result_meta, "sequence_no": index, "message_kind": part.get("response_type")},
+            "result": {**result_meta, "sequence_no": index, "message_kind": part.get("response_type"),
+                       "limited_info": bool(result_meta["limited_info"] and result_meta["status"] == "answered" and index == 2),
+                       "actions": result_meta["actions"] if index == 2 else []},
         }
         for index, part in enumerate(parts, 1)
         if isinstance(part, dict) and _clean(part.get("reply"), MAX_MESSAGE_LENGTH)
@@ -460,6 +487,53 @@ def _handle_soft_stool_message(
         "messages": messages,
         "disclaimer": result.get("disclaimer"),
     }
+
+
+def _share_guardian_context(state, pet_id, target, extracted=None, source_message_id=None):
+    nested = state.get("slots", {}).get(SOFT_STOOL_STATE_SLOT)
+    if not nested or nested.get("pet_id") != pet_id:
+        return None
+    from soft_stool_assistant.pipeline import upgrade_state
+    nested = deepcopy(nested)
+    upgrade_state(nested)
+    state["slots"][SOFT_STOOL_STATE_SLOT] = nested
+    from soft_stool_assistant.policy import SLOT_DEFAULTS, validate_extraction
+    values = validate_extraction(extracted) if extracted else {}
+    has_facts = any(key in SLOT_DEFAULTS for key in values) or bool(values.get("unknown_fields"))
+    if has_facts:
+        from soft_stool_assistant.pipeline import update_slots, load_baseline_context, build_current_summary, run_required_tools, build_assessment_plan
+        nested = deepcopy(nested)
+        nested["turn"] = nested.get("turn", 0) + 1
+        update_slots(nested, extracted)
+        if not nested["context"].get("baseline_loaded"):
+            load_baseline_context(nested)
+        if nested["analysis"].get("changed_fields"):
+            run_required_tools(nested)
+        for meta in nested.get("slot_status", {}).values():
+            if meta.get("turn") == nested["turn"]:
+                meta["message_id"] = source_message_id
+        nested.setdefault("summary", {})["facts"] = build_current_summary(nested)
+        nested["summary"]["assessment"] = build_assessment_plan(nested)["judgment"]
+        state["slots"][SOFT_STOOL_STATE_SLOT] = nested
+    packet = build_handoff(nested, target)
+    state["slots"][GUARDIAN_CONTEXT_SLOT] = packet
+    return packet
+
+
+def _prepare_food_handoff(state, pet_id, extracted=None, source_message_id=None):
+    packet = _share_guardian_context(state, pet_id, "food_switch", extracted, source_message_id)
+    if not packet:
+        return
+    _pause_soft_stool(state)
+    state["primary_intent"] = "food_switch"
+    # Intentions remain references, never prefill a previous food as current.
+    products = packet["current_diet"].get("detailed_products") or packet["current_diet"].get("products") or []
+    current = packet["facts"].get("current_product") or "、".join(
+        str(p.get("display_name") or p.get("name") or "") for p in products[:5]
+    )
+    if current:
+        state["slots"]["current_food"] = current
+    state["slots"]["switch_reason"] = "digestive"
 
 
 def _normalize_daily_records(value: Any) -> list[dict[str, Any]]:
@@ -489,6 +563,9 @@ def _build_context(user_id: str, conversation: dict[str, Any], state: dict[str, 
         "pet_profile": pet, "current_food": None, "food_list": [], "recent_daily_records": [],
         "food_candidates": [], "food_analysis": None, "food_submission": None,
     }
+    packet = (state.get("slots") or {}).get(GUARDIAN_CONTEXT_SLOT)
+    if isinstance(packet, dict) and packet.get("pet_id") == conversation.get("pet_id"):
+        context["guardian_context"] = deepcopy(packet)
     supplied_context = client_context if isinstance(client_context, dict) else {}
     context["recent_daily_records"] = _normalize_daily_records(supplied_context.get("recent_daily_records"))
     if pet and (pet.get("food_brand") or pet.get("food_product")):
@@ -569,6 +646,12 @@ def _generate_answer(message: str, state: dict[str, Any], context: dict[str, Any
         "2. 这两天可以先让饮食和作息保持稳定，保证饮水，并记录精神、食欲和排便变化。\n"
         "3. 如果一直没有缓解，或出现便血、频繁呕吐、精神明显变差，请尽快联系宠物医院。"
     )
+    if state.get("primary_intent") == "food_switch":
+        fallback = (
+            "1. 选粮会结合当前饮食、以前吃粮的表现和已有健康背景，配方评分只作为参考。\n"
+            "2. 先对照以前吃得适应的粮，比较候选粮的蛋白来源、脂肪和纤维资料，避免同时新增多种食物。\n"
+            "3. 可以告诉我你考虑的品牌或具体粮款、预算与偏好，我再帮你对比；已有疾病需结合医生的饮食要求。"
+        )
     if not cfg["api_key"]:
         return fallback, None
     payload = {
@@ -583,9 +666,11 @@ def _generate_answer(message: str, state: dict[str, Any], context: dict[str, Any
         response = OpenAI(api_key=cfg["api_key"], base_url=cfg["base_url"], timeout=60).chat.completions.create(
             model=cfg["model"], temperature=0.2, response_format={"type":"json_object"}, messages=[
                 {"role":"system","content":(
-                    "你是温柔、耐心、专业的女性宠物护理助手，语气像一位亲切的护士。"
+                    "你是宠物饮食与日常照护管家，围绕饮食分析、个体吃粮表现和行动建议提供持续服务。"
                     "只依据提供的数据回答，不得编造产品、配料、评分或疾病结论。"
                     "回答前综合pet_profile、current_food、food_list和recent_daily_records；明确区分没有记录与数值为零，"
+                    "guardian_context含前一个场景的事实与来源，切换选粮时沿用这些信息，不重复开展症状问诊。"
+                    "只有food_candidates中已有且有适用依据的产品才能作为具体候选；没有候选就给筛选方向，不编造品牌推荐。"
                     "有饮水、进食、排便次数或便便形态记录时应优先结合其近期变化，但不要虚构正常参考值。"
                     "只输出合法JSON，且必须正好包含context、care、watch三个字符串字段。"
                     "context用一两句话解释少量原理或背景，care给出最重要且可执行的做法，watch说明观察重点和需要联系宠物医院的情况。"
@@ -600,43 +685,27 @@ def _generate_answer(message: str, state: dict[str, Any], context: dict[str, Any
         return fallback, None
 
 
-def handle_message(user_id: Any, conversation_id: Any, payload: dict[str, Any]) -> dict[str, Any]:
-    user_id, conversation_id = _clean(user_id,128), _clean(conversation_id,32)
-    conversation = _get_conversation(user_id, conversation_id)
-    message = _clean(payload.get("message"), MAX_MESSAGE_LENGTH)
-    interaction = payload.get("interaction") if isinstance(payload.get("interaction"),dict) else None
-    attachments = payload.get("attachments") if isinstance(payload.get("attachments"),list) else []
-    client_context = payload.get("client_context") if isinstance(payload.get("client_context"),dict) else {}
-    if not message and not interaction and not attachments:
-        raise ValueError("message、interaction、attachments 至少提供一项")
-    state = _load_state(conversation_id)
-    user_message = _save_message(conversation_id=conversation_id,user_id=user_id,role="user",content=message,
-                  interaction=interaction,attachments=attachments,
-                  result={"turn_no": state["turn_count"] + 1, "sequence_no": 0})
+def _handle_context_message(user_id, conversation, message, state, source_message_id=None,
+                            interaction=None, attachments=None, client_context=None,
+                            forced_intent=None, intent_result=None):
+    attachments = attachments or []
+    client_context = client_context or {}
     model_name = None
-    if message and not interaction and not attachments and conversation.get("pet_id") and _should_route_soft_stool(message, state):
-        reply = _handle_soft_stool_message(user_id, conversation, message, state, user_message["id"])
-        _save_state(state)
-        with _connect() as conn:
-            with conn.cursor() as cursor:
-                cursor.execute(
-                    f"UPDATE {CONVERSATION_TABLE} SET primary_intent=%s,updated_at=%s WHERE id=%s AND user_id=%s",
-                    (state.get("primary_intent"), _now(), conversation_id, user_id),
-                )
-            conn.commit()
-        saved_messages = []
-        for item in reply.get("messages") or [reply]:
-            saved = _save_message(
-                conversation_id=conversation_id, user_id=user_id, role="assistant",
-                content=item["reply"], response_type=item.get("response_type"),
-                result=item.get("result") or reply.get("result"), model_name=(item.get("result") or {}).get("model_name"),
-            )
-            saved["disclaimer"] = reply.get("disclaimer")
-            saved_messages.append(saved)
-        # Keep `message` for older mini-program clients; upgraded clients render
-        # `messages` in order as separate assistant bubbles.
-        return {"ok": True, "message": saved_messages[-1], "messages": saved_messages}
-    if state.get("slots", {}).get(SOFT_STOOL_STATE_SLOT):
+    if intent_result and intent_result[0].get("dialogue_action") == "pause":
+        _pause_soft_stool(state)
+        state.update(primary_intent="general_pet_qa", secondary_intent=None, current_step=None,
+                     missing_slots=[], followup_count=0)
+        state["turn_count"] += 1
+        return {"response_type": "text", "reply": "好的，先把这个话题放一放。接下来你想聊什么？",
+                "result": {"intent": "general_pet_qa", "turn_no": state["turn_count"], "sequence_no": 1}}
+    handoff = forced_intent == "food_switch" and not interaction and not attachments
+    if handoff:
+        _prepare_food_handoff(state, conversation.get("pet_id"),
+                              (intent_result[0].get("_soft_extraction") if intent_result else None), source_message_id)
+    elif state.get("slots", {}).get(SOFT_STOOL_STATE_SLOT):
+        _share_guardian_context(state, conversation.get("pet_id"),
+                               (intent_result[0].get("primary_intent") if intent_result else None) or "general",
+                               (intent_result[0].get("_soft_extraction") if intent_result else None), source_message_id)
         _pause_soft_stool(state)
     if interaction:
         slot = _clean(interaction.get("slot"),64)
@@ -648,7 +717,10 @@ def handle_message(user_id: Any, conversation_id: Any, payload: dict[str, Any]) 
         state["turn_count"] += 1
     else:
         pending_step = state.get("current_step")
-        extraction, model_name = _extract_intent(message, state)
+        extraction, model_name = intent_result or _extract_intent(message, state)
+        if forced_intent:
+            extraction = {**extraction, "primary_intent": forced_intent, "secondary_intent": None,
+                          "slots": {key: value for key, value in (extraction.get("slots") or {}).items() if key in INTENT_SLOTS[forced_intent]}}
         state["primary_intent"] = extraction["primary_intent"]
         state["secondary_intent"] = extraction.get("secondary_intent")
         state["slots"].update(extraction.get("slots") or {})
@@ -699,13 +771,97 @@ def handle_message(user_id: Any, conversation_id: Any, payload: dict[str, Any]) 
                                "food_candidates":context.get("food_candidates") or [],
                                "food_submission":submission},
                      "disclaimer":"AI内容仅供参考，不能替代兽医诊断"}
+    result = {**(reply.get("result") or {}), "turn_no": state["turn_count"],
+              "sequence_no": 1, "model_name": model_name}
+    return {**reply, "result": result, "messages": [{**reply, "result": result}]}
+
+
+def _handle_food_switch_message(*args, **kwargs):
+    return _handle_context_message(*args, **kwargs, forced_intent="food_switch")
+
+
+def _recognize_guardian_turn(message, state):
+    """Reuse slot extraction for semantic handoffs; never add a routing LLM call
+    to an existing soft-stool turn. Clear requests/short answers stay offline.
+    """
+    nested = (state.get("slots") or {}).get(SOFT_STOOL_STATE_SLOT)
+    from soft_stool_assistant.llm import _extract_rule_info, extract_user_info
+    from soft_stool_assistant.policy import urgent_risk
+    literal = _extract_rule_info(message, nested or {})
+    if (nested or SOFT_STOOL_TRIGGER_RE.search(message)) and urgent_risk(literal):
+        return {"primary_intent": "symptom_consult", "slots": {}, "_target_flow": "soft_stool",
+                "_soft_extraction": {**literal, "_field_evidence": {key: message for key in literal}}}, None
+    target = requested_flow(message)
+    if target:
+        return {"primary_intent": target, "slots": {}, "_target_flow": target,
+                "_soft_extraction": {**literal, "_field_evidence": {key: message for key in literal}} if nested else None}, None
+    if SOFT_STOOL_OTHER_TOPIC_RE.search(message):
+        extraction = _fallback_extraction(SOFT_STOOL_PAUSE_RE.sub("", message), {"primary_intent": None})
+        return {**extraction, "_target_flow": "general"}, None
+    if SOFT_STOOL_PAUSE_RE.search(message):
+        return {"primary_intent": "general_pet_qa", "slots": {}, "_target_flow": "general", "dialogue_action": "pause"}, None
+    if (state.get("primary_intent") == "food_switch" and state.get("current_step") == "target_requirement"
+            and not re.search(r"(?:继续|恢复|再聊).{0,5}软便", message)):
+        # '希望改善软便' answers the food-selection question; it must not
+        # restart a consultation just because it contains a symptom word.
+        return {"primary_intent": "food_switch", "slots": {"target_requirement": message}, "_target_flow": "food_switch"}, None
+    if _should_route_soft_stool(message, state):
+        routing_state = deepcopy(nested) if nested else {"slots": {}, "context": {}}
+        routing_state.setdefault("context", {})["available_flows"] = [strategy.name for strategy in GUARDIAN_STRATEGIES]
+        extracted = extract_user_info(message, routing_state)
+        dialogue = extracted.get("_dialogue") or {}
+        target = dialogue.get("target_flow", "soft_stool")
+        intent = "food_switch" if target == "food_switch" else "symptom_consult" if target == "soft_stool" else dialogue.get("target_intent", "general_pet_qa")
+        return {"primary_intent": intent, "slots": {}, "_target_flow": target,
+                "dialogue_action": dialogue.get("action", "continue"), "_soft_extraction": extracted}, None
+    intent_state = deepcopy(state)
+    if nested and nested.get("status") == "answered":
+        intent_state.update(primary_intent=None, current_step=None)
+    extraction, model = _extract_intent(message, intent_state)
+    return {**extraction, "_target_flow": "food_switch" if extraction["primary_intent"] == "food_switch" else "general"}, model
+
+
+GENERAL_STRATEGY = FlowStrategy("general", lambda message, state: True, _handle_context_message)
+GUARDIAN_STRATEGIES = (
+    FlowStrategy("soft_stool", lambda message, state: state.get("_turn_decision", {}).get("_target_flow") == "soft_stool", _handle_soft_stool_message),
+    FlowStrategy("food_switch", lambda message, state: state.get("_turn_decision", {}).get("_target_flow") == "food_switch", _handle_food_switch_message),
+    GENERAL_STRATEGY,
+)
+
+
+def handle_message(user_id: Any, conversation_id: Any, payload: dict[str, Any]) -> dict[str, Any]:
+    user_id, conversation_id = _clean(user_id,128), _clean(conversation_id,32)
+    conversation = _get_conversation(user_id, conversation_id)
+    message = _clean(payload.get("message"), MAX_MESSAGE_LENGTH)
+    interaction = payload.get("interaction") if isinstance(payload.get("interaction"),dict) else None
+    attachments = payload.get("attachments") if isinstance(payload.get("attachments"),list) else []
+    client_context = payload.get("client_context") if isinstance(payload.get("client_context"),dict) else {}
+    if not message and not interaction and not attachments:
+        raise ValueError("message、interaction、attachments 至少提供一项")
+    state = _load_state(conversation_id)
+    user_message = _save_message(conversation_id=conversation_id,user_id=user_id,role="user",content=message,
+                  interaction=interaction,attachments=attachments,
+                  result={"turn_no": state["turn_count"] + 1, "sequence_no": 0})
+    intent_result = _recognize_guardian_turn(message, state) if message and not interaction and not attachments else None
+    routing_state = {**state, "_turn_decision": intent_result[0] if intent_result else {}}
+    strategy = select_strategy(message, routing_state, GUARDIAN_STRATEGIES)
+    if strategy.name == "soft_stool" and not conversation.get("pet_id"):
+        strategy = GENERAL_STRATEGY
+    reply = strategy.handle(user_id, conversation, message, state, user_message["id"],
+                            interaction=interaction, attachments=attachments,
+                            client_context=client_context, intent_result=intent_result)
     _save_state(state)
     with _connect() as conn:
         with conn.cursor() as cursor:
-            cursor.execute(f"UPDATE {CONVERSATION_TABLE} SET primary_intent=%s,updated_at=%s WHERE id=%s AND user_id=%s", (state.get("primary_intent"),_now(),conversation_id,user_id))
+            cursor.execute(f"UPDATE {CONVERSATION_TABLE} SET primary_intent=%s,updated_at=%s WHERE id=%s AND user_id=%s",
+                           (state.get("primary_intent"), _now(), conversation_id, user_id))
         conn.commit()
-    saved = _save_message(conversation_id=conversation_id,user_id=user_id,role="assistant",content=reply["reply"],
-                          response_type=reply.get("response_type"),interaction=reply.get("interaction"),
-                          result={**(reply.get("result") or {}), "turn_no": state["turn_count"], "sequence_no": 1},model_name=model_name)
-    saved["disclaimer"] = reply.get("disclaimer")
-    return {"ok":True,"message":saved}
+    saved_messages = []
+    for item in reply.get("messages") or [reply]:
+        saved = _save_message(conversation_id=conversation_id, user_id=user_id, role="assistant",
+                             content=item["reply"], response_type=item.get("response_type"),
+                             interaction=item.get("interaction"), result=item.get("result") or reply.get("result"),
+                             model_name=(item.get("result") or {}).get("model_name"))
+        saved["disclaimer"] = reply.get("disclaimer")
+        saved_messages.append(saved)
+    return {"ok": True, "message": saved_messages[-1], "messages": saved_messages}

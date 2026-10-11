@@ -60,7 +60,7 @@ def run():
             pet = request("POST", "/cat-profiles", {"name": "软便测试宠物", "animal_type": "cat"}, 201)["item"]
             conversation = request("POST", "/chat/conversations", {"pet_id": pet["id"]}, 201)["conversation"]
             path = "/chat/conversations/" + conversation["id"] + "/messages"
-            texts = ["最近软便了，平时吃本地测试粮", "没有", "软便两天，没有呕吐没有血没有黏液", "都正常", "都没有"]
+            texts = ["最近软便了，平时吃本地测试粮", "没有", "没有"]
             for text in texts:
                 body = request("POST", path, {"message": text})
                 assert len(body["messages"]) == 2, "Each consultation turn must have two assistant messages"
@@ -78,6 +78,16 @@ def run():
             print("PASS conversation history: user / facts / reasoning order")
             body = request("POST", path, {"message": "那接下来怎么办"})
             assert body["message"]["result"]["pipeline"] == "soft_stool"
+            body = request("POST", path, {"message": "帮我推荐一款主粮"})
+            state = chat._load_state(conversation["id"])
+            packet = state["slots"][chat.GUARDIAN_CONTEXT_SLOT]
+            assert packet["target_flow"] == "food_switch"
+            assert packet["facts"]["current_product"] == "本地测试粮"
+            assert state["slots"][chat.SOFT_STOOL_STATE_SLOT]["status"] == "paused"
+            body = request("POST", path, {"message": "希望改善软便，价格适中"})
+            assert body["message"]["result"]["intent"] == "food_switch"
+            assert "warning_signs" not in chat._load_state(conversation["id"])["missing_slots"]
+            print("PASS mid-conversation food handoff, retained context and preference answer")
             body = request("POST", path, {"message": "先不聊软便，帮我看看玩具"})
             assert body["message"]["result"].get("pipeline") != "soft_stool"
             body = request("POST", path, {"message": "继续聊软便，今天便血了"})

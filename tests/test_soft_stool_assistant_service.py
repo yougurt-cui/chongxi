@@ -8,7 +8,7 @@ from soft_stool_assistant import pipeline
 
 
 class SoftStoolAssistantServiceTest(unittest.TestCase):
-    def test_history_food_and_disease_are_asked_in_one_turn(self):
+    def test_history_food_precedes_optional_medical_background(self):
         state = pipeline.new_state("pet-1")
         state["context"]["history_food_names"] = ["皇家 BK34", "很长很长的鸡肉主粮名称"]
         state["context"]["disease_names"] = ["慢性肠胃炎"]
@@ -16,9 +16,14 @@ class SoftStoolAssistantServiceTest(unittest.TestCase):
                               vomiting=False, blood_in_stool=False, mucus_in_stool=False,
                               appetite="normal", energy="normal")
         group, question = pipeline.choose_next_question_group(state)
-        self.assertEqual(group, "history_and_disease_group")
+        self.assertEqual(group, "history_food_group")
         self.assertIn("主粮", question)
+        self.assertNotIn("病历", question)
+        state["slots"]["history_foods_reviewed"] = "以前没有其他主粮"
+        group, question = pipeline.choose_next_question_group(state)
+        self.assertEqual(group, "medical_history_group")
         self.assertIn("病历", question)
+        self.assertIn("慢性肠胃炎", question)
         self.assertNotIn("零食", question)
 
     def test_limited_reference_pool_is_retained_for_model_reasoning(self):

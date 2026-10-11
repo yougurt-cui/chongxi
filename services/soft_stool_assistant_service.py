@@ -41,7 +41,7 @@ def _diet_override(payload: dict[str, Any]) -> dict[str, Any] | None:
     return {"products": normalized} if normalized else None
 
 
-def handle_turn(user_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+def handle_turn(user_id: str, payload: dict[str, Any], *, extracted=None) -> dict[str, Any]:
     pet_id = _text(payload.get("pet_id"), 64)
     message = _text(payload.get("message"), MAX_MESSAGE_LENGTH)
     if not pet_id:
@@ -72,6 +72,7 @@ def handle_turn(user_id: str, payload: dict[str, Any]) -> dict[str, Any]:
         state=state,
         diet_override=_diet_override(payload),
         prefill=payload.get("prefill") is not False,
+        extracted=extracted,
     )
     return {
         "ok": True,
