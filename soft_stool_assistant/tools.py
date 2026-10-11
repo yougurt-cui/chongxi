@@ -30,6 +30,7 @@ v2 Pipeline 只依赖 4 个函数：
 """
 
 import json
+import math
 import re
 from datetime import datetime
 
@@ -106,7 +107,8 @@ def _json_load(value, default):
 
 def _to_float(value):
     try:
-        return float(value)
+        result = float(value)
+        return result if math.isfinite(result) else None
     except (TypeError, ValueError):
         return None
 
@@ -221,7 +223,7 @@ def get_product_soft_stool_risk(product_key: str) -> dict:
     if not product_key:
         return {}
 
-    risk = query_one(
+    risk = _optional_query_one(
         f"""
         select soft_stool_brand_symptom_case_count, soft_stool_brand_symptom_ratio,
                soft_stool_symptom_probability, soft_stool_soft_stool_risk_index_value,
@@ -233,7 +235,7 @@ def get_product_soft_stool_risk(product_key: str) -> dict:
         (product_key,),
     ) or {}
 
-    prob = query_one(
+    prob = _optional_query_one(
         f"""
         select soft_stool_probability, soft_stool_raw_score, brand_soft_stool_ratio,
                fiber_support_norm, prebiotic_support_norm, fat_regulation_support_norm
@@ -251,7 +253,7 @@ def get_product_soft_stool_risk(product_key: str) -> dict:
         "risk_level": risk.get("soft_stool_soft_stool_risk_level"),
         "risk_index": _to_float(risk.get("soft_stool_soft_stool_risk_index_value")),
         "symptom_probability": _to_float(
-            risk.get("soft_stool_symptom_probability") or prob.get("soft_stool_probability")
+            risk.get("soft_stool_symptom_probability") if risk.get("soft_stool_symptom_probability") is not None else prob.get("soft_stool_probability")
         ),
         "brand_case_count": _to_float(risk.get("soft_stool_brand_symptom_case_count")),
         "brand_symptom_ratio": _to_float(risk.get("soft_stool_brand_symptom_ratio")),
@@ -477,84 +479,62 @@ def _catalog_by_ref(ref: str):
         if row:
             return row
 
-    # 4) 模糊：取最短的 product_key（最接近精确名）
-    return query_one(
-        base + " where product_key like %s order by char_length(product_key) asc limit 1",
-        (f"%{ref}%",),
-    )
+    # Ambiguous names must never silently select the shortest product.
+    return None if ref.isdigit() else _catalog_by_name(ref)
 
 
 def _catalog_by_name(product_name: str):
-    """按用户口语名找 catalog（v2 get_product_by_name 的底层）。"""
-    if not product_name:
+    """Resolve a unique name; ambiguous brand-only references return no match."""
+    if not product_name or not str(product_name).strip():
         return None
     ref = str(product_name).strip()
-    if not ref:
-        return None
     if DEMO_ALIAS_ENABLED and ref in DEMO_PRODUCT_ALIAS:
         ref = DEMO_PRODUCT_ALIAS[ref]
-
     base = f"select {CATALOG_FIELDS} from {T_PRODUCT_CATALOG}"
-
-    row = query_one(base + " where catalog_key = %s limit 1", (ref,))
-    if row:
-        return row
-    row = query_one(base + " where product_key = %s limit 1", (ref,))
-    if row:
-        return row
-    row = query_one(
-        base + " where product_name = %s order by char_length(product_key) asc limit 1",
-        (ref,),
-    )
-    if row:
-        return row
-    row = query_one(
-        base + " where product_key like %s order by char_length(product_key) asc limit 1",
-        (f"%{ref}%",),
-    )
-    if row:
-        return row
-
-    # 去掉分隔符再比："百利高蛋白" ↔ "百利||高蛋白"
-    loose = re.sub(r"[\s|·\-—_/]+", "", ref)
-    if len(loose) >= 2:
-        row = query_one(
-            base + " where replace(replace(product_key,'||',''),' ','') like %s "
-            "order by char_length(product_key) asc limit 1",
-            (f"%{loose}%",),
-        )
+    for key in ("catalog_key", "product_key"):
+        row = query_one(base + f" where {key}=%s limit 1", (ref,))
         if row:
             return row
-
-    # 品牌 / 产品名包含
-    return query_one(
-        base + " where product_name like %s or standard_brand like %s "
-        "order by char_length(product_key) asc limit 1",
-        (f"%{ref}%", f"%{ref}%"),
-    )
+    loose = re.sub(r"[\s|·\-—_/]+", "", ref)
+    queries = [
+        ("product_name=%s", (ref,)),
+        ("product_key like %s", (f"%{ref}%",)),
+    ]
+    if len(loose) >= 2:
+        queries.append(("replace(replace(product_key,'||',''),' ','') like %s", (f"%{loose}%",)))
+    queries.append(("product_name like %s or standard_brand like %s", (f"%{ref}%", f"%{ref}%")))
+    for where, params in queries:
+        rows = query_all(base + " where " + where + " order by char_length(product_key),catalog_key limit 2", params)
+        if rows:
+            return rows[0] if len(rows) == 1 else None
+    return None
 
 
 def _nutrition_by_formula(formula_id) -> dict:
-    """从 product_guarantee 透视出 粗蛋白 / 粗脂肪 / 粗纤维。"""
     if not formula_id:
         return {}
-    rows = query_all(
-        f"""
-        select metric_name, metric_value, metric_unit, basis, operator_symbol
-        from {T_GUARANTEE}
-        where formula_id = %s
-        """,
-        (formula_id,),
-    )
-    out = {"metrics": {}, "basis": None}
-    for r in rows:
-        name = r.get("metric_name")
-        out["metrics"][name] = _to_float(r.get("metric_value"))
-        if name in NUTRIENT_METRICS and r.get("basis"):
-            out["basis"] = r.get("basis")
-
+    try:
+        rows = query_all(f"""select metric_name, metric_value, metric_unit, basis, operator_symbol
+                            from {T_GUARANTEE} where formula_id=%s""", (formula_id,))
+    except pymysql.MySQLError as exc:
+        if exc.args and exc.args[0] == 1146:
+            return {}
+        raise
+    out = {"metrics": {}, "metric_specs": {}, "basis": None}
     for cn, en in {"粗蛋白": "protein", "粗脂肪": "fat", "粗纤维": "fiber"}.items():
-        out[en] = out["metrics"].get(cn)
+        matches = [r for r in rows if r.get("metric_name") == cn]
+        signatures = {(r.get("metric_value"), r.get("metric_unit"), r.get("basis"), r.get("operator_symbol")) for r in matches}
+        if len(signatures) != 1:
+            out[en] = None
+            continue
+        row = matches[0]
+        out[en] = _to_float(row.get("metric_value"))
+        out["metrics"][cn] = out[en]
+        out["metric_specs"][en] = {"unit": row.get("metric_unit"), "basis": row.get("basis"),
+                                    "operator": row.get("operator_symbol")}
+    bases = {v["basis"] for v in out["metric_specs"].values()}
+    if len(bases) == 1:
+        out["basis"] = next(iter(bases))
     return out
 
 
@@ -562,7 +542,7 @@ def _build_product(catalog: dict, with_risk: bool = True) -> dict:
     """由一行 catalog 拼出完整产品画像（营养 + 蛋白来源 + 益生元 + 风险）。"""
     product_key = catalog["product_key"]
 
-    source = query_one(
+    source = _optional_query_one(
         f"""
         select formula_id, animal_sources, animal_source_level1_categories,
                animal_source_level2_sources, protein_source_details,
@@ -576,7 +556,7 @@ def _build_product(catalog: dict, with_risk: bool = True) -> dict:
         (product_key,),
     ) or {}
 
-    fat = query_one(
+    fat = _optional_query_one(
         f"""
         select fat_sources, fat_source_types, omega3_sources, omega6_sources,
                antioxidant_sources, guarantee_crude_fat_value
@@ -635,6 +615,7 @@ def _build_product(catalog: dict, with_risk: bool = True) -> dict:
         "formula_id": formula_id,
         "nutrition_basis": nutrition.get("basis"),
         "nutrition_metrics": nutrition.get("metrics", {}),
+        "metric_specs": nutrition.get("metric_specs", {}),
         "protein_source_detail": source.get("protein_source_details"),
         "protein_source_level1": source.get("animal_source_level1_categories"),
         "meat_source_type": source.get("primary_meat_source_type"),
@@ -892,13 +873,16 @@ def build_baseline_diet_profile(pet_id: str, override=None) -> dict:
 
     # 只对三指标齐全的产品做加权，避免 None 污染均值
     usable = [p for p in products
-              if p.get("protein") is not None and p.get("fat") is not None and p.get("fiber") is not None]
+              if p.get("protein") is not None and p.get("fat") is not None and p.get("fiber") is not None
+              and all((p.get("metric_specs") or {}).get(k, {}).get("unit") in ("%", "％") for k in ("protein", "fat", "fiber"))]
     skipped = [p["name"] for p in products if p not in usable]
     if skipped:
-        notes.append("以下产品缺保证值数据，未计入营养汇总：" + "、".join(skipped))
+        notes.append("以下产品缺可比的百分比保证值，无法完整汇总：" + "、".join(skipped))
 
     summary = None
-    if usable:
+    basis_set = {p.get("nutrition_basis") for p in usable}
+    compatible = len(basis_set) == 1 and None not in basis_set and len(usable) == len(products)
+    if usable and compatible and sum(p.get("ratio", 0) for p in usable) > 0:
         total_ratio = sum(p.get("ratio", 0) for p in usable) or 1.0
         summary = {
             "protein": round(sum(p["protein"] * p.get("ratio", 0) for p in usable) / total_ratio, 2),
@@ -916,7 +900,10 @@ def build_baseline_diet_profile(pet_id: str, override=None) -> dict:
                       (sum(p.get("ratio", 0) for p in usable if p.get("gut_friendly_score") is not None) or 1), 2)
                 if any(p.get("gut_friendly_score") is not None for p in usable) else None
             ),
-            "nutrition_basis": next((p.get("nutrition_basis") for p in usable if p.get("nutrition_basis")), None),
+            "nutrition_basis": next(iter(basis_set)),
+            "metric_specs": {key: usable[0].get("metric_specs", {}).get(key)
+                             for key in ("protein", "fat", "fiber")
+                             if all(p.get("metric_specs", {}).get(key) == usable[0].get("metric_specs", {}).get(key) for p in usable)},
         }
 
     return {
@@ -955,21 +942,15 @@ def get_recent_diet_change(pet_id: str) -> dict:
     if not intent:
         return {"found": False}
 
-    change_days = None
-    if intent.get("created_at"):
-        try:
-            dt = datetime.strptime(intent["created_at"][:10], "%Y-%m-%d").date()
-            change_days = max((datetime.now().date() - dt).days, 0)
-        except ValueError:
-            pass
-
     return {
         "found": True,
         "old_product": intent.get("previous_product") or None,
         "new_product": intent.get("new_product") or None,
         "new_product_ref": intent.get("new_product_ref"),
-        "change_date": (intent.get("created_at") or "")[:10] or None,
-        "change_days": change_days,
+        "change_date": None,
+        "change_days": None,
+        "created_at": intent.get("created_at"),
+        "source": "food_change_intent",
         "match_status": intent.get("match_status"),
         "user_message": intent.get("user_message"),
     }
@@ -980,7 +961,7 @@ def get_recent_diet_change(pet_id: str) -> dict:
 # =========================================================
 def _delta(new_value, old_value):
     if new_value is None or old_value is None:
-        return 0.0
+        return None
     return round(new_value - old_value, 2)
 
 
@@ -993,11 +974,18 @@ def compare_diets(baseline_profile: dict, new_product) -> dict:
         return {}
 
     old = baseline_profile.get("nutrition_summary") or {}
-    old_sources = set(old.get("protein_sources") or [])
+    old_sources = set(old.get("protein_sources") or []) or {source for product in baseline_profile.get("detailed_products", []) for source in product.get("protein_sources", [])}
     new_sources = set(new_product.get("protein_sources") or [])
 
     def _num(x):
         return x if isinstance(x, (int, float)) else None
+
+    def comparable_delta(key):
+        before = (old.get("metric_specs") or {}).get(key)
+        after = (new_product.get("metric_specs") or {}).get(key)
+        if not before or not after or before != after or not before.get("basis") or before.get("unit") not in ("%", "％") or before.get("operator") not in ("=", ">=", "<=", "≥", "≤"):
+            return None
+        return _delta(_num(new_product.get(key)), _num(old.get(key)))
 
     return {
         "baseline_summary": old,
@@ -1014,11 +1002,11 @@ def compare_diets(baseline_profile: dict, new_product) -> dict:
             "prebiotics": new_product.get("prebiotics", []),
         },
         "delta": {
-            "protein": _delta(_num(new_product.get("protein")), _num(old.get("protein"))),
-            "fat": _delta(_num(new_product.get("fat")), _num(old.get("fat"))),
-            "fiber": _delta(_num(new_product.get("fiber")), _num(old.get("fiber"))),
+            "protein": comparable_delta("protein"),
+            "fat": comparable_delta("fat"),
+            "fiber": comparable_delta("fiber"),
         },
-        "protein_source_changed": bool(old_sources) and old_sources != new_sources,
+        "protein_source_changed": bool(old_sources and new_sources) and old_sources != new_sources,
         "prebiotics_changed": set(old.get("prebiotics") or []) != set(new_product.get("prebiotics") or []),
         # 真实库健康信号
         "new_soft_stool_risk": new_product.get("soft_stool_risk") or {},
@@ -1049,6 +1037,8 @@ def build_manual_old_new_compare(old_product_name: str, new_product_name: str) -
             "protein_sources": old_product.get("protein_sources", []),
             "prebiotics": old_product.get("prebiotics", []),
             "gut_friendly_score": old_product.get("gut_friendly_score"),
+            "nutrition_basis": old_product.get("nutrition_basis"),
+            "metric_specs": old_product.get("metric_specs", {}),
         },
     }
 

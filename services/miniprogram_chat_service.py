@@ -265,7 +265,9 @@ def list_messages(user_id: Any, conversation_id: Any, *, limit: Any = 100) -> di
     limit = max(1, min(int(limit or 100), 200))
     with _connect(autocommit=True) as conn:
         with conn.cursor() as cursor:
-            cursor.execute(f"SELECT * FROM {MESSAGE_TABLE} WHERE conversation_id=%s AND user_id=%s AND status='active' ORDER BY created_at ASC LIMIT %s", (conversation_id,user_id,limit))
+            cursor.execute(f"""SELECT * FROM {MESSAGE_TABLE} WHERE conversation_id=%s AND user_id=%s AND status='active' ORDER BY created_at ASC,
+                CAST(COALESCE(CASE WHEN JSON_VALID(result_json) THEN JSON_EXTRACT(result_json, '$.turn_no') END, 0) AS UNSIGNED),
+                CAST(COALESCE(CASE WHEN JSON_VALID(result_json) THEN JSON_EXTRACT(result_json, '$.sequence_no') END, 0) AS UNSIGNED), id ASC LIMIT %s""", (conversation_id,user_id,limit))
             rows = list(cursor.fetchall() or [])
     items = [{"id": row["id"], "role": row["role"], "content": row.get("content") or "",
               "response_type": row.get("response_type"), "interaction": _json_loads(row.get("interaction_json"), None),
@@ -352,9 +354,39 @@ def _warning_signs_from_text(message: str) -> list[str]:
     return found or ["unclear"]
 
 
+SOFT_STOOL_PAUSE_RE = re.compile(r"(?:不|别|停止|暂停)(?:聊|说|谈).{0,8}软便|换个话题|聊别的|先不聊(?:了)?")
+SOFT_STOOL_OTHER_TOPIC_RE = re.compile(r"(?:先|改为|转而|换成)(?:帮我|聊|看看|分析).*(?:玩具|图片|配料|食品分析)|(?:帮我|推荐|看看).*(?:玩具|宠物日历)|(?:先|帮我).*(?:分析|看看|看下).*(?:配料表|食品分析)")
+SOFT_STOOL_FOLLOWUP_RE = re.compile(r"继续|接下来|下一步|复评|建议|食欲|精神|便血|黏液|粘液|呕吐|软便|排便")
+
+
 def _should_route_soft_stool(message: str, state: dict[str, Any]) -> bool:
-    slots = state.get("slots") or {}
-    return bool(slots.get(SOFT_STOOL_STATE_SLOT) or SOFT_STOOL_TRIGGER_RE.search(message or ""))
+    text = message or ""
+    pipeline = (state.get("slots") or {}).get(SOFT_STOOL_STATE_SLOT)
+    if pipeline:
+        from soft_stool_assistant.llm import _extract_rule_info
+        from soft_stool_assistant.policy import urgent_risk
+        if urgent_risk(_extract_rule_info(text, pipeline)):
+            return True
+    if SOFT_STOOL_PAUSE_RE.search(text) or SOFT_STOOL_OTHER_TOPIC_RE.search(text):
+        return False
+    if SOFT_STOOL_TRIGGER_RE.search(text):
+        return True
+    if not pipeline or pipeline.get("status") == "paused":
+        return False
+    if pipeline.get("status") == "answered":
+        return bool(SOFT_STOOL_FOLLOWUP_RE.search(text))
+    return True
+
+
+def _pause_soft_stool(state):
+    pipeline = state.get("slots", {}).get(SOFT_STOOL_STATE_SLOT)
+    if not pipeline:
+        return
+    pipeline["status"] = "paused"
+    state.update(primary_intent=None, secondary_intent=None, current_step=None,
+                 missing_slots=[], followup_count=0)
+    # Leave the nested consultation available to resume, but clear generic routing slots.
+    state["slots"].pop("symptom", None)
 
 
 def _handle_soft_stool_message(
@@ -362,34 +394,48 @@ def _handle_soft_stool_message(
     conversation: dict[str, Any],
     message: str,
     state: dict[str, Any],
+    source_message_id: str | None = None,
 ) -> dict[str, Any]:
     pipeline_state = (state.get("slots") or {}).get(SOFT_STOOL_STATE_SLOT)
     baseline_source = (
         ((pipeline_state or {}).get("context") or {}).get("baseline_diet") or {}
     ).get("source")
-    if baseline_source == "food_change_intent.previous_food":
+    if baseline_source == "food_change_intent.previous_food" or (
+        (pipeline_state or {}).get("status") == "answered"
+        and re.search(r"(?:又|再次|重新).{0,8}(?:软便|拉稀|腹泻)", message)
+    ):
         pipeline_state = None
     result = handle_soft_stool_turn(user_id, {
         "pet_id": conversation.get("pet_id"),
         "message": message,
         "state": pipeline_state,
     })
+    if source_message_id:
+        for meta in result["state"].get("slot_status", {}).values():
+            if meta.get("turn") == result["state"].get("turn"):
+                meta["message_id"] = source_message_id
     state["primary_intent"] = "symptom_consult"
-    state["secondary_intent"] = "food_switch"
+    state["secondary_intent"] = None
     state["slots"]["symptom"] = "软便"
     state["turn_count"] += 1
     state["current_step"] = result.get("next_group")
     state["missing_slots"] = [result["next_group"]] if result.get("next_group") else []
-    if result.get("status") == "need_more_info":
-        state["slots"][SOFT_STOOL_STATE_SLOT] = result["state"]
-    else:
-        state["slots"].pop(SOFT_STOOL_STATE_SLOT, None)
+    # Keep completed summaries for scoped follow-ups; routing no longer treats all saved states as active.
+    state["slots"][SOFT_STOOL_STATE_SLOT] = result["state"]
+    state["slots"][SOFT_STOOL_STATE_SLOT]["status"] = "active" if result.get("status") == "need_more_info" else "answered"
+    state["risk_level"] = "high" if any(part.get("response_type") == "risk_alert" for part in result.get("reply_parts", [])) else "unknown"
     result_meta = {
         "pipeline": "soft_stool",
         "status": result.get("status"),
         "pattern": result.get("pattern"),
         "next_group": result.get("next_group"),
         "disclaimer": result.get("disclaimer"),
+        "rule_version": result.get("rule_version"),
+        "turn_no": state["turn_count"],
+        "generation_source": result["state"].get("analysis", {}).get("generation_source", "fallback"),
+        "model_name": result["state"].get("analysis", {}).get("model_name"),
+        "limited_info": result.get("limited_info", False),
+        "actions": result.get("actions") or [],
     }
     parts = result.get("reply_parts") if isinstance(result.get("reply_parts"), list) else []
     messages = [
@@ -563,12 +609,13 @@ def handle_message(user_id: Any, conversation_id: Any, payload: dict[str, Any]) 
     client_context = payload.get("client_context") if isinstance(payload.get("client_context"),dict) else {}
     if not message and not interaction and not attachments:
         raise ValueError("message、interaction、attachments 至少提供一项")
-    _save_message(conversation_id=conversation_id,user_id=user_id,role="user",content=message,
-                  interaction=interaction,attachments=attachments)
     state = _load_state(conversation_id)
+    user_message = _save_message(conversation_id=conversation_id,user_id=user_id,role="user",content=message,
+                  interaction=interaction,attachments=attachments,
+                  result={"turn_no": state["turn_count"] + 1, "sequence_no": 0})
     model_name = None
     if message and not interaction and not attachments and conversation.get("pet_id") and _should_route_soft_stool(message, state):
-        reply = _handle_soft_stool_message(user_id, conversation, message, state)
+        reply = _handle_soft_stool_message(user_id, conversation, message, state, user_message["id"])
         _save_state(state)
         with _connect() as conn:
             with conn.cursor() as cursor:
@@ -582,13 +629,15 @@ def handle_message(user_id: Any, conversation_id: Any, payload: dict[str, Any]) 
             saved = _save_message(
                 conversation_id=conversation_id, user_id=user_id, role="assistant",
                 content=item["reply"], response_type=item.get("response_type"),
-                result=item.get("result") or reply.get("result"), model_name=None,
+                result=item.get("result") or reply.get("result"), model_name=(item.get("result") or {}).get("model_name"),
             )
             saved["disclaimer"] = reply.get("disclaimer")
             saved_messages.append(saved)
         # Keep `message` for older mini-program clients; upgraded clients render
         # `messages` in order as separate assistant bubbles.
         return {"ok": True, "message": saved_messages[-1], "messages": saved_messages}
+    if state.get("slots", {}).get(SOFT_STOOL_STATE_SLOT):
+        _pause_soft_stool(state)
     if interaction:
         slot = _clean(interaction.get("slot"),64)
         if not slot: raise ValueError("interaction.slot 不能为空")
@@ -657,6 +706,6 @@ def handle_message(user_id: Any, conversation_id: Any, payload: dict[str, Any]) 
         conn.commit()
     saved = _save_message(conversation_id=conversation_id,user_id=user_id,role="assistant",content=reply["reply"],
                           response_type=reply.get("response_type"),interaction=reply.get("interaction"),
-                          result=reply.get("result"),model_name=model_name)
+                          result={**(reply.get("result") or {}), "turn_no": state["turn_count"], "sequence_no": 1},model_name=model_name)
     saved["disclaimer"] = reply.get("disclaimer")
     return {"ok":True,"message":saved}

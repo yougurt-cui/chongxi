@@ -125,7 +125,7 @@ class MiniProgramChatServiceTest(unittest.TestCase):
         self.assertEqual(reply["result"]["pipeline"], "soft_stool")
         self.assertEqual(
             state["slots"][service.SOFT_STOOL_STATE_SLOT],
-            {"pet_id": "pet-1", "turn": 1},
+            {"pet_id": "pet-1", "turn": 1, "status": "active"},
         )
 
     @patch.object(service, "handle_soft_stool_turn")
