@@ -187,10 +187,59 @@ def _status_label(row: dict[str, Any]) -> str:
     if row.get("review_status") == "approved":
         return "审核通过，正在生成产品数据"
     if row.get("recognition_status") == "failed":
-        return "识别失败"
+        return "识别服务暂时失败"
+    if row.get("recognition_status") == "unrecognized":
+        return "未识别到配料表"
+    if row.get("recognition_status") == "needs_review":
+        return "识别结果待核对"
     if row.get("recognition_status") in {"pending", "processing"}:
         return "识别中"
     return "等待审核"
+
+
+def _recognition_feedback(row: dict[str, Any]) -> dict[str, Any]:
+    status = row.get("recognition_status")
+    active = row.get("status") != "cancelled"
+    has_ingredients = bool(_clean(row.get("ingredient_composition")))
+    messages = {
+        "pending": "照片已收到，正在排队识别配料表，请稍后刷新。",
+        "processing": "正在识别配料表，请稍后刷新查看结果。",
+        "unrecognized": "这次没有读到完整配料表。请拍包装背面的配料表近照，让文字完整、清晰、不反光；可另拍一张营养成分保证值。",
+        "needs_review": "识别内容尚需核对，暂时不能用于分析。请重新拍摄清晰完整的配料表和营养成分保证值。",
+        "failed": "识别服务暂时未能完成处理。请稍后重新上传；若照片不清晰，可先补拍配料表近照。",
+        "success": "配料表已识别，可交给管家分析；产品收录还需审核。",
+    }
+    # Guard old records that were marked successful solely from a source ID.
+    if status == "success" and not has_ingredients:
+        status = "unrecognized"
+    return {
+        "recognition_status": status,
+        "recognition_message": "已撤销此次投稿。" if not active else messages.get(status, "请刷新查看识别状态。"),
+        "can_analyze": active and status == "success" and has_ingredients,
+        "can_reupload": active and status in {"unrecognized", "needs_review", "failed"},
+    }
+
+
+def _recognition_status(task: dict[str, Any], output: dict[str, Any]) -> str:
+    node = next((n for n in task.get("nodes", []) if n.get("node_code") == "ocr_formula"), {})
+    node_status = node.get("node_status")
+    if node_status == "failed":
+        return "failed"
+    if node_status == "need_review":
+        return "needs_review" if _clean(output.get("ingredient_composition")) else "unrecognized"
+    if node_status in {"pending", "ready", "running", "waiting_result", "blocked"}:
+        if task.get("task_status") in {"failed", "cancelled"}:
+            return "failed"
+        if task.get("task_status") == "need_review":
+            return "needs_review"
+        return "processing"
+    if _clean(output.get("ingredient_composition")):
+        return "success"
+    if output or node_status in {"success", "skipped"} or task.get("task_status") in {"done", "need_review"}:
+        return "unrecognized"
+    if task.get("task_status") in {"failed", "cancelled"}:
+        return "failed"
+    return "processing"
 
 
 def _sync_recognition(row: dict[str, Any]) -> dict[str, Any]:
@@ -199,14 +248,9 @@ def _sync_recognition(row: dict[str, Any]) -> dict[str, Any]:
         return row
     task = get_orchestrator_task(str(task_id))
     if not task:
-        return row
+        return {**row, "recognition_status": "failed"} if row.get("recognition_status") in {"pending", "processing"} else row
     output = (task.get("outputs") or {}).get("ocr_formula") or {}
-    task_status = str(task.get("task_status") or "")
-    recognition_status = (
-        "failed" if task_status == "failed" else
-        "success" if output.get("source_id") or output.get("ingredient_composition") else
-        "processing"
-    )
+    recognition_status = _recognition_status(task, output)
     values = {
         "recognition_status": recognition_status,
         "source_id": output.get("source_id"),
@@ -232,6 +276,8 @@ def _sync_recognition(row: dict[str, Any]) -> dict[str, Any]:
 
 
 def _serialize(row: dict[str, Any], images: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    feedback = _recognition_feedback(row)
+    row = {**row, "recognition_status": feedback["recognition_status"]}
     item = {
         "id": row.get("id"),
         "claimed_brand": row.get("claimed_brand") or "",
@@ -251,6 +297,7 @@ def _serialize(row: dict[str, Any], images: list[dict[str, Any]] | None = None) 
         "status_label": _status_label(row),
         "created_at": str(row.get("created_at") or ""),
         "updated_at": str(row.get("updated_at") or ""),
+        **feedback,
     }
     if images is not None:
         item["images"] = [
@@ -413,7 +460,7 @@ def review_food_submission(submission_id: Any, payload: dict[str, Any], *, actio
                 cursor.execute(f"UPDATE {TABLE_NAME} SET review_status='rejected',publish_status='unpublished',reviewer=%s,review_note=%s,reject_reason=%s,reviewed_at=%s,updated_at=%s WHERE id=%s", (_clean(payload.get("reviewer"),128) or None,_clean(payload.get("review_note"),1000) or None,reason,_now(),_now(),row["id"]))
             else:
                 catalog_key = _clean(payload.get("catalog_key"), 128)
-                if row.get("recognition_status") != "success":
+                if not _recognition_feedback(row)["can_analyze"]:
                     raise ValueError("配料表识别尚未成功，不能审核通过")
                 if catalog_key and not _catalog_key_exists(catalog_key):
                     raise ValueError("catalog_key 不存在或尚未发布")

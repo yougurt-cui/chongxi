@@ -72,6 +72,8 @@ def build_handoff(pipeline, target):
         "pet_profile": context.get("pet_profile") or {},
         "current_diet": baseline,
         "diet_intent_reference": context.get("diet_intent_reference") or {},
+        "diet_history": context.get("diet_history") or [],
+        "diet_association_note": context.get("diet_association_note"),
         "facts": pipeline.get("slots") or {},
         "fact_sources": pipeline.get("slot_status") or {},
         "summary": pipeline.get("summary") or {},

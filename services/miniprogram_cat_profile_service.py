@@ -379,6 +379,10 @@ def create_cat_profile(payload: dict[str, Any]) -> dict[str, Any]:
     init_miniprogram_cat_profile_tables()
     profile_id = uuid.uuid4().hex
     now = _now()
+    from services.miniprogram_diet_history_service import init_diet_history_table, record_profile_diet
+    has_food = bool(data.get("food_brand") or data.get("food_product"))
+    if has_food:
+        init_diet_history_table()
     with _connect_app() as conn:
         with conn.cursor() as cursor:
             if data["is_default"]:
@@ -403,6 +407,8 @@ def create_cat_profile(payload: dict[str, Any]) -> dict[str, Any]:
                     data["notes"] or None, data["is_default"], now, now,
                 ),
             )
+            if has_food:
+                record_profile_diet(cursor, data["user_id"], profile_id, {}, data, now)
         conn.commit()
     if data["avatar_image_id"]:
         from services.miniprogram_pet_image_service import bind_pet_image
@@ -459,6 +465,10 @@ def update_cat_profile(user_id: Any, profile_id: Any, payload: dict[str, Any]) -
         raise ValueError("没有可更新字段")
     _apply_food_formula_snapshot(data)
     init_miniprogram_cat_profile_tables()
+    from services.miniprogram_diet_history_service import init_diet_history_table, record_profile_diet
+    diet_changed = any(k in data for k in ("food_brand", "food_product", "food_product_id", "food_formula_id"))
+    if diet_changed:
+        init_diet_history_table()
     if data.get("avatar_image_id"):
         from services.miniprogram_pet_image_service import validate_pet_image_owner
 
@@ -500,14 +510,24 @@ def update_cat_profile(user_id: Any, profile_id: Any, payload: dict[str, Any]) -
     params.extend([cleaned_profile_id, cleaned_user_id])
     with _connect_app() as conn:
         with conn.cursor() as cursor:
+            cursor.execute(f"SELECT * FROM {TABLE_NAME} WHERE id=%s AND user_id=%s AND status='active' FOR UPDATE",
+                           (cleaned_profile_id, cleaned_user_id))
+            previous = cursor.fetchone()
+            if not previous:
+                raise LookupError("猫咪档案不存在")
+            if diet_changed:
+                # Free-text edits must not keep a formula ID belonging to the previous food.
+                names_changed = any(k in data and data[k] != (previous.get(k) or "") for k in ("food_brand", "food_product"))
+                if names_changed and "food_formula_id" not in data:
+                    data.update(food_product_id=None, food_formula_id=None)
+                    assignments.extend(["food_product_id=NULL", "food_formula_id=NULL"])
+                record_profile_diet(cursor, cleaned_user_id, cleaned_profile_id, previous, {**previous, **data})
             if data.get("is_default"):
                 _unset_other_defaults(cursor, cleaned_user_id, cleaned_profile_id)
             cursor.execute(
                 f"UPDATE {TABLE_NAME} SET {', '.join(assignments)} WHERE id=%s AND user_id=%s AND status='active'",
                 params,
             )
-            if cursor.rowcount == 0:
-                raise LookupError("猫咪档案不存在")
         conn.commit()
     if data.get("avatar_image_id"):
         from services.miniprogram_pet_image_service import bind_pet_image

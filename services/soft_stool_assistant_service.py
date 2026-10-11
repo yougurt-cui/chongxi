@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
+
 from typing import Any
 
 from services.miniprogram_cat_profile_service import get_cat_profile
@@ -51,7 +53,7 @@ def handle_turn(user_id: str, payload: dict[str, Any], *, extracted=None) -> dic
 
     # Ownership check. The assistant's data layer intentionally only accepts a
     # pet id, so authorization must be enforced at this application boundary.
-    get_cat_profile(user_id, pet_id)
+    profile = get_cat_profile(user_id, pet_id)
 
     state = payload.get("state")
     if state is not None and not isinstance(state, dict):
@@ -66,6 +68,17 @@ def handle_turn(user_id: str, payload: dict[str, Any], *, extracted=None) -> dic
         if "turn" in state and (type(state["turn"]) is not int or state["turn"] < 0):
             raise ValueError("state.turn 必须是非负整数")
 
+    signature = [profile.get(key) for key in ("food_brand", "food_product", "food_formula_id")]
+    if state:
+        state = deepcopy(state)
+        context = state.setdefault("context", {})
+        old_signature = context.get("profile_diet_signature")
+        if old_signature is not None and old_signature != signature:
+            context.update(baseline_loaded=False, followup_context_loaded=False)
+            context.pop("diet_override", None)
+            state.setdefault("slots", {}).pop("current_product", None)
+            state.setdefault("slot_status", {}).pop("current_product", None)
+            state.setdefault("analysis", {})["diet_compare"] = None
     result = run_soft_stool_turn(
         pet_id=pet_id,
         user_input=message,
@@ -74,6 +87,7 @@ def handle_turn(user_id: str, payload: dict[str, Any], *, extracted=None) -> dic
         prefill=payload.get("prefill") is not False,
         extracted=extracted,
     )
+    result["state"].setdefault("context", {})["profile_diet_signature"] = signature
     return {
         "ok": True,
         **result,

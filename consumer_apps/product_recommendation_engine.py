@@ -1335,6 +1335,7 @@ def recommend_products(
             profile_code = str(profile_result.get("profile_code") or "")
             row = {
                 product_col: product_row.get(product_col),
+                "formula_id": product_row.get("formula_id"),
                 "brand_name": product_row.get(brand_col, ""),
                 "fit_score": profile_result["fit_score"],
                 "avg_fit_score": avg_fit,

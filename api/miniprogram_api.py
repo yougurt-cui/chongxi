@@ -36,6 +36,7 @@ from services.miniprogram_food_submission_service import (
     get_submission_image,
     list_food_submissions,
 )
+from services.miniprogram_diet_history_service import list_diet_history, add_diet_history, delete_diet_history
 from services.soft_stool_assistant_service import (
     find_products as find_soft_stool_products,
     handle_turn as handle_soft_stool_turn,
@@ -271,6 +272,37 @@ def delete_cat_profile_endpoint(profile_id: str):
         return jsonify({"ok": False, "error": str(exc)}), 400
     except Exception as exc:
         return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@miniprogram_api.route("/cat-profiles/<profile_id>/diet-history", methods=["GET", "POST"])
+def diet_history_endpoint(profile_id):
+    try:
+        user_id = _current_user_id(required=True)
+        if request.method == "POST":
+            return jsonify(add_diet_history(user_id, profile_id, _json_payload())), 201
+        return jsonify(list_diet_history(user_id, profile_id, limit=request.args.get("limit", 50))), 200
+    except PermissionError as exc:
+        return _auth_error_response(exc)
+    except LookupError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 404
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    except Exception:
+        return jsonify({"ok": False, "error": "暂时无法读取或保存吃粮记录，请稍后重试"}), 500
+
+
+@miniprogram_api.delete("/cat-profiles/<profile_id>/diet-history/<record_id>")
+def delete_diet_history_endpoint(profile_id, record_id):
+    try:
+        return jsonify(delete_diet_history(_current_user_id(required=True), profile_id, record_id)), 200
+    except PermissionError as exc:
+        return _auth_error_response(exc)
+    except LookupError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 404
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    except Exception:
+        return jsonify({"ok": False, "error": "暂时无法删除吃粮记录，请稍后重试"}), 500
 
 
 @miniprogram_api.post("/chat/conversations")
