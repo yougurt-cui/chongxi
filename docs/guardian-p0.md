@@ -2,6 +2,8 @@
 
 对应需求池第 1、5、6 项，开发分支 `feature/guardian-p0`。本次是可审查的前后端实现，尚未部署和真机验收。第 6 项仍依赖完整病历和评论经验等数据接入，不能整条标为完成。
 
+按业务场景了解改动，请看 [按功能审查说明](guardian-p0-review.md)；小程序参数、返回结构、识别状态、错误处理和联调顺序见 [P0 接口文档](guardian-p0-api.md)。
+
 ## 可验收行为
 
 1. 拍食品照片前明确提示包装背面的完整配料表；仅有包装正面或 source_id 不代表识别成功。API 区分 processing、unrecognized、needs_review、failed、success，返回 recognition_message、can_analyze、can_reupload。OCR 节点成功后的下游失败不改变识别成功；未完成的节点继续显示处理中。旧记录在序列化及管家入口也进行内容校验。
