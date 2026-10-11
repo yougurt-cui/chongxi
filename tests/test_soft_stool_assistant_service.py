@@ -12,23 +12,23 @@ class SoftStoolAssistantServiceTest(unittest.TestCase):
         state = pipeline.new_state("pet-1")
         state["context"]["history_food_names"] = ["皇家 BK34", "很长很长的鸡肉主粮名称"]
         state["context"]["disease_names"] = ["慢性肠胃炎"]
+        state["slots"].update(current_product="皇家 BK34", recent_diet_change=False, soft_stool_days=2,
+                              vomiting=False, blood_in_stool=False, mucus_in_stool=False,
+                              appetite="normal", energy="normal")
         group, question = pipeline.choose_next_question_group(state)
         self.assertEqual(group, "history_and_disease_group")
         self.assertIn("主粮", question)
-        self.assertIn("其他疾病", question)
+        self.assertIn("病历", question)
         self.assertNotIn("零食", question)
 
-    def test_reference_pool_details_are_hidden_from_model_payload(self):
+    def test_limited_reference_pool_is_retained_for_model_reasoning(self):
         analysis = {
             "reference_pool_version": "soft-v1",
             "reference_pool_size": 13,
             "confidence": "limited",
             "mechanisms": [{"mechanism": "脂肪消化负担"}],
         }
-        self.assertEqual(
-            llm._public_mechanism_analysis(analysis),
-            {"mechanisms": [{"mechanism": "脂肪消化负担"}]},
-        )
+        self.assertEqual(llm._public_mechanism_analysis(analysis), analysis)
 
     def test_rule_extraction_collects_grouped_slots(self):
         state = {"slots": {}, "pattern": "with_baseline_diet"}
@@ -65,6 +65,15 @@ class SoftStoolAssistantServiceTest(unittest.TestCase):
                 service.handle_turn("user-1", {
                     "pet_id": "pet-1", "message": "软便了", "state": {"pet_id": "pet-2"},
                 })
+
+    def test_rejects_malformed_state_without_running_the_pipeline(self):
+        with patch.object(service, "get_cat_profile", return_value={"id": "pet-1"}), \
+             patch.object(service, "run_soft_stool_turn") as run:
+            with self.assertRaisesRegex(ValueError, "state.slots"):
+                service.handle_turn("user-1", {"pet_id": "pet-1", "message": "软便",
+                    "state": {"pet_id": "pet-1", "slots": []}})
+        run.assert_not_called()
+
 
     @patch.object(tools, "get_product_detail")
     @patch.object(tools, "get_pet_profile")

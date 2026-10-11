@@ -1,697 +1,344 @@
-"""软便 Pipeline（v2 Pattern 逻辑 + 真实数据库）。
-
-保留 v2 的核心设计：
-
-一级 Pattern 只按「有没有基础饮食」分流
-    有 → with_baseline_diet
-    无 → without_baseline_diet
-脂肪高 / 蛋白变化等只作为「当前分析结果」，不做成 Pattern。
-
-每轮固定做：
-    补信息 → 查本地数据 → 做当前总结 → 发问一个「业务问题组」
-
-相比 v2 的三处改动（都是为了接真实库）：
-1. `load_baseline_context` 支持 `diet_override`，走 `tools.build_baseline_diet_profile`；
-2. 新增 `prefill_slots_from_history`：首轮用库里已有的换粮记录预填槽位
-   （数据缺失时自动跳过，退回纯对话补全）；
-3. `build_current_summary` / `build_final_assessment` 接入真实库的
-   软便复合风险、肠胃友好功能分。
-"""
+"""Soft-stool consultation: evidence, grouped follow-ups and an actionable plan."""
 
 from copy import deepcopy
 
-from .tools import (
-    build_baseline_diet_profile,
-    get_product_by_name,
-    compare_diets,
-    build_manual_old_new_compare,
-    get_recent_diet_change,
-    get_pet_profile,
-)
-from .llm import extract_user_info, generate_response_from_plan, generate_two_stage_response
+import pymysql
 
+from . import policy
+from .tools import (
+    build_baseline_diet_profile, get_product_by_name,
+    build_manual_old_new_compare, get_recent_diet_change, get_pet_profile,
+)
+from .llm import extract_user_info, generate_two_stage_response
 
 PATTERN_WITH_BASELINE = "with_baseline_diet"
 PATTERN_WITHOUT_BASELINE = "without_baseline_diet"
+DATA_ERRORS = (pymysql.MySQLError, LookupError, ValueError)
 
 
-def _compact_names(names: list, max_chars: int = 12) -> str:
-    """压缩档案名称，确保整句追问不超过30字。"""
-    result = ""
-    for raw in names:
-        name = str(raw).strip()
-        if not name:
-            continue
-        candidate = f"{result}、{name}" if result else name
-        if len(candidate) > max_chars:
-            break
-        result = candidate
-    if result:
-        return result
-    return str(names[0]).strip()[:max_chars] if names else ""
+def empty_baseline():
+    return {"has_diet_data": False, "products": [], "detailed_products": [],
+            "nutrition_summary": None, "notes": []}
 
 
-def new_state(pet_id: str) -> dict:
+def new_state(pet_id):
     return {
-        "pet_id": pet_id,
-        "pipeline": "soft_stool",
-        "turn": 0,
-
-        "pattern": None,
-
-        "context": {
-            "baseline_loaded": False,
-            "baseline_diet": None,
-            "diet_override": None,
-            "prefill": True,
-            "prefilled": False,
-            "prefill_source": None,
-            "followup_context_loaded": False,
-            "history_food_names": [],
-            "disease_names": [],
-            "active_question_group": None,
-        },
-
-        "slots": {
-            # 饮食变化组
-            "recent_diet_change": None,
-            "change_type": None,
-            "old_product": None,
-            "new_product": None,
-            "change_ratio": None,
-            "change_days": None,
-
-            # 症状组
-            "soft_stool_days": None,
-
-            # 风险组
-            "vomiting": None,
-            "blood_in_stool": None,
-            "appetite": None,
-            "energy": None,
-
-            # 自然语言追加询问
-            "history_foods_reviewed": None,
-            "disease_history_reviewed": None,
-        },
-
-        "analysis": {
-            "diet_compare": None,
-            "current_summary": None,
-        },
+        "pet_id": pet_id, "pipeline": "soft_stool", "turn": 0,
+        "status": "active", "rule_version": policy.RULE_VERSION,
+        "pattern": PATTERN_WITHOUT_BASELINE,
+        "context": {"baseline_loaded": False, "baseline_diet": empty_baseline(),
+                    "diet_override": None, "prefill": True,
+                    "followup_context_loaded": False, "history_food_names": [],
+                    "disease_names": [], "active_question_group": None,
+                    "active_question_fields": []},
+        "slots": dict(policy.SLOT_DEFAULTS), "slot_status": {},
+        "question_attempts": {},
+        "analysis": {"diet_compare": None, "data_warnings": [], "current_summary": None},
     }
 
 
-def update_slots(state: dict, extracted: dict):
-    for key, value in extracted.items():
-        if key in state["slots"] and value is not None:
-            state["slots"][key] = value
+def update_slots(state, extracted):
+    values = policy.validate_extraction(extracted)
+    statuses = state.setdefault("slot_status", {})
+    for key, value in values.items():
+        if key == "unknown_fields":
+            continue
+        if key == "current_product" and state["slots"].get(key) != value:
+            state["context"]["baseline_loaded"] = False
+        state["slots"][key] = value
+        statuses[key] = {"status": "confirmed", "source": "user_message", "turn": state["turn"]}
+    for key in values.get("unknown_fields", []):
+        # A user's explicit correction to unknown invalidates an older value.
+        if key == "current_product":
+            state["context"]["baseline_loaded"] = False
+        state["slots"][key] = None
+        statuses[key] = {"status": "unknown", "source": "user_message", "turn": state["turn"]}
+    if state["slots"].get("recent_diet_change") is False:
+        for key in ("change_type", "old_product", "new_product", "added_food", "change_days", "change_ratio"):
+            state["slots"][key] = None
+            statuses.pop(key, None)
+        for key in ("main_food_changed", "wet_food_added", "snack_added", "other_food_added"):
+            state["slots"][key] = False
+    flags = [(key, kind) for key, kind in (
+        ("main_food_changed", "main_food_change"), ("wet_food_added", "wet_food_added"),
+        ("snack_added", "snack_added"), ("other_food_added", "other_food_added"),
+    ) if state["slots"].get(key) is True]
+    if not flags and any(key in values for key in ("main_food_changed", "wet_food_added", "snack_added", "other_food_added")) and "recent_diet_change" not in values:
+        state["slots"]["recent_diet_change"] = None
+        statuses.pop("recent_diet_change", None)
+    if flags and "recent_diet_change" not in values.get("unknown_fields", []):
+        state["slots"]["recent_diet_change"] = True
+        state["slots"]["change_type"] = flags[0][1] if len(flags) == 1 else "multiple"
 
 
-# =========================================================
-# 1. 基础饮食 + 一级分流
-# =========================================================
-def load_baseline_context(state: dict):
-    if state["context"]["baseline_loaded"]:
+def _warn(state, code):
+    warnings = state["analysis"].setdefault("data_warnings", [])
+    if code not in warnings:
+        warnings.append(code)
+
+
+def load_baseline_context(state):
+    context = state["context"]
+    if context["baseline_loaded"]:
         return
-
-    baseline = build_baseline_diet_profile(
-        state["pet_id"],
-        override=state["context"].get("diet_override"),
-    )
-    state["context"]["baseline_diet"] = baseline
-    state["context"]["baseline_loaded"] = True
-
-    state["pattern"] = (
-        PATTERN_WITH_BASELINE if baseline["has_diet_data"] else PATTERN_WITHOUT_BASELINE
-    )
-
-
-# =========================================================
-# 2. 用历史记录预填（真实库补充，拿不到就跳过）
-# =========================================================
-def prefill_slots_from_history(state: dict):
-    """首轮尝试从库里还原「最近饮食变化」并预填槽位。"""
-    if state["context"].get("prefilled"):
-        return
-    state["context"]["prefilled"] = True
-
-    if not state["context"].get("prefill", True):
-        return
-
     try:
-        info = get_recent_diet_change(state["pet_id"])
-    except Exception:
-        return
-
-    if not info.get("found"):
-        return
-
-    slots = state["slots"]
-    filled = []
-
-    if info.get("old_product"):
-        slots["old_product"] = info["old_product"]
-        filled.append("old_product")
-    if info.get("new_product"):
-        slots["new_product"] = info["new_product"]
-        filled.append("new_product")
-    if info.get("change_days") is not None:
-        slots["change_days"] = info["change_days"]
-        filled.append("change_days")
-    if info.get("new_product_ref"):
-        slots["new_product"] = slots["new_product"] or info["new_product_ref"]
-
-    if filled:
-        slots["recent_diet_change"] = True
-        slots["change_type"] = slots["change_type"] or "main_food_change"
-        state["context"]["prefill_source"] = "miniprogram_food_change_intent"
+        override = context.get("diet_override")
+        if state["slots"].get("current_product"):
+            override = {"products": [{"ref": state["slots"]["current_product"], "ratio": 1.0}]}
+        baseline = build_baseline_diet_profile(state["pet_id"], override=override)
+    except DATA_ERRORS:
+        baseline = empty_baseline()
+        _warn(state, "product_data_unavailable")
+    context["baseline_diet"] = baseline
+    context["baseline_loaded"] = True
+    state["pattern"] = PATTERN_WITH_BASELINE if baseline.get("has_diet_data") else PATTERN_WITHOUT_BASELINE
 
 
-def load_followup_context(state: dict):
-    """读取当前宠物的历史主粮和疾病档案，供自然语言追问使用。"""
+def load_followup_context(state):
     context = state["context"]
     if context.get("followup_context_loaded"):
         return
     context["followup_context_loaded"] = True
-
-    foods = []
-    baseline = context.get("baseline_diet") or {}
-    for product in baseline.get("products") or []:
-        name = product.get("display_name") or product.get("name")
-        if name and name not in foods:
-            foods.append(name)
+    try:
+        profile = get_pet_profile(state["pet_id"])
+        context["pet_profile"] = {key: profile.get(key) for key in (
+            "name", "animal_type", "age_months", "weight_kg", "allergies", "diseases",
+        )}
+        context["disease_names"] = [str(x) for x in profile.get("diseases") or []]
+    except DATA_ERRORS:
+        _warn(state, "health_history_unavailable")
+    if not context.get("prefill", True):
+        return
     try:
         change = get_recent_diet_change(state["pet_id"])
         if change.get("found"):
-            for name in (change.get("old_product"), change.get("new_product")):
-                if name and name not in foods:
-                    foods.append(name)
-    except Exception:
-        pass
-    context["history_food_names"] = foods
-
-    try:
-        profile = get_pet_profile(state["pet_id"])
-        context["disease_names"] = [
-            str(name).strip() for name in (profile.get("diseases") or [])
-            if str(name).strip()
-        ]
-    except Exception:
-        context["disease_names"] = []
-
-
-# =========================================================
-# 3. 当前总结
-# =========================================================
-def summarize_baseline_diet(state: dict) -> str:
-    baseline = state["context"]["baseline_diet"]
-
-    if not baseline["has_diet_data"]:
-        return (
-            "我现在还没有看到这只猫平时的基础饮食记录，"
-            "所以暂时没法从历史食谱判断这次软便和原有饮食有没有关系。"
-        )
-
-    summary = baseline.get("nutrition_summary")
-    products = baseline["products"]
-
-    if len(products) == 1:
-        food_desc = f"目前记录里主要吃的是 {products[0].get('display_name') or products[0]['name']}"
-    else:
-        names = "、".join(p.get("display_name") or p["name"] for p in products)
-        food_desc = f"目前记录里是混合饮食，主要包括 {names}"
-
-    if not summary:
-        evidence = []
-        detailed = baseline.get("detailed_products") or []
-        protein_sources = sorted({
-            source for product in detailed for source in (product.get("protein_sources") or [])
-        })
-        fat_sources = sorted({
-            source for product in detailed for source in (product.get("fat_sources") or [])
-        })
-        if protein_sources:
-            evidence.append("主要蛋白来源包括" + "、".join(protein_sources))
-        if fat_sources:
-            evidence.append("脂肪来源包括" + "、".join(fat_sources))
-
-        scored = next((
-            p for p in detailed if isinstance(p.get("gut_friendly_score"), (int, float))
-        ), None)
-        if scored:
-            evidence.append(f"数据库中的肠胃友好评分为 {scored['gut_friendly_score']:.1f}")
-
-        risk_product = next((p for p in detailed if (p.get("soft_stool_risk") or {}).get("risk_level")), None)
-        if risk_product:
-            risk = risk_product["soft_stool_risk"]
-            risk_text = f"软便风险辅助模型标记为「{risk['risk_level']}」"
-            if risk.get("risk_index") is not None:
-                risk_text += f"（风险指数 {risk['risk_index']}）"
-            evidence.append(risk_text + "，这只用于提示多留意，不代表产品一定会引起软便")
-
-        mechanism_product = next((p for p in detailed if p.get("soft_stool_mechanisms")), None)
-        if mechanism_product:
-            analysis = mechanism_product["soft_stool_mechanisms"]
-            primary = [
-                item["mechanism"] for item in analysis.get("mechanisms", [])
-                if item.get("role") == "primary"
-            ]
-            secondary = [
-                item["mechanism"] for item in analysis.get("mechanisms", [])
-                if item.get("role") == "secondary"
-            ]
-            amplifiers = [item["mechanism"] for item in analysis.get("amplifiers", [])]
-            if primary:
-                evidence.append("相对值模型显示" + "和".join(primary) + "共同构成主要关注机制")
-            if secondary:
-                evidence.append(secondary[0] + "属于次要观察机制")
-            if amplifiers:
-                evidence.append("同时存在" + "、".join(amplifiers) + "，可能放大软便表现")
-        text = (
-            f"我先看了一下历史饮食，{food_desc}。"
-            "目前库里的蛋白、脂肪和粗纤维保证值还不完整，暂时不能精确计算营养变化。"
-        )
-        if evidence:
-            text += "不过现有数据仍能提供一些参考：" + "；".join(evidence) + "。"
-        return text
-
-    basis = summary.get("nutrition_basis")
-    basis_text = f"（{basis}口径）" if basis else ""
-
-    return (
-        f"我先看了一下历史饮食，{food_desc}。"
-        f"按当前记录汇总，蛋白约 {summary['protein']}%，脂肪约 {summary['fat']}%，"
-        f"粗纤维约 {summary['fiber']}%{basis_text}。"
-        "这些是后面判断最近变化是否过大的基础参照。"
-    )
-
-
-def build_current_summary(state: dict) -> str:
-    """每轮都先总结「现在已经知道什么」，再继续发问。"""
-    slots = state["slots"]
-    baseline = state["context"]["baseline_diet"]
-    compare = state["analysis"].get("diet_compare")
-
-    parts = []
-
-    # 第一层：基础饮食
-    if state["turn"] == 1:
-        parts.append(summarize_baseline_diet(state))
-
-    # 第二层：近期饮食变化
-    if slots["recent_diet_change"] is False:
-        parts.append("目前没有记录到近期明确的换粮、加罐头、零食或其他新食物变化。")
-
-    if slots["recent_diet_change"] is True:
-        desc = "目前可以确认近期有饮食变化"
-        if slots["change_type"] == "main_food_change":
-            desc += "，主要是换粮"
-        elif slots["change_type"] == "wet_food_added":
-            desc += "，主要是增加了罐头"
-        elif slots["change_type"] == "snack_added":
-            desc += "，主要是增加了零食"
-
-        if slots["change_ratio"] is not None:
-            desc += f"，变化比例大约 {int(slots['change_ratio'] * 100)}%"
-
-        if slots["change_days"] is not None:
-            desc += f"，大约从 {slots['change_days']} 天前开始"
-
-        parts.append(desc + "。")
-
-    # 第三层：营养 + 风险对比
-    if compare:
-        delta = compare["delta"]
-        new_name = compare["new_product"].get("display_name") or compare["new_product"]["name"]
-
-        detail = (
-            f"我把当前基础饮食和 {new_name} 做了对比："
-            f"蛋白变化 {delta['protein']:+.1f} 个百分点，"
-            f"脂肪变化 {delta['fat']:+.1f} 个百分点，"
-            f"粗纤维变化 {delta['fiber']:+.1f} 个百分点。"
-        )
-
-        if compare.get("protein_source_changed"):
-            detail += " 主要蛋白来源也发生了变化。"
-
-        risk = compare.get("new_soft_stool_risk") or {}
-        if risk.get("risk_level"):
-            detail += f" 另外这只新粮在软便复合风险模型里的档位是「{risk['risk_level']}」"
-            if risk.get("risk_index") is not None:
-                detail += f"（风险指数 {risk['risk_index']}）"
-            detail += "。"
-
-        gut = compare.get("new_gut_friendly_score")
-        if isinstance(gut, (int, float)):
-            detail += f" 它的「肠胃友好」功能性评分为 {gut:.1f}。"
-
-        parts.append(detail)
-
-    if baseline.get("notes"):
-        parts.append("（数据提示：" + "；".join(baseline["notes"]) + "）")
-
-    # 第四层：风险表现
-    risk_signals = []
-    if slots["vomiting"] is True:
-        risk_signals.append("有呕吐")
-    if slots["blood_in_stool"] is True:
-        risk_signals.append("有便血")
-    if slots["appetite"] == "poor":
-        risk_signals.append("食欲下降")
-    if slots["energy"] == "poor":
-        risk_signals.append("精神变差")
-
-    if risk_signals:
-        parts.append("另外目前还有：" + "、".join(risk_signals) + "。")
-
-    return " ".join(parts).strip()
-
-
-def _has_urgent_risk(state: dict) -> bool:
-    slots = state.get("slots") or {}
-    return bool(
-        slots.get("vomiting") is True
-        or slots.get("blood_in_stool") is True
-        or slots.get("appetite") == "poor"
-        or slots.get("energy") == "poor"
-    )
-
-
-# =========================================================
-# 4. 按业务问题组发问
-# =========================================================
-def choose_next_question_group(state: dict):
-    """
-    槽位按业务问题组收集，不是一槽一问。
-    返回：(group_name, question)
-    """
-    slots = state["slots"]
-
-    # 历史主粮和疾病一次问完，减少一个对话轮次。
-    if slots["history_foods_reviewed"] is None or slots["disease_history_reviewed"] is None:
-        foods = state["context"].get("history_food_names") or []
-        diseases = state["context"].get("disease_names") or []
-        if foods:
-            food_part = f"记录显示吃过{_compact_names(foods, 10)}"
-        else:
-            food_part = "没查到历史主粮"
-        if diseases:
-            disease_part = f"疾病记录有{_compact_names(diseases, 8)}"
-        else:
-            disease_part = "没查到疾病记录"
-        return (
-            "history_and_disease_group",
-            f"{food_part}，{disease_part}。还吃过哪些主粮，或得过其他疾病？",
-        )
-
-    # 1. 先补「近期饮食变化组」
-    if slots["recent_diet_change"] is None:
-        if state["pattern"] == PATTERN_WITH_BASELINE:
-            return (
-                "recent_diet_change_group",
-                "最近换过主粮吗？如果换过，现在吃什么主粮？",
-            )
-        return (
-            "recent_diet_change_group",
-            "最近换过主粮吗？如果换过，原来和现在吃什么主粮？",
-        )
-
-    # 2. 已确认有变化，但关键信息没收齐
-    if slots["recent_diet_change"] is True:
-        missing = []
-
-        if state["pattern"] == PATTERN_WITHOUT_BASELINE and not slots["old_product"]:
-            missing.append("原来主要吃什么")
-
-        if not slots["new_product"] and slots["change_type"] in ("main_food_change", None):
-            missing.append("现在换成什么")
-
-        if slots["change_days"] is None:
-            missing.append("大概从什么时候开始")
-
-        if slots["change_ratio"] is None:
-            missing.append("现在大概占多少比例")
-
-        if missing:
-            return (
-                "diet_change_detail_group",
-                "饮食变化这部分我还差一点信息：" + "、".join(missing) + "？",
-            )
-
-    # 3. 症状表现组
-    symptom_missing = []
-    if slots["soft_stool_days"] is None:
-        symptom_missing.append("软便大概持续多久")
-    if slots["vomiting"] is None:
-        symptom_missing.append("有没有呕吐")
-    if slots["blood_in_stool"] is None:
-        symptom_missing.append("有没有便血或明显黏液")
-
-    if symptom_missing:
-        return (
-            "symptom_group",
-            "再确认一下这次软便本身：" + "、".join(symptom_missing) + "？",
-        )
-
-    # 4. 状态风险组
-    risk_missing = []
-    if slots["appetite"] is None:
-        risk_missing.append("食欲有没有明显下降")
-    if slots["energy"] is None:
-        risk_missing.append("精神状态有没有变差")
-
-    if risk_missing:
-        return (
-            "risk_group",
-            "最后再看一下整体状态：" + "、".join(risk_missing) + "？",
-        )
-
-    return (None, None)
-
-
-# =========================================================
-# 5. 按需调用 Tool
-# =========================================================
-def run_required_tools(state: dict):
-    """根据当前槽位决定是否调用更深一层 Tool。"""
-    slots = state["slots"]
-    baseline = state["context"]["baseline_diet"]
-
-    # Path A：有基础饮食 + 用户说发生换粮 + 已知新产品
-    if state["pattern"] == PATTERN_WITH_BASELINE:
-        if slots["recent_diet_change"] is True and slots["new_product"]:
-            new_product = get_product_by_name(slots["new_product"])
-            if new_product:
-                state["analysis"]["diet_compare"] = compare_diets(
-                    baseline_profile=baseline,
-                    new_product=new_product,
-                )
-
-    # Path B：无基础饮食，但用户把原粮和新粮都补齐
-    if state["pattern"] == PATTERN_WITHOUT_BASELINE:
-        if slots["recent_diet_change"] is True and slots["old_product"] and slots["new_product"]:
-            state["analysis"]["diet_compare"] = (
-                build_manual_old_new_compare(
-                    old_product_name=slots["old_product"],
-                    new_product_name=slots["new_product"],
-                ).get("compare") or None
-            )
-
-
-# =========================================================
-# 6. 当前阶段结论
-# =========================================================
-def build_final_assessment(state: dict) -> str:
-    """只做「相关性判断」，不做确诊。"""
-    slots = state["slots"]
-    compare = state["analysis"].get("diet_compare")
-
-    # 风险优先
-    if (
-        slots["vomiting"] is True
-        or slots["blood_in_stool"] is True
-        or slots["appetite"] == "poor"
-        or slots["energy"] == "poor"
-    ):
-        return (
-            "现在的信息里已经出现了需要提高警惕的伴随表现，"
-            "这时候不建议只按换粮或饮食适应来解释。"
-            "更稳妥的是尽快联系宠物医院进一步评估。"
-        )
-
-    # 有明确饮食变化
-    if slots["recent_diet_change"] is True:
-        evidence = []
-
-        if slots["change_ratio"] is not None:
-            evidence.append(f"饮食变化比例约 {int(slots['change_ratio'] * 100)}%")
-
-        if slots["change_days"] is not None:
-            evidence.append(f"变化发生在约 {slots['change_days']} 天前")
-
-        if compare:
-            delta = compare["delta"]
-            if abs(delta["fat"]) >= 3:
-                evidence.append(f"脂肪变化 {delta['fat']:+.1f} 个百分点")
-            if abs(delta["protein"]) >= 5:
-                evidence.append(f"蛋白变化 {delta['protein']:+.1f} 个百分点")
-            if compare.get("protein_source_changed"):
-                evidence.append("蛋白来源也发生了变化")
-
-            risk = compare.get("new_soft_stool_risk") or {}
-            if risk.get("risk_level") in ("高风险", "极高风险"):
-                evidence.append(f"新粮在软便复合风险模型里是「{risk['risk_level']}」档")
-
-            gut = compare.get("new_gut_friendly_score")
-            if isinstance(gut, (int, float)) and gut < 40:
-                evidence.append(f"新粮「肠胃友好」功能性评分偏低（{gut:.1f}）")
-
-        if evidence:
-            return (
-                "结合目前信息，近期饮食变化和这次软便的时间关系值得优先关注。"
-                "当前看到的主要变化包括：" + "；".join(evidence) + "。"
-                "第一步更适合先把饮食变化放缓，并继续观察便便、食欲和精神状态。"
-                "如果软便持续加重，或出现血便、明显呕吐、精神差、不吃东西，就不要只靠调整换粮。"
-            )
-
-        return (
-            "目前可以确认近期有饮食变化，但产品和比例信息还不足以判断变化幅度。"
-            "现阶段更适合先按饮食变化相关因素继续观察。"
-        )
-
-    # 无饮食变化
-    return (
-        "目前没有看到明确的近期饮食变化，因此这次软便暂时不能优先归因到换粮。"
-        "后续更需要结合持续时间、便便变化以及其他健康表现来判断。"
-    )
-
-
-# =========================================================
-# 单轮入口
-# =========================================================
-def run_soft_stool_turn(
-    pet_id: str,
-    user_input: str,
-    state: dict = None,
-    diet_override=None,
-    prefill: bool = True,
-) -> dict:
-    """
-    每一轮固定执行：
-    1. 读取/保持基础饮食（并完成一级分流）
-    2. 用历史记录预填饮食变化槽位
-    3. LLM 抽取本轮信息
-    4. 更新槽位
-    5. 根据当前状态调用 Tool
-    6. 做一轮当前总结
-    7. 选择下一业务问题组；没有缺失槽位时，给当前阶段结论
-    """
-    if state is None:
-        state = new_state(pet_id)
-        state["context"]["diet_override"] = diet_override
-        state["context"]["prefill"] = prefill
-
-    state = deepcopy(state)
-    # 兼容功能上线前已经保存在会话中的旧版 state。
-    context = state.setdefault("context", {})
-    for key, default in (
-        ("followup_context_loaded", False), ("history_food_names", []),
-        ("disease_names", []), ("active_question_group", None),
-    ):
-        context.setdefault(key, default)
-    slots = state.setdefault("slots", {})
-    slots.setdefault("history_foods_reviewed", None)
-    slots.setdefault("disease_history_reviewed", None)
-    state["turn"] += 1
-
-    # 1. 首轮加载基础饮食并完成一级分流
-    load_baseline_context(state)
-
-    # 1.1 查询历史主粮与疾病档案，供后续自然语言追问
+            context["history_food_names"] = list(dict.fromkeys(
+                x for x in (change.get("old_product"), change.get("new_product")) if x
+            ))
+            # An intent and its creation date are not confirmed feeding events.
+            context["diet_intent_reference"] = {key: change.get(key) for key in (
+                "old_product", "new_product", "source", "created_at",
+            )}
+    except DATA_ERRORS:
+        _warn(state, "diet_history_unavailable")
+
+
+def prefill_slots_from_history(state):
+    """Compatibility entry point: intentions remain references, not user facts."""
     load_followup_context(state)
 
-    # 2. 历史记录预填
-    prefill_slots_from_history(state)
 
-    # 用户对上一轮自然语言追问作答后，即视为已补充；原文保留在槽位中。
-    active_group = state["context"].get("active_question_group")
-    if user_input and active_group == "history_and_disease_group":
-        state["slots"]["history_foods_reviewed"] = user_input.strip()
-        state["slots"]["disease_history_reviewed"] = user_input.strip()
-    elif user_input and active_group == "history_food_group":
-        state["slots"]["history_foods_reviewed"] = user_input.strip()
-    elif user_input and active_group == "disease_history_group":
-        state["slots"]["disease_history_reviewed"] = user_input.strip()
+def _product_facts(product):
+    name = product.get("display_name") or product.get("name") or "该产品"
+    parts = [name]
+    for key, label in (("protein_sources", "蛋白来源"), ("fat_sources", "脂肪来源")):
+        if product.get(key):
+            parts.append(label + "：" + "、".join(product[key]))
+    if product.get("gut_friendly_score") is not None:
+        parts.append(f"肠胃友好评分 {product['gut_friendly_score']}")
+    risk = product.get("soft_stool_risk") or {}
+    if risk.get("risk_level"):
+        parts.append("辅助模型风险档位：" + risk["risk_level"])
+    if risk.get("risk_index") is not None:
+        parts.append(f"模型风险指数 {risk['risk_index']}（不是个体发病概率）")
+    return "；".join(parts) + "。"
 
-    # 3. LLM 抽取
-    extracted = extract_user_info(user_input, state)
 
-    # 4. 更新槽位
-    update_slots(state, extracted)
+def summarize_baseline_diet(state):
+    baseline = state["context"].get("baseline_diet") or empty_baseline()
+    products = baseline.get("detailed_products") or baseline.get("products") or []
+    if not products:
+        return "目前没有可用于分析的完整产品资料，先结合你补充的饮食和症状信息判断。"
+    parts = ["当前档案中的饮食资料：" + " ".join(_product_facts(p) for p in products[:5])]
+    summary = baseline.get("nutrition_summary") or {}
+    if summary:
+        metrics = [f"{label}{(summary.get('metric_specs') or {}).get(key, {}).get('operator') or ''} {summary[key]}%" for key, label in (
+            ("protein", "粗蛋白"), ("fat", "粗脂肪"), ("fiber", "粗纤维"),
+        ) if summary.get(key) is not None]
+        if metrics:
+            parts.append("标示保证值参考：" + "、".join(metrics) + "（" + str(summary.get("nutrition_basis") or "口径未注明") + "）。")
+    else:
+        parts.append("保证值不完整，暂时无法精确比较蛋白、脂肪和纤维变化。")
+    return " ".join(parts)
 
-    # 5. 根据最新槽位调用 Tool
-    run_required_tools(state)
 
-    # 6. 当前总结
-    current_summary = build_current_summary(state)
-    state["analysis"]["current_summary"] = current_summary
+def build_current_summary(state):
+    slots = state["slots"]
+    parts = [summarize_baseline_diet(state)] if state["turn"] == 1 else []
+    if slots.get("current_product"):
+        parts.append("你确认当前主粮是：" + slots["current_product"] + "。")
+    if slots.get("recent_diet_change") is False:
+        parts.append("你确认近期没有饮食变化。")
+    elif slots.get("recent_diet_change") is True:
+        details = []
+        if slots.get("main_food_changed") is True or slots.get("change_type") == "main_food_change":
+            details.append("换主粮")
+        if slots.get("added_food"):
+            details.append("新加食物：" + slots["added_food"])
+        if slots.get("old_product"):
+            details.append("原粮：" + slots["old_product"])
+        if slots.get("new_product"):
+            details.append("新粮：" + slots["new_product"])
+        if slots.get("change_days") is not None:
+            details.append(f"开始变化约 {slots['change_days']} 天")
+        if slots.get("change_ratio") is not None:
+            details.append(f"新食物占比约 {slots['change_ratio'] * 100:g}%")
+        parts.append("近期有饮食变化" + ("：" + "；".join(details) if details else "") + "。")
+    for key, label in (("soft_stool_days", "软便持续时间"),):
+        if slots.get(key) is not None:
+            parts.append(f"{label}约 {slots[key]} 天。")
+    for key, label in (("vomiting", "呕吐"), ("blood_in_stool", "便血"), ("mucus_in_stool", "明显黏液")):
+        if slots.get(key) is not None:
+            parts.append(("有" if slots[key] else "没有") + label + "。")
+    for key, label in (("appetite", "食欲"), ("energy", "精神")):
+        if slots.get(key):
+            parts.append(label + ("下降。" if slots[key] == "poor" else "正常。"))
+    for key, label in (("history_foods_reviewed", "历史饮食补充"), ("disease_history_reviewed", "疾病补充")):
+        if slots.get(key):
+            parts.append(label + "：" + slots[key] + "。")
+    compare = state["analysis"].get("diet_compare") or {}
+    if compare:
+        known = [f"{label}变化 {compare['delta'][key]:+g} 个百分点" for key, label in (
+            ("protein", "蛋白"), ("fat", "脂肪"), ("fiber", "粗纤维"),
+        ) if compare.get("delta", {}).get(key) is not None]
+        parts.append("新旧粮标示保证值对比：" + ("；".join(known) if known else "保证值缺失或口径不同，无法计算营养差异") + "。")
+    if state["analysis"].get("data_warnings"):
+        parts.append("部分产品或历史资料暂不可用，以下分析只使用已取得的信息。")
+    unknown = [key for key, meta in state["slot_status"].items() if meta["status"] in ("unknown", "deferred")]
+    if unknown:
+        parts.append("有部分信息尚不确定，本轮按信息有限处理。")
+    return " ".join(parts) or "本轮没有新增的已确认信息。"
 
-    # 7. 下一槽位组
-    group_name, question = choose_next_question_group(state)
-    state["context"]["active_question_group"] = group_name
 
-    # Risk signals take precedence over product-mechanism explanation.
+def _has_urgent_risk(state):
+    return policy.urgent_risk(state["slots"])
+
+
+def choose_next_question_group(state):
+    group, question, fields = policy.next_question(state)
+    state["context"]["active_question_fields"] = fields
+    return group, question
+
+
+def run_required_tools(state):
+    slots = state["slots"]
+    analysis = state["analysis"]
+    # A correction must not retain the previous product's comparison/mechanisms.
+    analysis["diet_compare"] = None
+    analysis["new_product_detail"] = None
+    if slots.get("recent_diet_change") is not True:
+        return
+    main_change = slots.get("main_food_changed") is True or slots.get("change_type") == "main_food_change"
+    if not main_change or not slots.get("new_product"):
+        return
+    refs = (slots.get("old_product"), slots["new_product"])
+    cache = state["context"].setdefault("comparison_cache", {})
+    cache_key = repr(refs)
+    if cache_key not in cache:
+        try:
+            new = get_product_by_name(slots["new_product"])
+            compare = build_manual_old_new_compare(*refs).get("compare") if refs[0] else None
+            cache[cache_key] = {"new_product_detail": new, "diet_compare": compare}
+            if not new:
+                _warn(state, "new_product_not_found")
+        except DATA_ERRORS:
+            _warn(state, "comparison_unavailable")
+            return
+        # Bound JSON state across repeated product corrections.
+        while len(cache) > 5:
+            del cache[next(iter(cache))]
+    analysis.update(cache[cache_key])
+
+
+def build_assessment_plan(state):
+    slots = state["slots"]
     if _has_urgent_risk(state):
-        assessment = build_final_assessment(state)
-        reply = generate_response_from_plan(state, current_summary, assessment)
-        return {
-            "status": "answered",
-            "reply": reply,
-            "reply_parts": [{"response_type": "risk_alert", "reply": reply}],
-            "pattern": state["pattern"],
-            "next_group": None,
-            "state": state,
-        }
-
-    if question:
-        if state["turn"] == 1 and (state["context"]["baseline_diet"].get("detailed_products") or []):
-            reply_parts = generate_two_stage_response(
-                state=state,
-                evidence_summary=summarize_baseline_diet(state),
-                current_summary=current_summary,
-                question=question,
-            )
-            reply = "\n\n".join(part["reply"] for part in reply_parts)
+        return {"risk": "high", "judgment": "已有需要优先评估的伴随表现，不能只按饮食适应解释。",
+                "next_steps": ["尽快联系宠物医院，提供症状、饮食变化和已有病历信息。"],
+                "observe": ["记录便便表现、呕吐、食欲和精神变化。"],
+                "review": "优先由宠物医院评估，不继续普通配方追问。"}
+    changed = slots.get("recent_diet_change")
+    change_days, symptom_days = slots.get("change_days"), slots.get("soft_stool_days")
+    if changed is True:
+        if change_days is not None and symptom_days is not None and change_days < symptom_days:
+            judgment = "软便早于这次饮食变化，不能用这次变化解释软便的起点。"
+        elif change_days is not None and symptom_days is not None:
+            judgment = "饮食变化先于或接近软便出现，时间上可能相关，但尚不能确定因果。"
         else:
-            reply = generate_response_from_plan(state, current_summary, question)
-            reply_parts = [{"response_type": "text", "reply": reply}]
-        return {
-            "status": "need_more_info",
-            "reply": reply,
-            "reply_parts": reply_parts,
-            "pattern": state["pattern"],
-            "next_group": group_name,
-            "state": state,
-        }
-
-    # 信息够了，给一轮结论
-    assessment = build_final_assessment(state)
-    reply = generate_response_from_plan(
-        state=state,
-        current_summary=current_summary,
-        question=assessment,
-    )
-
-    return {
-        "status": "answered",
-        "reply": reply,
-        "reply_parts": [{"response_type": "result_card", "reply": reply}],
-        "pattern": state["pattern"],
-        "next_group": None,
-        "state": state,
-    }
+            judgment = "近期有饮食变化，但时间关系尚不清楚，暂不能确定关联。"
+        step = "先不继续增加新食物比例，记录原粮、新粮及罐头零食的变化，避免同时新增多种食物。"
+    elif changed is False:
+        judgment = "没有明确近期饮食变化，不能优先归因到换粮；需要结合症状和已有疾病信息。"
+        step = "记录现有喂食与排便情况，避免同时引入新的食物，以便观察变化。"
+    else:
+        judgment = "饮食变化及部分症状信息尚不明确，本次只能给出有限信息下的初步判断。"
+        step = "先补记最近吃了什么、何时出现软便，以及已有病历，方便后续复评。"
+    limited_products = any((p.get("soft_stool_mechanisms") or {}).get("confidence") == "limited" for p in (state["context"].get("baseline_diet") or {}).get("detailed_products", []))
+    return {"risk": "limited" if limited_products or bool(state["analysis"].get("data_warnings")) or any(policy.unanswered(state, k) or state["slot_status"].get(k, {}).get("status") in ("unknown", "deferred")
+                                         for k in ("recent_diet_change", "soft_stool_days", "vomiting", "blood_in_stool", "appetite", "energy")) else "routine",
+            "judgment": judgment, "next_steps": [step],
+            "observe": ["记录便便形态和次数，以及呕吐、食欲和精神表现；新出现的黏液也要记录。"],
+            "review": "持续、加重或出现便血、呕吐、食欲下降、精神变差时，联系宠物医院评估；有新记录可继续这次咨询。"}
 
 
-# v1 命名兼容
+def build_final_assessment(state):
+    plan = build_assessment_plan(state)
+    return " ".join([plan["judgment"], *plan["next_steps"], *plan["observe"], plan["review"]])
+
+
+def run_soft_stool_turn(pet_id, user_input, state=None, diet_override=None, prefill=True):
+    defaults = new_state(pet_id)
+    state = deepcopy(state) if state else defaults
+    for key, value in defaults.items():
+        state.setdefault(key, deepcopy(value))
+    for key, value in defaults["context"].items():
+        state["context"].setdefault(key, deepcopy(value))
+    for key in policy.SLOT_DEFAULTS:
+        state["slots"].setdefault(key, None)
+    state["rule_version"] = policy.RULE_VERSION
+    if not state["turn"]:
+        state["context"].update(diet_override=diet_override, prefill=prefill)
+    state["turn"] += 1
+    update_slots(state, extract_user_info(user_input, state))
+    # No model generation or product/history queries before an urgent response.
+    if _has_urgent_risk(state):
+        summary = build_current_summary(state)
+        plan = build_assessment_plan(state)
+        state["analysis"].update(generation_source="rule", model_name=None)
+        parts = [{"response_type": "evidence_card", "reply": summary},
+                 {"response_type": "risk_alert", "reply": build_final_assessment(state)}]
+        group = None
+    else:
+        load_baseline_context(state)
+        load_followup_context(state)
+        run_required_tools(state)
+        summary = build_current_summary(state)
+        group, question = choose_next_question_group(state)
+        # Do not endlessly repeat a question when the user cannot answer it.
+        if group:
+            fingerprint = group + ":" + ",".join(state["context"]["active_question_fields"])
+            if state["question_attempts"].get(fingerprint, 0) >= 2:
+                for key in state["context"]["active_question_fields"]:
+                    state["slot_status"][key] = {"status": "deferred", "source": "unanswered_question", "turn": state["turn"]}
+                group, question = choose_next_question_group(state)
+                summary = build_current_summary(state)
+            if group:
+                fingerprint = group + ":" + ",".join(state["context"]["active_question_fields"])
+                state["question_attempts"][fingerprint] = state["question_attempts"].get(fingerprint, 0) + 1
+        plan = build_assessment_plan(state)
+        state["analysis"]["assessment_plan"] = plan
+        parts = generate_two_stage_response(state, summary, summary, question)
+    state["context"]["active_question_group"] = group
+    state["status"] = "active" if group else "answered"
+    state["analysis"].update(current_summary=summary, assessment_plan=plan)
+    reply = "\n\n".join(p["reply"] for p in parts)
+    state["summary"] = {"facts": summary, "assessment": plan["judgment"], "rule_version": policy.RULE_VERSION}
+    return {"status": "need_more_info" if group else "answered", "reply": reply,
+            "reply_parts": parts, "pattern": state["pattern"], "next_group": group,
+            "rule_version": policy.RULE_VERSION, "limited_info": plan["risk"] == "limited",
+            "actions": ([{"type": "medical_record", "label": "补充病历", "pet_id": pet_id}]
+                        if group == "history_and_disease_group" else []),
+            "state": state}
+
+
 soft_stool_pipeline = run_soft_stool_turn

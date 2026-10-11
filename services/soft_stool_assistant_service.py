@@ -59,6 +59,13 @@ def handle_turn(user_id: str, payload: dict[str, Any]) -> dict[str, Any]:
     if state and _text(state.get("pet_id"), 64) != pet_id:
         raise ValueError("state.pet_id 与 pet_id 不一致")
 
+    if state:
+        for field in ("context", "slots", "analysis", "slot_status", "question_attempts"):
+            if field in state and not isinstance(state[field], dict):
+                raise ValueError(f"state.{field} 必须是 JSON 对象")
+        if "turn" in state and (type(state["turn"]) is not int or state["turn"] < 0):
+            raise ValueError("state.turn 必须是非负整数")
+
     result = run_soft_stool_turn(
         pet_id=pet_id,
         user_input=message,
