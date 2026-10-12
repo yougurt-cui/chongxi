@@ -141,6 +141,42 @@ def run():
                 assert result['food_candidates'][0]['fit_score'] == 85
                 assert result['food_candidates'][0]['formula_id'] == fixture['formula_id']
                 assert profiles.get_cat_profile(users[0][0], pet['id'])['food_product'] == 'B'
+                request('PATCH', '/cat-profiles/' + pet['id'], {'age_months': None})
+                body = request('POST', messages, {'message': '继续推荐主粮'})
+                assert body['message']['result']['recommendation']['status'] == 'ready'
+                candidate = body['message']['result']['food_candidates'][0]
+                assert candidate['formula_id'] == fixture['formula_id']
+                assert '未按年龄筛选' in candidate['cautions'][-1]
+                assert profiles.get_cat_profile(users[0][0], pet['id'])['age_months'] is None
+                assert profiles.get_cat_profile(users[0][0], pet['id'])['food_product'] == 'B'
+                print('PASS missing age still returns ranked food through real chat API')
+                from services import guardian_food_flow_service as food_flow
+                with patch.object(food_flow, 'list_standardized_product_options', return_value={'items': [fixture]}), patch.object(profiles, '_resolve_food_formula', return_value={'standard_brand_name': '候选牌', 'display_name': 'C', 'product_id': 999997, 'formula_id': 999998}):
+                    planned = request('POST', messages, {'message': '选第一款'})
+                    assert planned['message']['result']['food_flow']['stage'] == 'planned'
+                    assert planned['message']['result']['switch_plan']['steps']
+                    assert profiles.get_cat_profile(users[0][0], pet['id'])['food_product'] == 'B'
+                    request('POST', messages, {'message': '还没开始吃'})
+                    assert profiles.get_cat_profile(users[0][0], pet['id'])['food_product'] == 'B'
+                    started = request('POST', messages, {'message': '已经开始吃这款'})
+                    assert started['message']['result']['food_flow']['stage'] == 'started'
+                    assert profiles.get_cat_profile(users[0][0], pet['id'])['food_product'] == 'C'
+                    history_count = len(request('GET', path)['items'])
+                    try:
+                        profiles.update_cat_profile(users[0][0], pet['id'], {'food_brand': '旧计划牌', 'food_product': '旧计划粮'},
+                                                    expected_food={'food_brand': '乙牌', 'food_product': 'B', 'food_formula_id': None})
+                    except ValueError as error:
+                        assert '档案已经变化' in str(error)
+                    else:
+                        raise AssertionError('Stale plan must fail inside locked profile transaction')
+                    assert profiles.get_cat_profile(users[0][0], pet['id'])['food_product'] == 'C'
+                    assert len(request('GET', path)['items']) == history_count
+                    request('POST', messages, {'message': '已经开始吃这款'})
+                    assert len(request('GET', path)['items']) == history_count
+                    completed = request('POST', messages, {'message': '已经换好了'})
+                    assert completed['message']['result']['food_flow']['stage'] == 'completed'
+                    request('POST', messages, {'message': '食欲正常'})
+                    print('PASS selection -> comparison/plan -> actual feeding confirmation -> completion/feedback and retry idempotency')
             # Only an explicit profile update makes a recommendation into confirmed current feeding.
             with patch.object(profiles, '_resolve_food_formula', return_value={'standard_brand_name': '候选牌', 'display_name': 'C'}):
                 request('PATCH', '/cat-profiles/' + pet['id'], {'diet': {'product_id': 999997, 'formula_id': 999998}})

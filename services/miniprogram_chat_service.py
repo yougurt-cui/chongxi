@@ -21,6 +21,7 @@ from services.miniprogram_food_change_service import (
 from services.miniprogram_food_submission_service import get_food_submission, list_food_submissions
 from services.miniprogram_diet_history_service import list_diet_history, compact_diet_context
 from services.guardian_recommendation_service import recommend_guardian_foods, explicit_preferences
+from services.guardian_food_flow_service import handle_food_flow, STATE_KEY as FOOD_FLOW_STATE_KEY
 from services.soft_stool_assistant_service import handle_turn as handle_soft_stool_turn
 from services.guardian_workflow import FlowStrategy, select_strategy, requested_flow, build_handoff
 
@@ -524,6 +525,8 @@ def _share_guardian_context(state, pet_id, target, extracted=None, source_messag
 
 
 def _prepare_food_handoff(state, pet_id, extracted=None, source_message_id=None):
+    if state.get("primary_intent") == "food_switch":
+        return
     packet = _share_guardian_context(state, pet_id, "food_switch", extracted, source_message_id)
     if not packet:
         return
@@ -611,7 +614,7 @@ def _build_context(user_id: str, conversation: dict[str, Any], state: dict[str, 
     slots = state.get("slots") or {}
     food_name = _clean(slots.get("food_name") or slots.get("target_food"))
     if food_name:
-        brand = _clean(slots.get("food_brand") or (pet or {}).get("food_brand"))
+        brand = _clean(slots.get("food_brand") or (None if slots.get("target_food") else (pet or {}).get("food_brand")))
         if brand:
             context["food_candidates"] = list_standard_product_candidates(brand, product=food_name, limit=10)
     catalog_key = _clean(slots.get("catalog_key"),128)
@@ -698,6 +701,7 @@ def _generate_answer(message: str, state: dict[str, Any], context: dict[str, Any
                     "diet_history是已确认的宠物吃粮记录；food_list仅为用户上传的产品，不代表吃过。"
                     "health_topics只表示同期咨询话题，不能推断疾病或粮食导致症状。日期未知不推断，资料不可用不当作没有。"
                     "只有food_candidates中已有且有适用依据的产品才能作为具体候选；没有候选就给筛选方向，不编造品牌推荐。"
+                    "宠物年龄是可选信息，未填写年龄也可展示已有候选，不要求先补年龄才能推荐；不要猜测年龄或声称年龄适配已验证，沿用候选中的适用阶段说明。"
                     "有饮水、进食、排便次数或便便形态记录时应优先结合其近期变化，但不要虚构正常参考值。"
                     "只输出合法JSON，且必须正好包含context、care、watch三个字符串字段。"
                     "context用一两句话解释少量原理或背景，care给出最重要且可执行的做法，watch说明观察重点和需要联系宠物医院的情况。"
@@ -774,9 +778,12 @@ def _handle_context_message(user_id, conversation, message, state, source_messag
                             "recognition_status": submission.get("recognition_status"),
                             "can_reupload": submission.get("can_reupload", False)}}
     else:
-        flow = _evaluate_flow(state, context)
+        food_reply = handle_food_flow(user_id, conversation, message, state, context, interaction) if state.get("primary_intent") == "food_switch" else None
+        flow = {"status": "food_flow"} if food_reply else _evaluate_flow(state, context)
         state["missing_slots"] = flow.get("missing_slots") or []
-        if flow["status"] == "need_more_info":
+        if food_reply:
+            reply = food_reply
+        elif flow["status"] == "need_more_info":
             state["current_step"] = flow["next_slot"]
             state["followup_count"] += 1
             question = flow.get("question") or {}
@@ -804,7 +811,12 @@ def _handle_context_message(user_id, conversation, message, state, source_messag
                 recommendation = recommend_guardian_foods(context.get("pet_profile") or {}, state["slots"], context["diet_history"])
                 context["recommendation"] = recommendation
                 context["food_candidates"] = recommendation["items"]
+                food_state = state["slots"].setdefault(FOOD_FLOW_STATE_KEY, {"stage": "selection"})
+                food_state["candidates"] = recommendation["items"]
             text, answer_model = _generate_answer(message,state,context,flow["status"]=="answer_with_limited_info")
+            if state.get("primary_intent") == "food_switch" and context.get("food_candidates"):
+                text += "\n候选：" + "；".join(f"{i}. {item.get('label') or str(item.get('brand') or '') + ' ' + str(item.get('product_name') or '')}" for i, item in enumerate(context["food_candidates"], 1))
+                text += "\n可以回复“选第一款”或“换成品牌和具体粮名”，我会继续确认目标配方并给出换粮与观察安排。选中时不会更新口粮档案。"
             model_name = answer_model or model_name
             reply = {"response_type":"result_card","reply":text,
                      "result":{"intent":state.get("primary_intent"),"slots":state.get("slots"),
@@ -831,13 +843,16 @@ def _recognize_guardian_turn(message, state):
     from soft_stool_assistant.llm import _extract_rule_info, extract_user_info
     from soft_stool_assistant.policy import urgent_risk
     literal = _extract_rule_info(message, nested or {})
-    if (nested or SOFT_STOOL_TRIGGER_RE.search(message)) and urgent_risk(literal):
+    if urgent_risk(literal):
         return {"primary_intent": "symptom_consult", "slots": {}, "_target_flow": "soft_stool",
                 "_soft_extraction": {**literal, "_field_evidence": {key: message for key in literal}}}, None
     target = requested_flow(message)
     if target:
         return {"primary_intent": target, "slots": {}, "_target_flow": target,
                 "_soft_extraction": {**literal, "_field_evidence": {key: message for key in literal}} if nested else None}, None
+    food_progress = state.get("current_step") or ((state.get("slots") or {}).get(FOOD_FLOW_STATE_KEY) or {}).get("stage") == "choose_target" or re.search(r"选|换|目标|开始|吃|喂|食欲|精神|便便|排便|呕吐|预算|每斤|国产|进口|肠胃|皮肤|泪痕|体重|过敏|推荐|还没|暂时|继续|方案|比较|对比", message)
+    if state.get("primary_intent") == "food_switch" and food_progress and not SOFT_STOOL_TRIGGER_RE.search(message) and not SOFT_STOOL_PAUSE_RE.search(message) and not SOFT_STOOL_OTHER_TOPIC_RE.search(message):
+        return {"primary_intent": "food_switch", "slots": {}, "_target_flow": "food_switch"}, None
     if SOFT_STOOL_OTHER_TOPIC_RE.search(message):
         extraction = _fallback_extraction(SOFT_STOOL_PAUSE_RE.sub("", message), {"primary_intent": None})
         return {**extraction, "_target_flow": "general"}, None
