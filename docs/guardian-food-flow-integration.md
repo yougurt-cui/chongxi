@@ -1,5 +1,7 @@
 # 管家选粮与换粮流程
 
+后续完整换粮、选粮和提醒扩展见 [三流程说明](guardian-three-workflows.md)。以下保留 PR #4 当时发布范围。
+
 2026-10-12，后端 [PR #4](https://github.com/yougurt-cui/chongxi/pull/4) 已合并 main、push 并部署，功能提交 `d58c04a`。年龄选填，以及下面的对话流程已经实现；无需修改小程序代码，通过既有聊天文字和选项完成操作。
 
 ## 用户怎么用

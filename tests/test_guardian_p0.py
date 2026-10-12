@@ -123,6 +123,10 @@ class DietHistoryTest(unittest.TestCase):
 
 class RecommendationTest(unittest.TestCase):
     def setUp(self):
+        mock = patch.object(recommendations, 'load_nutrition', return_value={})
+        mock.start(); self.addCleanup(mock.stop)
+        risk_mock = patch.object(recommendations, 'load_risks', return_value={})
+        risk_mock.start(); self.addCleanup(risk_mock.stop)
         self.pet = {'animal_type': 'cat', 'age_months': 24, 'allergies': []}
         self.food = {'formula_id': 1, 'product_id': 2, 'catalog_key': 'formula:1', 'brand': '乙', 'product_name': 'B',
                      'life_stage': 'adult', 'product_type': '干粮', 'ingredient_composition': '鸡肉，米', 'price': 60, 'price_max_per_jin': 70, 'origin_type': '国产品牌'}

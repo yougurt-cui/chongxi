@@ -44,6 +44,7 @@ def next_step(state, steps, unanswered):
 # Add routes here as their handlers become available; do not invent workflows
 # for unsupported symptoms merely because they resemble an existing case.
 FLOW_REQUESTS = (
+    ('reminder', re.compile(r'提醒我|提醒一下|设置.{0,8}提醒|设个.{0,8}提醒|(?:添加|创建|新增).{0,8}提醒|(?:每天|每周|每月|明天|明晚).{0,25}提醒')),
     ("food_switch", re.compile(r"(?:推荐|挑选|选择|选|挑|换).{0,16}(?:口粮|猫粮|狗粮|主粮|粮食|粮|品牌)|(?:粮|品牌).{0,10}(?:推荐|选哪|选什么)")),
 )
 

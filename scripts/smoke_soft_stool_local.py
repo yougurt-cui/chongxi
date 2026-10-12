@@ -115,7 +115,7 @@ def run():
                 body = request("POST", feedback_path, {"message": "希望改善软便"})
                 assert body["message"]["result"]["recommendation"]["status"] == "ready"
                 assert body["message"]["result"]["food_candidates"] == candidates
-                recommend.assert_called_once()
+                assert recommend.call_count == 2  # Existing goal allows immediate recommendation; preference refinement refreshes it.
             state = chat._load_state(feedback_conversation["id"])
             assert state["slots"][chat.GUARDIAN_CONTEXT_SLOT]["facts"]["history_foods_reviewed"] == "蓝氏猎鸟乳鸽"
             assert state["slots"]["current_food"] == "皇家BK34"

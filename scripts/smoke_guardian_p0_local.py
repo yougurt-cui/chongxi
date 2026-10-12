@@ -25,11 +25,13 @@ def run():
     from services import miniprogram_chat_service as chat
     from services import miniprogram_diet_history_service as diets
     from services import miniprogram_food_submission_service as uploads
+    from services import miniprogram_reminder_service as reminders
 
     app = Flask(__name__); app.register_blueprint(miniprogram_api)
     client = app.test_client()
     auth.init_miniprogram_auth_tables()
     diets.init_diet_history_table(); uploads.init_food_submission_tables()
+    reminders.init_reminder_tables()
     users = []
     with ExitStack() as mocks:
         mocks.enter_context(patch.object(chat, 'get_chat_model_config', return_value={'api_key': ''}))
@@ -153,6 +155,10 @@ def run():
                 from services import guardian_food_flow_service as food_flow
                 with patch.object(food_flow, 'list_standardized_product_options', return_value={'items': [fixture]}), patch.object(profiles, '_resolve_food_formula', return_value={'standard_brand_name': '候选牌', 'display_name': 'C', 'product_id': 999997, 'formula_id': 999998}):
                     planned = request('POST', messages, {'message': '选第一款'})
+                    assert planned['message']['result']['food_flow']['stage'] == 'selected'
+                    assert planned['message']['result']['food_analysis']
+                    assert 'switch_plan' not in planned['message']['result']
+                    planned = request('POST', messages, {'interaction': {'slot': 'food_flow_action', 'value': 'switch_plan'}})
                     assert planned['message']['result']['food_flow']['stage'] == 'planned'
                     assert planned['message']['result']['switch_plan']['steps']
                     assert profiles.get_cat_profile(users[0][0], pet['id'])['food_product'] == 'B'
@@ -185,6 +191,52 @@ def run():
             request('PATCH', '/cat-profiles/' + pet['id'], {'diet': {'brand': '手填牌', 'product': 'D'}})
             assert profiles.get_cat_profile(users[0][0], pet['id'])['food_formula_id'] is None
             print('PASS actual engine ranking, budget, explicit confirmation, history archive and stale formula clearing')
+            # Real reminder repository and dialogue share the same authenticated API.
+            reminder_payload = {'title': '清洁饮水机', 'type': 'fountain', 'date': '2027-01-05', 'time': '09:00', 'repeat': 'weekly', 'pet_id': pet['id'], 'idempotency_key': 'smoke-reminder'}
+            saved = request('POST', '/reminders', reminder_payload, 201)['item']
+            assert request('POST', '/reminders', reminder_payload, 201)['item']['id'] == saved['id']
+            assert len(request('GET', '/reminders')['items']) == 1
+            request('POST', '/reminders', {**reminder_payload, 'title': '冲突请求'}, expected=400)
+            stranger = {'Authorization': 'Bearer ' + users[1][1]}
+            assert request('GET', '/reminders', request_headers=stranger)['items'] == []
+            request('PATCH', '/reminders/' + saved['id'], reminder_payload, expected=404, request_headers=stranger)
+            request('POST', '/reminders', {**reminder_payload, 'idempotency_key': 'wrong-pet'}, expected=404, request_headers=stranger)
+            request('DELETE', '/reminders/' + saved['id'], expected=404, request_headers=stranger)
+            with patch.object(reminders, 'next_occurrence', side_effect=RuntimeError('failure after history insert')):
+                request('POST', '/reminders/' + saved['id'] + '/complete', {'expected_due_at': saved['dueAt']}, expected=500)
+            assert request('GET', '/reminders')['history'] == []
+            assert request('GET', '/reminders')['items'][0]['dueAt'] == saved['dueAt']
+            request('POST', '/reminders/' + saved['id'] + '/complete', {'expected_due_at': saved['dueAt']})
+            request('POST', '/reminders/' + saved['id'] + '/complete', {'expected_due_at': saved['dueAt']})
+            after = request('GET', '/reminders')
+            assert len(after['history']) == 1 and after['items'][0]['dueAt'] > saved['dueAt']
+            request('PATCH', '/reminders/' + saved['id'], {**reminder_payload, 'expected_revision': saved['revision']}, expected=400)
+            edited = request('PATCH', '/reminders/' + saved['id'], {**reminder_payload, 'title': '清洁水泵'})['item']
+            assert edited['title'] == '清洁水泵'
+            request('DELETE', '/reminders/' + saved['id'])
+            assert not request('GET', '/reminders')['items'] and len(request('GET', '/reminders')['history']) == 1
+            reminder_conversation = request('POST', '/chat/conversations', {'pet_id': pet['id']}, 201)['conversation']
+            reminder_messages = '/chat/conversations/' + reminder_conversation['id'] + '/messages'
+            legacy = request('POST', reminder_messages, {'message': '明天提醒我买粮'})
+            assert legacy['message']['result']['status'] == 'client_update_required'
+            assert not request('GET', '/reminders')['items']
+            capability = {'client_context': {'capabilities': {'cloud_reminders_v1': True}}}
+            pending = request('POST', reminder_messages, {'message': '明天提醒我买粮', **capability})
+            assert pending['message']['result']['missing'] == 'time'
+            done = request('POST', reminder_messages, {'message': '晚上九点', **capability})
+            assert done['message']['result']['status'] == 'saved'
+            reminder_id = done['message']['result']['reminder']['id']
+            assert any(row['id'] == reminder_id for row in request('GET', '/reminders')['items'])
+            repeated = request('POST', reminder_messages, {'message': '明天晚上九点提醒我买粮', **capability})
+            assert repeated['message']['result']['reminder']['id'] == reminder_id
+            request('PATCH', '/cat-profiles/' + pet['id'], {'birthday': '2024-02-29'})
+            birthday = request('PUT', '/cat-profiles/' + pet['id'] + '/birthday-reminder')['item']
+            assert birthday['anchorDay'] == 29 and birthday['anchorMonth'] == 1
+            assert request('PUT', '/cat-profiles/' + pet['id'] + '/birthday-reminder')['item']['id'] == birthday['id']
+            request('PATCH', '/cat-profiles/' + pet['id'], {'birthday': None})
+            assert request('PUT', '/cat-profiles/' + pet['id'] + '/birthday-reminder')['item'] is None
+            assert len(request('GET', '/reminders')['items']) == 1
+            print('PASS cloud reminder auth, pet isolation, idempotent creation/completion, rollback, birthday anchors, dialogue and list consistency')
             request('DELETE', path + '/' + added['id'])
             assert all(i['id'] != added['id'] for i in request('GET', path)['items'])
         finally:
@@ -192,7 +244,7 @@ def run():
                 with conn.cursor() as cursor:
                     for user_id, _ in users:
                         cursor.execute('DELETE s FROM miniprogram_chat_state s JOIN miniprogram_chat_conversation c ON c.id=s.conversation_id WHERE c.user_id=%s', (user_id,))
-                        for table in ('miniprogram_chat_message', 'miniprogram_chat_conversation', diets.TABLE, 'miniprogram_food_submission', 'miniprogram_cat_profile', auth.SESSION_TABLE):
+                        for table in (reminders.HISTORY_TABLE, reminders.TABLE, 'miniprogram_chat_message', 'miniprogram_chat_conversation', diets.TABLE, 'miniprogram_food_submission', 'miniprogram_cat_profile', auth.SESSION_TABLE):
                             cursor.execute(f'DELETE FROM `{table}` WHERE user_id=%s', (user_id,))
                         cursor.execute(f'DELETE FROM `{auth.USER_TABLE}` WHERE id=%s', (user_id,))
                 conn.commit()

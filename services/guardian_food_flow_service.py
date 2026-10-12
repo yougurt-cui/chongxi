@@ -5,6 +5,7 @@ import re
 from services.taobao_sku_import_service import list_standardized_product_options
 from services.miniprogram_cat_profile_service import update_cat_profile
 from services.guardian_recommendation_service import eligible_food
+from services.guardian_food_analysis_service import load_nutrition, load_risks, analyse_food, nutrition_text, comparison_text
 
 STATE_KEY = "_food_flow"
 
@@ -21,6 +22,8 @@ def target_from_text(message, flow):
         started = bool(re.search(r"(?:已经|已|确认).{0,3}(?:开始吃|开始喂|开始换粮)|^开始吃了[。！!]*$", message))
     match = re.search(r"(?:换成|换到|选择|选定|目标粮(?:是|为)?|想试|考虑|已经开始吃|已开始吃)\s*([^，。！？?]+)", message)
     target = match.group(1).strip() if match else None
+    if re.search(r'(?:不要|不用|别|暂时不|暂不|不)(?:再)?(?:换成|换到|选择|选定|选|考虑|想试)', message):
+        return None, False
     if target and re.sub(r"[了吗呢呀]$", "", compact(target)) in {"", "这款", "这款粮", "它", "新粮", "目标粮"}:
         target = None
     if flow.get("stage") == "choose_target" and not target and message and not re.search(r"推荐|选粮|换粮|没有|不知道", message):
@@ -60,6 +63,25 @@ def card(text, flow, **result):
 def handle_food_flow(user_id, conversation, message, state, context, interaction=None):
     slots = state["slots"]
     flow = slots.setdefault(STATE_KEY, {"stage": "selection"})
+    if re.search(r'先不换粮|暂时不换粮|不选这款|不要这款|取消选粮|取消换粮', message):
+        state['current_step'] = None
+        if flow.get('stage') in {'started', 'completed'}:
+            flow['paused'] = True
+            return card('好的，先暂停换粮安排。已经确认的吃粮记录会保留；你可以继续记录表现，或重新选粮。', flow)
+        slots[STATE_KEY] = {'stage': 'selection'}
+        slots.pop('target_food', None)
+        return card('这次选择或换粮计划已取消，当前口粮没有改变。想继续时可以重新选粮。', slots[STATE_KEY])
+    if interaction and interaction.get('slot') == 'food_flow_action':
+        value = interaction.get('value')
+        if value == 'switch_plan' and flow.get('target'):
+            slots['_food_mode'] = 'switch'
+            flow['stage'] = 'planned'
+        elif value == 'restart':
+            slots[STATE_KEY] = {'stage': 'selection'}
+            slots.pop('target_food', None)
+            return None
+        else:
+            raise ValueError('选粮操作无效，请重新选择')
     if re.search(r"(?:选|选择|换成)这款", message) and not flow.get("target"):
         candidates = flow.get("candidates") or []
         if len(candidates) == 1:
@@ -72,7 +94,7 @@ def handle_food_flow(user_id, conversation, message, state, context, interaction
     target, started = target_from_text(message, flow)
     if interaction and interaction.get("slot") == "target_food":
         target = str(interaction.get("value") or "")
-    if started and flow.get("stage") == "planned" and not target:
+    if started and flow.get("stage") in {'planned', 'selected'} and not target:
         target = (flow.get("target") or {}).get("catalog_key")
     target = target or (slots.get("target_food") if not flow.get("target") else None)
     if re.search(r"重新(?:选|推荐)|再推荐|继续推荐|重新挑", message):
@@ -108,7 +130,9 @@ def handle_food_flow(user_id, conversation, message, state, context, interaction
             return card("这款目标粮的主粮类型、配料、适用阶段或过敏条件不符合现有筛选要求，请确认资料或重新选粮。年龄未填写本身不会阻止选粮。", flow)
         # Resolve afresh for every new target; never carry a prior target's start state.
         if (flow.get("target") or {}).get("catalog_key") != selected["catalog_key"]:
-            flow = {"stage": "planned", "target": selected,
+            flow = {"stage": 'selected' if slots.get('_food_mode') == 'selection' else "planned", "target": selected,
+                    'candidates': flow.get('candidates') or [],
+                    'reference_food_text': flow.get('reference_food_text'),
                     "original_food": context.get("current_food") or ({"product_name": slots["current_food"]} if slots.get("current_food") else None),
                     "original_profile_food": context.get("current_food"),
                     "original_formula_id": pet.get("food_formula_id")}
@@ -120,6 +144,8 @@ def handle_food_flow(user_id, conversation, message, state, context, interaction
     if not eligible_food(selected, pet, {}):
         return card("当前年龄、过敏或产品资料已变化，请重新核对目标粮，或回复“重新推荐”。", flow)
     state["current_step"] = None
+    if flow['stage'] == 'selected' and (started or slots.get('_food_mode') == 'switch'):
+        flow['stage'] = 'planned'
     # Existing profile service owns authentication, canonical formula snapshot,
     # and the transaction that archives the previous food. No intention writes.
     if started and flow["stage"] == "planned":
@@ -153,7 +179,32 @@ def handle_food_flow(user_id, conversation, message, state, context, interaction
                   "original_ingredients": old_ingredients,
                   "target_ingredients": selected.get("ingredient_composition") or None,
                   "note": "配料仅作对照，不证明适口性、耐受或症状原因；缺失资料不推算。"}
+    candidate = next((row for row in flow.get('candidates', []) if row.get('formula_id') == selected['formula_id']), {})
+    comparison_id = flow.get('original_formula_id') or ((candidate.get('analysis') or {}).get('comparison_current_formula_id') if flow.get('reference_food_text') == slots.get('current_food') else None)
+    nutrients = load_nutrition([comparison_id, selected['formula_id']])
+    risks = load_risks([selected['formula_id']])
+    analysis = analyse_food(selected, nutrients, cautions=candidate.get('cautions') or [], current=comparison_id, risks=risks)
+    comparison['nutrition'] = analysis['comparison']
     flow["comparison"] = comparison
+    if flow['stage'] == 'selected':
+        text = f"已选定：{selected.get('label') or selected['product_name']}。当前口粮没有改变。\n" + nutrition_text(analysis)
+        text += '\n' + comparison_text(analysis)
+        if candidate.get('strengths'):
+            text += '\n适配理由：' + '；'.join(candidate['strengths'][:3])
+        else:
+            text += '\n这款粮尚未按你的诉求与其他产品排序，不能据此认定它最适合。'
+        if candidate.get('current_food_reasons'):
+            text += '\n' + candidate['current_food_reasons'][0]
+        if candidate.get('history_reasons'):
+            text += '\n' + candidate['history_reasons'][0]
+        text += '\n需留意：' + '；'.join(candidate.get('cautions') or [analysis['risk_note']])
+        if pet.get('age_months') is None:
+            text += '\n年龄未填写，本次未按年龄筛选；请核对包装适用阶段：' + str(selected.get('life_stage') or '暂无资料') + '。'
+        for risk in analysis.get('risk_models', []):
+            text += '\n' + ('软便' if risk['kind'] == 'soft_stool' else '黑下巴') + '结构风险参考：' + str(risk.get('relative_risk_level') or '等级暂无') + '（非患病概率）。'
+        text += '\n确定要换到这款时，可以继续查看换粮安排；已经实际开始吃，也可以直接告诉我。'
+        return {**card(text, flow, food_analysis=analysis, food_comparison=comparison), 'response_type': 'text_or_select',
+                'interaction': {'slot': 'food_flow_action', 'options': [{'label': '看看怎么换粮', 'value': 'switch_plan'}, {'label': '重新选粮', 'value': 'restart'}]}}
     plan = {"steps": ["确认目标主粮适用阶段及包装喂食说明。", "保留原粮，逐步引入目标粮，期间避免同时增加其他新食物。",
                        "记录食欲、精神、便便形态及呕吐情况；出现异常先暂停推进并联系兽医。"],
             "confirmation": "已经开始吃后，请回复“已经开始吃这款”；完全换好后可以回复“已经换好了”。"}
@@ -164,8 +215,10 @@ def handle_food_flow(user_id, conversation, message, state, context, interaction
         text += "原粮配方资料未确认，暂时无法完成双方配料对比。\n"
     text += f"目标配料：{(selected.get('ingredient_composition') or '暂无资料')[:220]}\n"
     text += comparison["note"] + "\n" + "\n".join(plan["steps"]) + "\n" + plan["confirmation"]
+    text += '\n' + nutrition_text(analysis) + '\n' + analysis['risk_note']
+    text += '\n' + comparison_text(analysis)
     if pet.get("age_months") is None:
         stage = selected.get("life_stage")
         stage_label = {"adult": "成猫", "kitten": "幼猫", "senior": "老年猫", "all": "全阶段", "all_stages": "全阶段"}.get(stage, stage or "资料未提供")
         text += "\n年龄未填写，本次未按年龄筛选，请核对目标粮适用阶段：" + stage_label + "。"
-    return card(text, flow, food_comparison=comparison, switch_plan=plan)
+    return card(text, flow, food_comparison=comparison, food_analysis=analysis, switch_plan=plan)

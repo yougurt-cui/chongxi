@@ -217,7 +217,16 @@ def list_diet_history(user_id, pet_id, *, limit=50, include_health=True):
 
 def compact_diet_context(items):
     """Keep source IDs and topic counts; avoid repeating raw chat excerpts in model context."""
-    return [{**{key: item.get(key) for key in ('id', 'brand', 'product', 'formula_id', 'is_current', 'source',
+    return [{**{key: item.get(key) for key in ('id', 'brand', 'product', 'product_id', 'formula_id', 'is_current', 'source',
                                              'started_on', 'ended_on', 'observed_on', 'note', 'association_available', 'association_truncated')},
              'health_topics': [{key: topic[key] for key in ('code', 'label', 'conversation_count')} for topic in item.get('health_topics', [])]}
             for item in items]
+
+
+def list_diet_references(user_id, pet_id):
+    """All confirmed foods for exclusions; independent of paged chat associations."""
+    with _connect() as conn:
+        with conn.cursor() as cursor:
+            _owned_pet(cursor, user_id, pet_id)
+            cursor.execute(f"SELECT DISTINCT brand,product,product_id,formula_id,note,is_current FROM {TABLE} WHERE user_id=%s AND pet_id=%s AND status='active'", (user_id, pet_id))
+            return list(cursor.fetchall())

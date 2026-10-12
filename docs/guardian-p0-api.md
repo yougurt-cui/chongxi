@@ -448,3 +448,55 @@
 - 聊天消息、动作和推荐接入：`services/miniprogram_chat_service.py`。
 - 评分筛选与候选字段：`services/guardian_recommendation_service.py`。
 - 档案更新和历史事务：`services/miniprogram_cat_profile_service.py`。
+
+
+## 8. 换粮、选粮与云端提醒扩展（2026-10-12）
+
+业务交互、数据来源及发布顺序见 [三流程说明](guardian-three-workflows.md)。既有聊天 API 和 `text_or_select` 继续可用。外部 `primary_intent` 沿用 `food_switch`，推荐结果 `food_mode` 区分 `selection` / `switch`；新增 `selected` 表示已选粮、未制定换粮安排，`planned` 表示安排已制定，二者均不等于已经吃粮。原会话无模式时继续兼容原换粮流程。
+
+推荐结果包含 `missing_assessment_fields`、`assessment_weight_coverage`、`recall`、`current_analysis`；候选 `analysis` 包含营养、营养对照、风险模型及说明。缺失数据返回未知/缺失提示；风险标签不是疾病概率。前端可忽略新增结构字段，但必须显示既有文本和选项。实际吃粮仍经已有档案校验与归档事务。
+
+聊天设置提醒需传：
+
+```json
+{"client_context":{"capabilities":{"cloud_reminders_v1":true}}}
+```
+
+只有提醒列表已经接入下列 API 的客户端才能声明此能力。旧客户端会收到原页面设置指引，不创建不可见的云端提醒。
+
+### 提醒 API
+
+均使用通用 Bearer 鉴权，账户取自 token；关联宠物必须归属当前账户。路径公共前缀 `/api/miniprogram`。失败沿用 `ok:false,error`；参数、幂等冲突、陈旧版本返回 400，对象无权限/不存在返回 404。
+
+| 方法与路径 | 请求 | 返回 |
+| --- | --- | --- |
+| `GET /reminders` | 无 | `ok,items,history,timezone,notification_channel` |
+| `POST /reminders` | 完整提醒、`idempotency_key` | 201，`ok,item`；重试可含 `replayed:true` |
+| `PATCH /reminders/{id}` | 完整提醒、可选 `expected_revision` | `ok,item` |
+| `DELETE /reminders/{id}` | 无 | `ok:true`；保留完成历史 |
+| `POST /reminders/{id}/complete` | `expected_due_at`（当前 dueAt，毫秒） | `ok,item,history`；单次结束 item=null，重复完成可仅含 replayed=true |
+| `PUT /cat-profiles/{pet_id}/birthday-reminder` | 无 | `ok,item`；清除生日时 item=null |
+
+创建示例（日期应选未来）：
+
+```json
+{
+  "title":"给饮水机换水",
+  "type":"fountain",
+  "date":"2026-10-20",
+  "time":"20:00",
+  "repeat":"daily",
+  "pet_id":"宠物档案ID",
+  "note":"清洗后换水",
+  "idempotency_key":"每次新保存生成并在失败重试时复用的标识"
+}
+```
+
+- 时间可传 `date` + `time`、ISO `due_at`、或毫秒 `dueAt`；无时区 ISO 和日期组合按 `Asia/Shanghai` 解释。新建须为未来时间。编辑可保留原过期时间，但改变时间须选未来。
+- `title` 1～40 字，`note` 最多 500 字，`pet_id` 可为空（不关联宠物）。
+- `repeat`：`none,daily,weekly,biweekly,monthly,yearly`。
+- `type`：`birthday,pump,litter,bath,checkup,food,internal,external,vaccine,groom,drum,waste,fountain,refill,custom`。
+- 创建 `idempotency_key` 必填，最多 200 字；同账号同标识且原始内容一致返回原条目，不同内容报错。旧提醒明确导入可传稳定 `legacy_id` 允许保留过去的待办时间；不要用于普通新建。
+- 条目兼容小程序原形状：`id,title,type,dueAt,repeat,petId,petName,note,source,anchorDay,anchorMonth,createdAt,updatedAt`；时间均毫秒，anchorMonth 从 0 开始。新增 `cloud:true,revision`，编辑建议带读取时 revision。
+- `history` 最新 500 条，包含完成时快照和毫秒 `completedAt`；完成重试 replayed 时重新 GET 获取权威列表。
+- `notification_channel:"in_app"`；服务不发送系统通知或微信订阅消息，成功回复不能宣称已推送。
