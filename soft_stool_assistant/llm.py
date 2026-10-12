@@ -140,6 +140,8 @@ def _extract_rule_info(user_input: str, state: dict) -> dict:
     # 昵称兜底（A粮 / B粮 / C粮 …）
     for name in _ALIAS_NAMES:
         if name in diet_text:
+            if (state or {}).get("context", {}).get("active_question_group") == "history_food_group" and not positive:
+                continue
             if any(k in diet_text for k in ("原来", "以前", "之前", "原本")):
                 result.setdefault("old_product", name)
             else:
@@ -271,14 +273,35 @@ def _extract_rule_info(user_input: str, state: dict) -> dict:
                 result["history_foods_reviewed"] = text
             if re.search(r"(?:疾病|病史|病历|得过|诊断|肠胃炎|过敏)", text):
                 result["disease_history_reviewed"] = text
-        if group == "history_food_group" and re.search(r"以前|之前|吃过|喂过|主粮|耐受|(?:吃|喂).*(?:粮|软便|便便|罐头)", text):
-            result.setdefault("history_foods_reviewed", text)
+        if group == "history_food_group":
+            if re.search(r"以前|之前|吃过|喂过|主粮|耐受|(?:吃|喂).*(?:粮|软便|便便|罐头)", text):
+                result.setdefault("history_foods_reviewed", text)
+            elif (asked == ["history_foods_reviewed"]
+                    and not result.get("unknown_fields")
+                    and "disease_history_reviewed" not in result
+                    and _is_history_food_reply(short)):
+                # The previous question supplies the omitted "以前吃过".
+                # Preserve the user's words; do not infer a formula, dates or tolerance.
+                result.setdefault("history_foods_reviewed", raw_text)
         if group == "medical_history_group" and re.search(r"疾病|病史|病历|确诊|过敏|没有|无", text):
             result.setdefault("disease_history_reviewed", text)
     if re.search(future_change, raw_text) and not positive:
         result.pop("change_ratio", None)
         result.pop("change_days", None)
     return validate_extraction(result)
+
+
+def _is_history_food_reply(text):
+    """Accept a food-name answer only within the pending history question."""
+    if not re.fullmatch(r"[\w\u4e00-\u9fff ·_\-/、，,。；;：:（）()]{2,300}", text):
+        return False
+    if re.fullmatch(r"嗯+|哦+|好(?:的|吧)?|知道了|明白(?:了)?|收到|谢谢(?:你)?|可以|那啥|随便|都行|没关系|正常|都正常", text):
+        return False
+    return not re.search(
+        r"没有|不知道|不清楚|不记得|记不清|不确定|不了解|不想|不回答|跳过|别问|"
+        r"继续|恢复|先不聊|暂停|推荐|挑选|选粮|帮我|预算|打算|计划|准备|想换|如果|假如|"
+        r"是什么|怎么样|如何|怎么|能否|能不能|可以吗", text
+    )
 
 
 _FIELD_WORDS = {
@@ -591,6 +614,7 @@ _EXTRACT_SYSTEM_PROMPT = """
 你是宠物咨询信息抽取模块，只返回JSON，不诊断，不补猜信息。
 只抽取本轮用户明确表达的新事实或纠正，不复制current_slots中的旧事实。
 结合last_question理解“没有”“两天”等省略回答；无法判断就不填写。
+last_question只有history_foods_reviewed时，用户仅回复品牌/粮款名（如“蓝氏猎鸟乳鸽”）也是历史口粮回答，保留原文；没有便便表现就不推测耐受，也不改成current_product或new_product。
 输出字段由output_fields限定。未提及的字段省略。unknown_fields列出用户明确不知道或拒答的字段。
 所有布尔字段必须是true/false；change_days与soft_stool_days是非负整数；change_ratio是0到1的数字。
 appetite、energy取normal或poor。history_foods_reviewed与disease_history_reviewed分别记录相关回答。

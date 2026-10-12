@@ -95,6 +95,32 @@ def run():
             unauthenticated = client.get("/api/miniprogram" + path)
             assert unauthenticated.status_code in (401, 403)
             print("PASS completed follow-up, topic switching, risk priority and authentication")
+
+            # Replay the owner's feedback: a bare historical food answer must
+            # survive the final advice and subsequent recommendation handoff.
+            feedback_conversation = request("POST", "/chat/conversations", {"pet_id": pet["id"]}, 201)["conversation"]
+            feedback_path = "/chat/conversations/" + feedback_conversation["id"] + "/messages"
+            request("POST", feedback_path, {"message": "最近软便，平时吃皇家BK34"})
+            body = request("POST", feedback_path, {"message": "蓝氏猎鸟乳鸽"})
+            state = chat._load_state(feedback_conversation["id"])
+            nested = state["slots"][chat.SOFT_STOOL_STATE_SLOT]
+            assert nested["slots"]["history_foods_reviewed"] == "蓝氏猎鸟乳鸽"
+            assert nested["slot_status"]["history_foods_reviewed"]["status"] == "confirmed"
+            assert "蓝氏猎鸟乳鸽" in body["messages"][0]["content"]
+            body = request("POST", feedback_path, {"message": "没有相关病例"})
+            assert body["message"]["result"]["actions"][0]["target_flow"] == "food_switch"
+            candidates = [{"brand": "离线样例品牌", "product_name": "样例主粮", "product_id": 90001, "formula_id": 90002}]
+            with patch.object(chat, "recommend_guardian_foods", return_value={"status": "ready", "items": candidates, "note": "离线候选样例"}) as recommend:
+                request("POST", feedback_path, {"message": "帮我推荐一款主粮"})
+                body = request("POST", feedback_path, {"message": "希望改善软便"})
+                assert body["message"]["result"]["recommendation"]["status"] == "ready"
+                assert body["message"]["result"]["food_candidates"] == candidates
+                recommend.assert_called_once()
+            state = chat._load_state(feedback_conversation["id"])
+            assert state["slots"][chat.GUARDIAN_CONTEXT_SLOT]["facts"]["history_foods_reviewed"] == "蓝氏猎鸟乳鸽"
+            assert state["slots"]["current_food"] == "皇家BK34"
+            assert request("GET", "/cat-profiles/" + pet["id"])["item"]["food_product"] == ""
+            print("PASS bare historical food answer, recommendation action, retained facts and real chat handoff")
         finally:
             # Delete only this newly generated test user's records; never existing developer data.
             if user_id:

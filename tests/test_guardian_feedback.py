@@ -90,6 +90,62 @@ class GuardianFeedbackTest(unittest.TestCase):
         self.assertNotIn("0.418", result["reply"])
         self.assertNotIn("碳水结构压力", result["reply"])
 
+    def test_bare_history_food_name_is_preserved_in_screenshot_dialogue(self):
+        result = pipeline.run_soft_stool_turn("pet-1", "软便了")
+        self.assertEqual(result["next_group"], "history_food_group")
+        result = pipeline.run_soft_stool_turn("pet-1", "蓝氏猎鸟乳鸽", result["state"])
+        nested = result["state"]
+        self.assertEqual(nested["slots"]["history_foods_reviewed"], "蓝氏猎鸟乳鸽")
+        self.assertEqual(nested["slot_status"]["history_foods_reviewed"]["status"], "confirmed")
+        self.assertEqual(nested["slot_status"]["history_foods_reviewed"]["source_text"], "蓝氏猎鸟乳鸽")
+        self.assertIn("历史饮食补充：蓝氏猎鸟乳鸽", result["reply_parts"][0]["reply"])
+        self.assertNotIn("暂时没有补充资料", result["reply_parts"][0]["reply"])
+        self.assertIsNone(nested["slots"]["new_product"])
+        self.assertEqual(result["next_group"], "medical_history_group")
+        result = pipeline.run_soft_stool_turn("pet-1", "没有相关病例", nested)
+        self.assertEqual(result["status"], "answered")
+        self.assertEqual(result["actions"][0]["target_flow"], "food_switch")
+        state = chat._default_state("c1")
+        state["slots"][chat.SOFT_STOOL_STATE_SLOT] = result["state"]
+        decision, _ = chat._recognize_guardian_turn("帮我推荐一款主粮", state)
+        self.assertEqual(decision["_target_flow"], "food_switch")
+        chat._prepare_food_handoff(state, "pet-1")
+        packet = state["slots"][chat.GUARDIAN_CONTEXT_SLOT]
+        self.assertEqual(packet["facts"]["history_foods_reviewed"], "蓝氏猎鸟乳鸽")
+        self.assertEqual(state["slots"]["current_food"], "皇家 BK34")
+
+    def test_history_name_answers_keep_spelling_and_explicit_performance(self):
+        state = pipeline.new_state("pet-1")
+        state["context"].update(active_question_group="history_food_group",
+                                 active_question_fields=["history_foods_reviewed"])
+        for text in ("蓝氏 猎鸟乳鸽", "蓝氏猎鸟乳鸽，便便正常", "皇家、蓝氏猎鸟乳鸽", "A粮"):
+            with self.subTest(text=text):
+                extracted = llm.extract_user_info(text, state)
+                self.assertEqual(extracted["history_foods_reviewed"], text)
+                self.assertNotIn("current_product", extracted)
+                self.assertNotIn("new_product", extracted)
+
+    def test_bare_name_is_grounded_even_when_model_omits_the_answer(self):
+        state = pipeline.new_state("pet-1")
+        state["context"].update(active_question_group="history_food_group",
+                                 active_question_fields=["history_foods_reviewed"])
+        with patch.object(llm, "get_chat_model_config", return_value={"api_key": "fixture"}), \
+             patch.object(llm, "call_real_llm", return_value="{}"):
+            extracted = llm.extract_user_info("蓝氏猎鸟乳鸽", state)
+        self.assertEqual(extracted["history_foods_reviewed"], "蓝氏猎鸟乳鸽")
+        self.assertEqual(extracted["_field_evidence"]["history_foods_reviewed"], "蓝氏猎鸟乳鸽")
+
+    def test_history_question_does_not_turn_acknowledgements_or_requests_into_food(self):
+        state = pipeline.new_state("pet-1")
+        state["context"].update(active_question_group="history_food_group",
+                                 active_question_fields=["history_foods_reviewed"])
+        for text in ("嗯", "好的", "知道了", "谢谢", "那啥", "跳过", "不知道", "先不聊了", "帮我推荐一款", "想换蓝氏猎鸟乳鸽", "蓝氏是什么牌子？"):
+            with self.subTest(text=text):
+                self.assertNotIn("history_foods_reviewed", llm.extract_user_info(text, state))
+        state["context"].update(active_question_group="medical_history_group",
+                                 active_question_fields=["disease_history_reviewed"])
+        self.assertNotIn("history_foods_reviewed", llm.extract_user_info("蓝氏猎鸟乳鸽", state))
+
     def test_model_reasoning_replaces_rather_than_appends_template(self):
         state = pipeline.new_state("pet-1")
         state["analysis"].update(show_product_evidence=True, assessment_plan=pipeline.build_assessment_plan(state))
