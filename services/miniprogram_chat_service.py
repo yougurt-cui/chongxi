@@ -19,9 +19,12 @@ from services.miniprogram_food_change_service import (
     list_standard_product_candidates,
 )
 from services.miniprogram_food_submission_service import get_food_submission, list_food_submissions
-from services.miniprogram_diet_history_service import list_diet_history, compact_diet_context
-from services.guardian_recommendation_service import recommend_guardian_foods, explicit_preferences
+from services.miniprogram_diet_history_service import list_diet_history, compact_diet_context, list_diet_references
+from services.guardian_recommendation_service import recommend_guardian_foods, explicit_preferences, recommendation_goal
 from services.guardian_food_flow_service import handle_food_flow, STATE_KEY as FOOD_FLOW_STATE_KEY
+from services.guardian_food_goals import GOALS, goals_in_text, goal_options
+from services.guardian_food_analysis_service import recommendation_text
+from services.guardian_reminder_flow_service import handle_reminder
 from services.soft_stool_assistant_service import handle_turn as handle_soft_stool_turn
 from services.guardian_workflow import FlowStrategy, select_strategy, requested_flow, build_handoff
 
@@ -37,17 +40,18 @@ SOFT_STOOL_TRIGGER_RE = re.compile(r"软便|便软|稀便|拉稀|腹泻")
 
 VALID_INTENTS = {
     "symptom_consult", "food_switch", "food_analysis",
-    "ingredient_analysis", "general_pet_qa",
+    "ingredient_analysis", "general_pet_qa", 'reminder',
 }
 
 INTENT_SLOTS = {
+    'reminder': {'title', 'date', 'time', 'repeat'},
     "symptom_consult": {
         "symptom", "duration_days", "frequency_per_day", "severity", "vomiting",
         "blood_in_stool", "mental_status", "appetite_status", "warning_signs",
         "recent_food_change", "symptom_context",
     },
     "food_switch": {"current_food", "switch_reason", "target_food", "target_requirement", "recent_symptom",
-                    "budget_per_jin", "preferred_brand", "origin_type"},
+                    "budget_per_jin", "preferred_brand", "origin_type", "food_goal"},
     "food_analysis": {"food_name", "catalog_key"},
     "ingredient_analysis": {"ingredient_name", "food_name", "ingredient_source"},
     "general_pet_qa": {"topic"},
@@ -611,6 +615,12 @@ def _build_context(user_id: str, conversation: dict[str, Any], state: dict[str, 
         ][:20]
     except Exception:
         context["food_list"] = []
+    if state.get('primary_intent') == 'food_switch' and pet and conversation.get('pet_id'):
+        try:
+            context['diet_reference_history'] = list_diet_references(user_id, conversation['pet_id'])
+        except pymysql.MySQLError:
+            context['diet_reference_history'] = context['diet_history']
+            context['history_exclusion_status'] = 'unavailable'
     slots = state.get("slots") or {}
     food_name = _clean(slots.get("food_name") or slots.get("target_food"))
     if food_name:
@@ -685,7 +695,7 @@ def _generate_answer(message: str, state: dict[str, Any], context: dict[str, Any
     payload = {
         "latest_message": message,
         "intent": state.get("primary_intent"),
-        "slots": state.get("slots"),
+        "slots": {key: value for key, value in (state.get('slots') or {}).items() if not key.startswith('_')},
         "context": context,
         "limited_information": limited,
         "output": {"context": "少量原因或背景", "care": "现在可以怎么照顾", "watch": "接下来留意什么"},
@@ -722,6 +732,7 @@ def _handle_context_message(user_id, conversation, message, state, source_messag
     attachments = attachments or []
     client_context = client_context or {}
     model_name = None
+    previous_food_goal = state.get('slots', {}).get('food_goal')
     if intent_result and intent_result[0].get("dialogue_action") == "pause":
         _pause_soft_stool(state)
         state.update(primary_intent="general_pet_qa", secondary_intent=None, current_step=None,
@@ -765,6 +776,34 @@ def _handle_context_message(user_id, conversation, message, state, source_messag
     context = _build_context(user_id, conversation, state, attachments, client_context)
     if state.get("primary_intent") == "food_switch":
         state["slots"].update(explicit_preferences(message))
+        pending = state.get('current_step')
+        previous_goal = previous_food_goal
+        choices = goals_in_text(message)
+        historical_feedback = bool(re.search(r'(以前|之前|过去|曾经).{0,8}(吃|喂|用)', message))
+        if historical_feedback:
+            state['slots']['_food_history_feedback'] = message
+            history_feedbacks = state['slots'].setdefault('_food_history_feedbacks', [])
+            if message not in history_feedbacks:
+                history_feedbacks.append(message)
+        if interaction and interaction.get('slot') == 'food_goal':
+            value = interaction.get('value')
+            if value not in GOALS:
+                raise ValueError('请选择一个有效的选粮诉求')
+            state['slots']['food_goal'] = value
+        elif len(choices) == 1 and not historical_feedback:
+            state['slots']['food_goal'] = choices[0]
+        elif len(choices) > 1 and not historical_feedback and not state['slots'].get('food_goal'):
+            state['slots']['food_goals'] = choices
+        elif pending == 'food_goal' and re.search(r'不知道|随便|没有特别|无所谓', message):
+            state['slots']['food_goal'] = 'general'
+        if previous_goal and state['slots'].get('food_goal') != previous_goal and (state['slots'].get(FOOD_FLOW_STATE_KEY) or {}).get('target'):
+            state['slots'].pop(FOOD_FLOW_STATE_KEY, None)
+            state['slots'].pop('target_food', None)
+        if pending == 'current_food' and message:
+            if re.search(r'不清楚|不知道|暂时没有|还没吃', message):
+                state['slots']['_current_food_unknown'] = True
+            else:
+                state['slots']['current_food'] = message
     submission = context.get("food_submission")
     if submission and submission.get("recognition_status") in {"pending","processing"}:
         reply = {"response_type":"processing","reply":submission.get("recognition_message") or "配料表正在识别，请稍后刷新投稿后再交给我分析。",
@@ -779,7 +818,17 @@ def _handle_context_message(user_id, conversation, message, state, source_messag
                             "can_reupload": submission.get("can_reupload", False)}}
     else:
         food_reply = handle_food_flow(user_id, conversation, message, state, context, interaction) if state.get("primary_intent") == "food_switch" else None
-        flow = {"status": "food_flow"} if food_reply else _evaluate_flow(state, context)
+        if not food_reply and state.get('primary_intent') == 'food_switch':
+            goal = state['slots'].get('food_goal') or recommendation_goal(state['slots'])
+            if not goal:
+                flow = {'status': 'need_more_info', 'next_slot': 'food_goal', 'question': {'text': '这次最希望改善哪一方面？有多个关注点时，先选最优先的；其余信息我会保留。', 'response_type': 'single_select', 'options': goal_options()}}
+            elif state['slots'].get('_food_mode') == 'switch' and not state['slots'].get('current_food') and not state['slots'].get('_current_food_unknown'):
+                flow = {'status': 'need_more_info', 'next_slot': 'current_food', 'question': {'text': '它现在主要吃哪款粮？告诉我品牌和粮名就好；暂时不知道也可以继续。', 'response_type': 'text_or_select', 'options': []}}
+            else:
+                state['slots']['food_goal'] = goal
+                flow = {'status': 'ready_to_answer'}
+        else:
+            flow = {'status': 'food_flow'} if food_reply else _evaluate_flow(state, context)
         state["missing_slots"] = flow.get("missing_slots") or []
         if food_reply:
             reply = food_reply
@@ -808,15 +857,20 @@ def _handle_context_message(user_id, conversation, message, state, source_messag
         else:
             state["current_step"], state["risk_level"] = None, "low"
             if state.get("primary_intent") == "food_switch":
-                recommendation = recommend_guardian_foods(context.get("pet_profile") or {}, state["slots"], context["diet_history"])
+                packet = context.get('guardian_context') or {}
+                state['slots']['_confirmed_history_text'] = (packet.get('facts') or {}).get('history_foods_reviewed') or ''
+                recommendation = recommend_guardian_foods(context.get("pet_profile") or {}, state["slots"], context.get('diet_reference_history', context['diet_history']))
+                if context.get('history_exclusion_status') == 'unavailable':
+                    recommendation = {'status': 'data_unavailable', 'items': [], 'note': '历史口粮暂时无法读取，为避免重复推荐已吃过的粮，请稍后再试。'}
                 context["recommendation"] = recommendation
                 context["food_candidates"] = recommendation["items"]
                 food_state = state["slots"].setdefault(FOOD_FLOW_STATE_KEY, {"stage": "selection"})
                 food_state["candidates"] = recommendation["items"]
+                food_state['reference_food_text'] = state['slots'].get('current_food')
             text, answer_model = _generate_answer(message,state,context,flow["status"]=="answer_with_limited_info")
             if state.get("primary_intent") == "food_switch" and context.get("food_candidates"):
-                text += "\n候选：" + "；".join(f"{i}. {item.get('label') or str(item.get('brand') or '') + ' ' + str(item.get('product_name') or '')}" for i, item in enumerate(context["food_candidates"], 1))
-                text += "\n可以回复“选第一款”或“换成品牌和具体粮名”，我会继续确认目标配方并给出换粮与观察安排。选中时不会更新口粮档案。"
+                text += '\n' + recommendation_text(context['recommendation'])
+                text += "\n可以回复“选第一款”，先看看营养、风险和适配理由；确定要换到这款时，再继续换粮安排。选中时不会更新口粮档案。"
             model_name = answer_model or model_name
             reply = {"response_type":"result_card","reply":text,
                      "result":{"intent":state.get("primary_intent"),"slots":state.get("slots"),
@@ -826,13 +880,38 @@ def _handle_context_message(user_id, conversation, message, state, source_messag
                                "actions": [{"type": "diet_history", "label": "查看历史口粮", "pet_id": conversation.get("pet_id")}] if conversation.get("pet_id") else [],
                                "food_submission":submission},
                      "disclaimer":"AI内容仅供参考，不能替代兽医诊断"}
-    result = {**(reply.get("result") or {}), "turn_no": state["turn_count"],
+    result = {'intent': state.get('primary_intent'), **(reply.get("result") or {}), "turn_no": state["turn_count"],
               "sequence_no": 1, "model_name": model_name}
     return {**reply, "result": result, "messages": [{**reply, "result": result}]}
 
 
 def _handle_food_switch_message(*args, **kwargs):
+    state, message = args[3], args[2]
+    decision = (kwargs.get('intent_result') or ({}, None))[0]
+    wants_switch = re.search(r'换粮|换主粮|换猫粮|换狗粮|换成|换到', message) and not re.search(r'(?:不|别|不用|不要|暂时不).{0,3}换', message)
+    state['slots']['_food_mode'] = 'switch' if wants_switch else decision.get('_food_mode') or state['slots'].get('_food_mode') or 'switch'
     return _handle_context_message(*args, **kwargs, forced_intent="food_switch")
+
+
+def _handle_food_selection_message(*args, **kwargs):
+    args[3]['slots']['_food_mode'] = 'selection'
+    return _handle_context_message(*args, **kwargs, forced_intent='food_switch')
+
+
+def _handle_reminder_message(user_id, conversation, message, state, source_message_id=None,
+                            interaction=None, attachments=None, client_context=None, intent_result=None):
+    _share_guardian_context(state, conversation.get('pet_id'), 'reminder')
+    _pause_soft_stool(state)
+    capabilities = (client_context or {}).get('capabilities') or {}
+    if not isinstance(capabilities, dict) or capabilities.get('cloud_reminders_v1') is not True:
+        state.update(primary_intent='general_pet_qa', current_step=None)
+        state['turn_count'] += 1
+        return {'response_type': 'text', 'reply': '当前页面还不能直接保存这条提醒。请到“宠物 → 我的提醒”设置；这次对话没有新增提醒。',
+                'result': {'intent': 'reminder', 'status': 'client_update_required', 'turn_no': state['turn_count']}}
+    pet = get_cat_profile(user_id, conversation['pet_id']) if conversation.get('pet_id') else None
+    reply = handle_reminder(user_id, conversation, message, state, pet, interaction=interaction)
+    result = {**reply.get('result', {}), 'turn_no': state['turn_count'], 'sequence_no': 1}
+    return {**reply, 'result': result, 'messages': [{**reply, 'result': result}]}
 
 
 def _recognize_guardian_turn(message, state):
@@ -847,12 +926,18 @@ def _recognize_guardian_turn(message, state):
         return {"primary_intent": "symptom_consult", "slots": {}, "_target_flow": "soft_stool",
                 "_soft_extraction": {**literal, "_field_evidence": {key: message for key in literal}}}, None
     target = requested_flow(message)
+    if target == 'reminder' or (state.get('primary_intent') == 'reminder' and state.get('current_step') and not target and not SOFT_STOOL_PAUSE_RE.search(message)):
+        return {'primary_intent': 'reminder', 'slots': {}, '_target_flow': 'reminder'}, None
     if target:
         return {"primary_intent": target, "slots": {}, "_target_flow": target,
+                '_food_mode': 'switch' if re.search(r'换粮|换一|换款|换猫粮|换狗粮|换主粮', message) else 'selection',
                 "_soft_extraction": {**literal, "_field_evidence": {key: message for key in literal}} if nested else None}, None
+    if state.get('primary_intent') == 'food_switch' and re.search(r'(以前|之前|过去|曾经).{0,8}(吃|喂|用)', message):
+        return {'primary_intent': 'food_switch', 'slots': {}, '_target_flow': 'food_switch'}, None
     food_progress = state.get("current_step") or ((state.get("slots") or {}).get(FOOD_FLOW_STATE_KEY) or {}).get("stage") == "choose_target" or re.search(r"选|换|目标|开始|吃|喂|食欲|精神|便便|排便|呕吐|预算|每斤|国产|进口|肠胃|皮肤|泪痕|体重|过敏|推荐|还没|暂时|继续|方案|比较|对比", message)
-    if state.get("primary_intent") == "food_switch" and food_progress and not SOFT_STOOL_TRIGGER_RE.search(message) and not SOFT_STOOL_PAUSE_RE.search(message) and not SOFT_STOOL_OTHER_TOPIC_RE.search(message):
-        return {"primary_intent": "food_switch", "slots": {}, "_target_flow": "food_switch"}, None
+    food_preference = (state.get('current_step') in {'food_goal', 'target_requirement'} or re.search(r'希望|想改善|偏好|友好', message)) and not re.search(r'今天|刚刚|突然|最近|出现|开始拉|又拉', message)
+    if state.get("primary_intent") == "food_switch" and (food_progress or food_preference) and (not SOFT_STOOL_TRIGGER_RE.search(message) or food_preference) and not SOFT_STOOL_PAUSE_RE.search(message) and not SOFT_STOOL_OTHER_TOPIC_RE.search(message):
+        return {"primary_intent": "food_switch", "slots": {'target_requirement': message} if food_preference else {}, "_target_flow": "food_switch"}, None
     if SOFT_STOOL_OTHER_TOPIC_RE.search(message):
         extraction = _fallback_extraction(SOFT_STOOL_PAUSE_RE.sub("", message), {"primary_intent": None})
         return {**extraction, "_target_flow": "general"}, None
@@ -873,6 +958,8 @@ def _recognize_guardian_turn(message, state):
         return {"primary_intent": intent, "slots": {}, "_target_flow": target,
                 "dialogue_action": dialogue.get("action", "continue"), "_soft_extraction": extracted}, None
     intent_state = deepcopy(state)
+    if state.get('primary_intent') == 'reminder' and not state.get('current_step'):
+        intent_state.update(primary_intent=None, current_step=None)
     if nested and nested.get("status") == "answered":
         intent_state.update(primary_intent=None, current_step=None)
     extraction, model = _extract_intent(message, intent_state)
@@ -882,6 +969,8 @@ def _recognize_guardian_turn(message, state):
 GENERAL_STRATEGY = FlowStrategy("general", lambda message, state: True, _handle_context_message)
 GUARDIAN_STRATEGIES = (
     FlowStrategy("soft_stool", lambda message, state: state.get("_turn_decision", {}).get("_target_flow") == "soft_stool", _handle_soft_stool_message),
+    FlowStrategy('reminder', lambda message, state: state.get('_turn_decision', {}).get('_target_flow') == 'reminder', _handle_reminder_message),
+    FlowStrategy('food_selection', lambda message, state: state.get('_turn_decision', {}).get('_target_flow') == 'food_switch' and state.get('_turn_decision', {}).get('_food_mode') == 'selection', _handle_food_selection_message),
     FlowStrategy("food_switch", lambda message, state: state.get("_turn_decision", {}).get("_target_flow") == "food_switch", _handle_food_switch_message),
     GENERAL_STRATEGY,
 )
@@ -901,7 +990,7 @@ def handle_message(user_id: Any, conversation_id: Any, payload: dict[str, Any]) 
                   interaction=interaction,attachments=attachments,
                   result={"turn_no": state["turn_count"] + 1, "sequence_no": 0})
     intent_result = _recognize_guardian_turn(message, state) if message and not interaction and not attachments else None
-    routing_state = {**state, "_turn_decision": intent_result[0] if intent_result else {}}
+    routing_state = {**state, "_turn_decision": intent_result[0] if intent_result else ({'_target_flow': 'reminder'} if interaction and state.get('primary_intent') == 'reminder' else {})}
     strategy = select_strategy(message, routing_state, GUARDIAN_STRATEGIES)
     if strategy.name == "soft_stool" and not conversation.get("pet_id"):
         strategy = GENERAL_STRATEGY

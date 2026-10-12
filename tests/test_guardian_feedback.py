@@ -180,7 +180,7 @@ class GuardianFeedbackTest(unittest.TestCase):
              patch.object(chat, "_extract_intent", side_effect=AssertionError("no routing model")):
             decision, _ = chat._recognize_guardian_turn("帮我推荐一款主粮", self.state())
         selected = workflow.select_strategy("帮我推荐一款主粮", {"_turn_decision": decision}, chat.GUARDIAN_STRATEGIES)
-        self.assertEqual(selected.name, "food_switch")
+        self.assertEqual(selected.name, "food_selection")
 
     def test_semantic_food_switch_reuses_the_slot_model(self):
         text = "有没有更适合它的选择呀"

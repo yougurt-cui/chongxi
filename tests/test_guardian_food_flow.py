@@ -13,6 +13,8 @@ V2 = {**NEW, "catalog_key": "formula:3", "formula_id": 3, "label": "蓝氏猎鸟
 
 class FoodFlowTests(unittest.TestCase):
     def setUp(self):
+        patch.object(food, 'load_nutrition', return_value={}).start()
+        patch.object(food, 'load_risks', return_value={}).start()
         self.state = chat._default_state("c")
         self.state["primary_intent"] = "food_switch"
         self.context = {"pet_profile": {"age_months": None, "food_formula_id": 1},
@@ -141,3 +143,14 @@ class FoodFlowTests(unittest.TestCase):
         self.select()
         with patch.object(chat, "_extract_intent", return_value=({"primary_intent": "general_pet_qa", "slots": {}}, None)):
             self.assertEqual(chat._recognize_guardian_turn("猫为什么会打呼噜", self.state)[0]["_target_flow"], "general")
+
+    def test_selection_analyses_fit_before_transition_plan(self):
+        self.state['slots']['_food_mode'] = 'selection'
+        selected = self.select()
+        self.assertEqual(selected['result']['food_flow']['stage'], 'selected')
+        self.assertNotIn('switch_plan', selected['result'])
+        self.writer.assert_not_called()
+        planned = self.turn(interaction={'slot': 'food_flow_action', 'value': 'switch_plan'})
+        self.assertEqual(planned['result']['food_flow']['stage'], 'planned')
+        self.assertTrue(planned['result']['switch_plan'])
+        self.writer.assert_not_called()

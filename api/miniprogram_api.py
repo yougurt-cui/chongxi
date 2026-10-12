@@ -37,6 +37,7 @@ from services.miniprogram_food_submission_service import (
     list_food_submissions,
 )
 from services.miniprogram_diet_history_service import list_diet_history, add_diet_history, delete_diet_history
+from services import miniprogram_reminder_service as reminders
 from services.soft_stool_assistant_service import (
     find_products as find_soft_stool_products,
     handle_turn as handle_soft_stool_turn,
@@ -80,6 +81,49 @@ from services.miniprogram_idea_service import (
 
 
 miniprogram_api = Blueprint("miniprogram_api", __name__, url_prefix="/api/miniprogram")
+
+
+def _reminder_response(action, status=200):
+    try:
+        return jsonify(action(_current_user_id(required=True))), status
+    except PermissionError as error:
+        return _auth_error_response(error)
+    except LookupError as error:
+        return jsonify({'ok': False, 'error': str(error)}), 404
+    except ValueError as error:
+        return jsonify({'ok': False, 'error': str(error)}), 400
+    except Exception:
+        return jsonify({'ok': False, 'error': '提醒保存或读取失败，请稍后重试'}), 500
+
+
+@miniprogram_api.get('/reminders')
+def list_reminders_endpoint():
+    return _reminder_response(reminders.list_reminders)
+
+
+@miniprogram_api.post('/reminders')
+def create_reminder_endpoint():
+    return _reminder_response(lambda user: reminders.create_reminder(user, _json_payload()), 201)
+
+
+@miniprogram_api.patch('/reminders/<reminder_id>')
+def update_reminder_endpoint(reminder_id):
+    return _reminder_response(lambda user: reminders.update_reminder(user, reminder_id, _json_payload()))
+
+
+@miniprogram_api.delete('/reminders/<reminder_id>')
+def delete_reminder_endpoint(reminder_id):
+    return _reminder_response(lambda user: reminders.delete_reminder(user, reminder_id))
+
+
+@miniprogram_api.post('/reminders/<reminder_id>/complete')
+def complete_reminder_endpoint(reminder_id):
+    return _reminder_response(lambda user: reminders.complete_reminder(user, reminder_id, _json_payload()))
+
+
+@miniprogram_api.put('/cat-profiles/<pet_id>/birthday-reminder')
+def sync_birthday_reminder_endpoint(pet_id):
+    return _reminder_response(lambda user: reminders.sync_birthday_reminder(user, pet_id))
 
 
 def _json_payload() -> dict:
