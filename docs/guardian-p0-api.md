@@ -4,7 +4,7 @@
 
 本文覆盖本次 P0 新增与调整的接口，不是整个小程序的全部接口清单。JSON 示例中的名称、ID、评分和时间为结构示例，不代表真实推荐产品。
 
-当前 `fix/guardian-optional-age` 分支将宠物年龄改为选填，未填写也可返回候选；此调整尚未发布。候选继续使用现有 `cautions` 展示适用阶段和未按年龄筛选的说明，HTTP 结构不变。选粮与换粮衔接核对见 [流程融合说明](guardian-food-flow-integration.md)。
+后端 PR #4 将宠物年龄改为选填，未填写也可返回候选；候选继续使用现有 `cautions` 展示适用阶段和未按年龄筛选的说明。新增换粮步骤复用既有聊天 API 和选项，见 [流程融合说明](guardian-food-flow-integration.md)。
 
 ## 1. 通用约定
 
@@ -409,7 +409,24 @@
 
 服务端同一事务中结束旧当前记录、归档旧粮并建立新当前粮观察记录。没有实际变化则不重复建历史；新记录从服务端观察时间起记录，不推测更早的开始时间。旧档案从未建立历史时，归档旧粮不填未知开始日期。
 
-推荐、上传食品、聊天表达换粮意向都不会调用这个更新。前端需要确认用户已开始吃，取消或账号/宠物变更时不提交；接口自身无法判断用户是否真的吃过。
+推荐、上传食品、聊天表达换粮意向都不会调用这个更新。前端确认用户已开始吃后可以 PATCH；管家内也可明确回复“已经开始吃这款”，后端调用同一档案服务。取消或账号/宠物变更时不提交；接口自身无法判断用户是否真的吃过。
+
+### 管家内选粮与换粮（PR #4）
+
+沿用 `POST /api/miniprogram/chat/conversations/{id}/messages`：
+
+| 用户操作 | 请求 | 返回 |
+| --- | --- | --- |
+| 选推荐中的第一款 | `{"message":"选第一款"}` | 目标确定后 `result_card`，仅生成计划 |
+| 指定目标粮 | `{"message":"换成蓝氏猎鸟乳鸽"}` | 多版本返回 `text_or_select`，`interaction.slot=target_food` |
+| 确认版本 | `{"interaction":{"slot":"target_food","value":"formula:5"}}` | 核验实时目录后返回对比及安排 |
+| 实际开始吃 | `{"message":"已经开始吃这款"}` | 已绑定宠物才更新档案、归档原粮；重复确认幂等 |
+| 完成/反馈 | `{"message":"已经换好了"}` / `{"message":"食欲正常"}` | 保存完成状态及会话反馈 |
+| 返回推荐 | `{"message":"重新推荐"}` | 清除目标计划，保留咨询和历史上下文 |
+
+新增 `result.food_flow` 包含 `stage`（`selection/choose_target/planned/started/completed`）、经核验的 `target`、`original_food`、确认后 `start_date:null`、反馈后 `latest_feedback:{text,turn}`。计划回复附 `food_comparison`（真实配料或 null）和 `switch_plan:{steps,confirmation}`。`food_candidates` 在换粮方案回复为空；方案本身不视为 ready 的推荐卡。
+
+原 `message.content`、`messages`、`response_type`、`interaction.options` 格式保持兼容。客户端不需要新增 action，文字能完成所有步骤。年龄为空不会阻断；具体目标仍遵守现有主粮类型、配料、适用阶段和过敏条件。原粮数据不足会说明对比未完成。
 
 ## 9. 前端联调顺序
 

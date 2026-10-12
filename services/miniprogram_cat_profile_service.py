@@ -456,7 +456,7 @@ def get_cat_profile(user_id: Any, profile_id: Any) -> dict[str, Any]:
     return _serialize(row)
 
 
-def update_cat_profile(user_id: Any, profile_id: Any, payload: dict[str, Any]) -> dict[str, Any]:
+def update_cat_profile(user_id: Any, profile_id: Any, payload: dict[str, Any], *, expected_food: dict[str, Any] | None = None) -> dict[str, Any]:
     cleaned_user_id = _clean_user_id(user_id)
     cleaned_profile_id = _clean_profile_id(profile_id)
     data = _normalize_payload({**payload, "user_id": cleaned_user_id}, partial=True)
@@ -515,6 +515,9 @@ def update_cat_profile(user_id: Any, profile_id: Any, payload: dict[str, Any]) -
             previous = cursor.fetchone()
             if not previous:
                 raise LookupError("猫咪档案不存在")
+            if expected_food is not None and any((previous.get(key) or None) != (expected_food.get(key) or None)
+                                                 for key in ("food_brand", "food_product", "food_formula_id")):
+                raise ValueError("当前口粮档案已经变化，请重新确认换粮计划")
             if diet_changed:
                 # Free-text edits must not keep a formula ID belonging to the previous food.
                 names_changed = any(k in data and data[k] != (previous.get(k) or "") for k in ("food_brand", "food_product"))
