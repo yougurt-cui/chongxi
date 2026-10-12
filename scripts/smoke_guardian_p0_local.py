@@ -141,6 +141,15 @@ def run():
                 assert result['food_candidates'][0]['fit_score'] == 85
                 assert result['food_candidates'][0]['formula_id'] == fixture['formula_id']
                 assert profiles.get_cat_profile(users[0][0], pet['id'])['food_product'] == 'B'
+                request('PATCH', '/cat-profiles/' + pet['id'], {'age_months': None})
+                body = request('POST', messages, {'message': '继续推荐主粮'})
+                assert body['message']['result']['recommendation']['status'] == 'ready'
+                candidate = body['message']['result']['food_candidates'][0]
+                assert candidate['formula_id'] == fixture['formula_id']
+                assert '未按年龄筛选' in candidate['cautions'][-1]
+                assert profiles.get_cat_profile(users[0][0], pet['id'])['age_months'] is None
+                assert profiles.get_cat_profile(users[0][0], pet['id'])['food_product'] == 'B'
+                print('PASS missing age still returns ranked food through real chat API')
             # Only an explicit profile update makes a recommendation into confirmed current feeding.
             with patch.object(profiles, '_resolve_food_formula', return_value={'standard_brand_name': '候选牌', 'display_name': 'C'}):
                 request('PATCH', '/cat-profiles/' + pet['id'], {'diet': {'product_id': 999997, 'formula_id': 999998}})

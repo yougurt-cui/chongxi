@@ -47,23 +47,22 @@ def explicit_preferences(message):
 
 
 def eligible_food(item, pet, slots):
-    """Unknown type/stage/ingredients do not establish suitability for this pet."""
+    """Age is optional; known ages still constrain catalogue life-stage matches."""
     kind = str(item.get('product_type') or '').strip().lower()
     if kind not in {'dry', 'dry_food', 'dry food', '主粮', '干粮', '膨化粮', '全价猫粮', '猫粮', '烘焙粮', '冻干主粮'}:
         return False
     stage = str(item.get('life_stage') or '').strip().lower()
     months = _number(pet.get('age_months'))
-    if months is None:
+    all_stages = {'all', 'all_stages', 'all life stages', '全阶段', '全年龄', '全龄'}
+    kitten = {'kitten', '幼猫', '幼年', '幼猫期'}
+    adult = {'adult', '成猫', '成年', '成猫期'}
+    senior = {'senior', '老年猫', '老年', '老年期'}
+    if stage not in all_stages | kitten | adult | senior:
         return False
-    if stage in {'all', 'all_stages', 'all life stages', '全阶段', '全年龄', '全龄'}:
-        pass
-    elif months < 12 and stage in {'kitten', '幼猫', '幼年', '幼猫期'}:
-        pass
-    elif 12 <= months < 84 and stage in {'adult', '成猫', '成年', '成猫期'}:
-        pass
-    elif months >= 84 and stage in {'senior', '老年猫', '老年', '老年期'}:
-        pass
-    else:
+    if months is not None and not (stage in all_stages
+            or months < 12 and stage in kitten
+            or 12 <= months < 84 and stage in adult
+            or months >= 84 and stage in senior):
         return False
     ingredients = str(item.get('ingredient_composition') or '')
     if not ingredients:
@@ -126,7 +125,7 @@ def recommend_guardian_foods(pet, slots, history=(), *, limit=3):
                        and i['formula_id'] not in current_ids
                        and (i.get('brand'), i.get('product_name')) != current_name}
             if not catalog:
-                return {'status': 'no_eligible_food', 'items': [], 'note': '暂未找到适用阶段、配料和偏好资料齐全的候选，可补充年龄或比较具体粮款。'}
+                return {'status': 'no_eligible_food', 'items': [], 'note': '暂未找到适用阶段、配料和偏好资料齐全的候选，可调整偏好或比较具体粮款。'}
             pool = engine.load_product_pool(db)
             if 'formula_id' not in pool.columns:
                 return unavailable
@@ -162,7 +161,13 @@ def recommend_guardian_foods(pet, slots, history=(), *, limit=3):
                     continue
                 item = catalog[int(raw['formula_id'])]
                 items.append({k: item.get(k) for k in ('catalog_key', 'formula_id', 'product_id', 'brand', 'product_name', 'label', 'price', 'price_source', 'price_min_per_jin', 'price_max_per_jin', 'life_stage')})
-                items[-1].update(fit_score=raw['fit_score'], strengths=raw.get('strengths') or [], cautions=raw.get('cautions') or [],
+                cautions = list(raw.get('cautions') or [])
+                if _number(pet.get('age_months')) is None:
+                    stage = str(item.get('life_stage') or '')
+                    stage_label = {'kitten': '幼猫', 'adult': '成猫', 'senior': '老年猫',
+                                   'all': '全阶段', 'all_stages': '全阶段', 'all life stages': '全阶段'}.get(stage.lower(), stage)
+                    cautions.append('适用阶段：' + stage_label + '；年龄未填写，本次未按年龄筛选。')
+                items[-1].update(fit_score=raw['fit_score'], strengths=raw.get('strengths') or [], cautions=cautions,
                                  profile_code=raw.get('matched_profile_code'), profile_name=raw.get('matched_profile_name'))
             return {'status': 'ready' if items else 'no_eligible_food', 'items': items,
                     'note': '候选来自当前配方与评分库，匹配分仅作参考；价格是品牌区间参考，不是实时售价。同期咨询不作为病因或负面吃粮反馈。',

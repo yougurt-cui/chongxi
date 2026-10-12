@@ -146,6 +146,30 @@ class RecommendationTest(unittest.TestCase):
         self.assertEqual(recommendations.recommend_guardian_foods({'animal_type': 'dog'}, {})['items'], [])
         self.assertEqual(recommendations.recommend_guardian_foods({**self.pet, 'diseases': ['肾病']}, {})['status'], 'medical_diet_required')
 
+    def test_missing_age_does_not_block_known_stage_candidates(self):
+        pet = {**self.pet, 'age_months': None}
+        for stage in ('kitten', 'adult', 'senior', 'all_stages'):
+            self.assertTrue(recommendations.eligible_food({**self.food, 'life_stage': stage}, pet, {}))
+        self.assertTrue(recommendations.eligible_food(self.food, {'animal_type': 'cat'}, {}))
+        self.assertFalse(recommendations.eligible_food({**self.food, 'life_stage': None}, pet, {}))
+        self.assertFalse(recommendations.eligible_food(self.food, pet, {'budget_per_jin': 50}))
+        self.assertFalse(recommendations.eligible_food(self.food, {**pet, 'allergies': ['鸡肉']}, {}))
+
+    def test_missing_age_returns_ranked_candidates_without_inventing_age(self):
+        import pandas as pd
+        from consumer_apps import product_recommendation_engine as engine
+        pool = pd.DataFrame([{'formula_id': 1, 'product_name': 'B', 'brand': '乙', 'protein_quality_score': 80}])
+        profiles = {'digest': {'profile_code': 'digest', 'symptom_type': 'soft_stool', 'weights': {'protein_quality': 1}}}
+        pet = {**self.pet, 'age_months': None}
+        with patch('sqlalchemy.create_engine', return_value=MagicMock()), patch.object(engine, 'load_recommendation_profiles', return_value=profiles), patch.object(engine, 'load_product_pool', return_value=pool), patch.object(recommendations, 'list_standardized_product_options', return_value={'items': [self.food]}):
+            result = recommendations.recommend_guardian_foods(pet, {'switch_reason': 'digestive'})
+        self.assertEqual(result['status'], 'ready')
+        self.assertEqual(result['items'][0]['formula_id'], 1)
+        self.assertEqual(result['items'][0]['fit_score'], 80)
+        self.assertIn('未按年龄筛选', result['items'][0]['cautions'][-1])
+        self.assertIn('成猫', result['items'][0]['cautions'][-1])
+        self.assertIsNone(pet['age_months'])
+
     def test_only_a_confirmed_profile_change_refreshes_soft_stool_baseline(self):
         from services import soft_stool_assistant_service as soft
         state = {'pet_id': 'p1', 'turn': 1, 'context': {'profile_diet_signature': ['甲', 'A', 1], 'baseline_loaded': True, 'diet_override': {'baseline_food': 'A'}},
