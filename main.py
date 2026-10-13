@@ -46,6 +46,7 @@ try:
     from .api.demand_cross_analysis_api import demand_cross_analysis_api
     from .api.disease_representative_api import disease_representative_api
     from .api.pet_content_api import pet_content_api
+    from .api.product_portrait_api import product_portrait_api
 except ImportError:
     from api.consumer_api import consumer_api
     from api.business_api import business_api
@@ -68,6 +69,7 @@ except ImportError:
     from api.demand_cross_analysis_api import demand_cross_analysis_api
     from api.disease_representative_api import disease_representative_api
     from api.pet_content_api import pet_content_api
+    from api.product_portrait_api import product_portrait_api
 
 from services import cat_food_task_service as task_store
 
@@ -1954,6 +1956,7 @@ def create_app() -> Flask:
     flask_app.register_blueprint(demand_cross_analysis_api)
     flask_app.register_blueprint(disease_representative_api)
     flask_app.register_blueprint(pet_content_api)
+    flask_app.register_blueprint(product_portrait_api)
 
     @flask_app.get("/health")
     def health() -> tuple[dict, int]:

@@ -101,6 +101,40 @@ class DietHistoryTest(unittest.TestCase):
         self.assertNotIn('started', first.kwargs)
         self.assertFalse(first.kwargs['current'])
 
+    def test_history_food_key_ignores_display_spacing_and_punctuation(self):
+        self.assertEqual(diets._food_key(' 鲜朗 ', '烘焙-全价 猫粮'), ('鲜朗', '烘焙全价猫粮'))
+
+    def test_import_reuses_matching_profile_history(self):
+        conn, cursor = MagicMock(), MagicMock()
+        conn.__enter__.return_value = conn
+        conn.cursor.return_value.__enter__.return_value = cursor
+        cursor.fetchone.side_effect = [{'id': 'pet-row'}, None]
+        cursor.fetchall.return_value = [{
+            'id': 'profile-history', 'brand': '鲜朗', 'product': '烘焙全价猫粮',
+            'source': 'profile_confirmed', 'status': 'active', 'is_current': 0,
+            'started_at': None, 'ended_at': datetime(2026, 10, 13), 'note': '',
+        }]
+        with patch.object(diets, 'init_diet_history_table'), patch.object(diets, '_connect', return_value=conn), patch.object(diets, '_insert') as insert:
+            result = diets.add_diet_history('u1', 'p1', {
+                'brand': '鲜朗', 'product': '烘焙全价猫粮',
+                'note': '本机旧记录，吃粮日期待确认', 'legacy_record_id': 'local-1',
+            })
+        insert.assert_not_called()
+        self.assertEqual(result, {'ok': True, 'id': 'profile-history', 'deduplicated': True})
+        self.assertTrue(any('UPDATE miniprogram_pet_diet_history SET note=%s' in call.args[0]
+                            for call in cursor.execute.call_args_list))
+
+    def test_different_history_food_still_inserts(self):
+        conn, cursor = MagicMock(), MagicMock()
+        conn.__enter__.return_value = conn
+        conn.cursor.return_value.__enter__.return_value = cursor
+        cursor.fetchone.return_value = {'id': 'pet-row'}
+        cursor.fetchall.return_value = []
+        with patch.object(diets, 'init_diet_history_table'), patch.object(diets, '_connect', return_value=conn), patch.object(diets, '_insert', return_value='new-id') as insert:
+            result = diets.add_diet_history('u1', 'p1', {'brand': '皇家', 'product': 'EP42'})
+        insert.assert_called_once()
+        self.assertEqual(result, {'ok': True, 'id': 'new-id', 'deduplicated': False})
+
     def test_consultation_frequency_counts_conversations_not_short_answers(self):
         messages = [
             {'id': 'm1', 'conversation_id': 'c1', 'content': '最近软便怎么照顾', 'created_at': datetime(2026, 9, 1)},

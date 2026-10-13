@@ -114,6 +114,47 @@ def normalize_history(payload):
             'ended': end + timedelta(days=1) if end else None, 'note': note}
 
 
+def _food_key(brand, product):
+    """Normalize display-only differences without guessing brand/product aliases."""
+    compact = lambda value: re.sub(r'[^a-z0-9\u4e00-\u9fff]+', '', str(value or '').lower())
+    return compact(brand), compact(product)
+
+
+def _find_duplicate_history(cursor, user_id, pet_id, data, replay_id=None):
+    # A repeated legacy import keeps its original semantics, including a prior
+    # soft deletion. It must not be restored or redirected to another record.
+    if replay_id:
+        cursor.execute(f"SELECT * FROM {TABLE} WHERE id=%s AND user_id=%s AND pet_id=%s FOR UPDATE",
+                       (replay_id, user_id, pet_id))
+        replay = cursor.fetchone()
+        if replay:
+            return replay
+    cursor.execute(f'''SELECT * FROM {TABLE}
+        WHERE user_id=%s AND pet_id=%s AND status='active'
+        ORDER BY is_current DESC,
+                 CASE source WHEN 'profile_confirmed' THEN 0 WHEN 'profile_snapshot' THEN 1 ELSE 2 END,
+                 observed_at DESC,id
+        FOR UPDATE''', (user_id, pet_id))
+    wanted = _food_key(data.get('brand'), data.get('product'))
+    return next((row for row in cursor.fetchall()
+                 if wanted == _food_key(row.get('brand'), row.get('product'))), None)
+
+
+def _merge_missing_history(cursor, row, data):
+    """Supplement a non-current record; never overwrite confirmed information."""
+    if row.get('status') != 'active' or row.get('is_current'):
+        return
+    updates, params = [], []
+    for column, incoming in (('started_at', data.get('started')), ('ended_at', data.get('ended')),
+                             ('note', data.get('note'))):
+        if not row.get(column) and incoming:
+            updates.append(f'{column}=%s')
+            params.append(incoming)
+    if updates:
+        params.append(row['id'])
+        cursor.execute(f"UPDATE {TABLE} SET {','.join(updates)} WHERE id=%s", params)
+
+
 def add_diet_history(user_id, pet_id, payload):
     data = normalize_history(payload)
     legacy_id = str(payload.get('legacy_record_id') or '').strip()
@@ -124,10 +165,15 @@ def add_diet_history(user_id, pet_id, payload):
     with _connect() as conn:
         with conn.cursor() as cursor:
             _owned_pet(cursor, user_id, pet_id, lock=True)
-            record_id = _insert(cursor, user_id, pet_id, data, source='user_history', current=False,
-                                started=data['started'], ended=data['ended'], note=data['note'], record_id=replay_id)
+            duplicate = _find_duplicate_history(cursor, user_id, pet_id, data, replay_id)
+            if duplicate:
+                record_id = duplicate['id']
+                _merge_missing_history(cursor, duplicate, data)
+            else:
+                record_id = _insert(cursor, user_id, pet_id, data, source='user_history', current=False,
+                                    started=data['started'], ended=data['ended'], note=data['note'], record_id=replay_id)
         conn.commit()
-    return {'ok': True, 'id': record_id}
+    return {'ok': True, 'id': record_id, 'deduplicated': bool(duplicate)}
 
 
 def delete_diet_history(user_id, pet_id, record_id):
