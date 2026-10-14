@@ -62,6 +62,112 @@ class MiniProgramChatServiceTest(unittest.TestCase):
         flow = service._evaluate_flow(state, {"current_food": {"product_name": "BK34"}})
         self.assertEqual(flow["status"], "ready_to_answer")
 
+    def test_current_food_analysis_uses_saved_formula_without_reasking_name(self):
+        state = service._default_state("c1")
+        context = {
+            "food_submission": None,
+            "current_food": {
+                "brand": "渴望", "product_name": "原始猎食原味",
+                "product_id": 16, "formula_id": 15, "catalog_key": "formula:15",
+            },
+            "diet_history": [{"brand": "皇家", "product": "肠道处方粮", "formula_id": 304, "is_current": False}],
+            "food_list": [], "recent_daily_records": [], "pet_profile": {}, "food_candidates": [],
+        }
+        analysis = {"product": {"formula_id": 15}, "ingredient_analysis": {"groups": []}}
+        with patch.object(service, "_build_context", return_value=context), \
+             patch.object(service, "_food_analysis_by_formula", return_value=analysis) as load, \
+             patch.object(service, "_generate_answer", return_value=("当前粮分析结果", "test-model")) as generate:
+            result = service._handle_context_message(
+                "u1", {"pet_id": "p1"}, "分析一下我现在吃的粮", state,
+                intent_result=({"primary_intent": "food_analysis", "secondary_intent": None, "slots": {}}, None),
+            )
+        self.assertEqual(result["response_type"], "result_card")
+        self.assertEqual(result["reply"], "当前粮分析结果")
+        self.assertEqual(state["slots"]["food_name"], "渴望 原始猎食原味")
+        self.assertEqual(state["slots"]["catalog_key"], "formula:15")
+        self.assertIsNone(state["current_step"])
+        load.assert_called_once_with(15, 15)
+        self.assertEqual(generate.call_args.args[2]["food_analysis"], analysis)
+        self.assertEqual(generate.call_args.args[2]["food_analysis_scope"], "current")
+
+    def test_history_food_analysis_uses_every_saved_formula_and_keeps_unlinked_records(self):
+        state = service._default_state("c1")
+        context = {
+            "food_submission": None,
+            "current_food": {"brand": "渴望", "product_name": "原始猎食原味", "formula_id": 15},
+            "diet_history": [
+                {"brand": "渴望", "product": "原始猎食原味", "formula_id": 15, "is_current": True},
+                {"brand": "皇家", "product": "肠道处方粮", "formula_id": 304, "is_current": False},
+                {"brand": "鲜朗", "product": "烘焙全价猫粮", "formula_id": None, "is_current": False},
+            ],
+            "food_list": [], "recent_daily_records": [], "pet_profile": {}, "food_candidates": [],
+        }
+        history_analysis = {"product": {"formula_id": 304}, "ingredient_analysis": {"groups": []}}
+        with patch.object(service, "_build_context", return_value=context), \
+             patch.object(service, "_food_analysis_by_formula", return_value=history_analysis) as load, \
+             patch.object(service, "_generate_answer", return_value=("历史粮分析结果", "test-model")) as generate:
+            result = service._handle_context_message(
+                "u1", {"pet_id": "p1"}, "分析一下我历史吃过的粮", state,
+                intent_result=({"primary_intent": "food_analysis", "secondary_intent": None, "slots": {}}, None),
+            )
+        self.assertEqual(result["response_type"], "result_card")
+        self.assertEqual(result["reply"], "历史粮分析结果")
+        self.assertEqual(state["slots"]["food_name"], "历史口粮")
+        load.assert_called_once_with(304, 15)
+        analyses = generate.call_args.args[2]["food_history_analyses"]
+        self.assertEqual([item["analysis_status"] for item in analyses], ["available", "unavailable"])
+        self.assertEqual(analyses[0]["diet_record"]["formula_id"], 304)
+        self.assertIsNone(analyses[1]["diet_record"]["formula_id"])
+        self.assertEqual(generate.call_args.args[2]["food_analysis_scope"], "history")
+
+    def test_current_and_history_food_comparison_loads_both_sides(self):
+        state = service._default_state("c1")
+        context = {
+            "food_submission": None,
+            "current_food": {
+                "brand": "渴望", "product_name": "原始猎食原味",
+                "product_id": 16, "formula_id": 15, "catalog_key": "formula:15",
+            },
+            "diet_history": [
+                {"brand": "渴望", "product": "原始猎食原味", "formula_id": 15, "is_current": True},
+                {"brand": "皇家", "product": "肠道处方粮", "formula_id": 304, "is_current": False},
+            ],
+            "food_list": [], "recent_daily_records": [], "pet_profile": {}, "food_candidates": [],
+        }
+        current_analysis = {"product": {"formula_id": 15}}
+        history_analysis = {"product": {"formula_id": 304}, "portrait_comparison": {
+            "status": "partial",
+            "common": [{"text": "两款粮的益生元支持结构接近（1.36 / 1.26）"}],
+            "complements": [],
+            "shortcomings": [{"text": "目标粮的脂肪负担比原粮更高"}],
+            "missing_dimensions": ["纤维支持"],
+            "note": "画像比较描述配方特点，不代表实际健康效果；互补不表示建议混喂。",
+        }}
+        with patch.object(service, "_build_context", return_value=context), \
+             patch.object(service, "_food_analysis_by_formula", side_effect=[current_analysis, history_analysis]) as load, \
+             patch.object(service, "_generate_answer", return_value=("对比结果", "test-model")) as generate:
+            result = service._handle_context_message(
+                "u1", {"pet_id": "p1"}, "对比一下我现在吃的粮和历史粮", state,
+                intent_result=({"primary_intent": "food_analysis", "secondary_intent": None, "slots": {}}, None),
+            )
+        self.assertEqual(result["response_type"], "result_card")
+        self.assertIn("渴望 原始猎食原味 vs 皇家 肠道处方粮", result["reply"])
+        self.assertIn("共同特点", result["reply"])
+        self.assertIn("潜在短板", result["reply"])
+        self.assertIn("画像缺项：纤维支持", result["reply"])
+        self.assertNotIn("目标粮", result["reply"])
+        self.assertNotIn("原粮", result["reply"])
+        self.assertEqual(state["slots"]["food_name"], "当前粮与历史口粮")
+        self.assertEqual(state["slots"]["catalog_key"], "formula:15")
+        self.assertEqual(load.call_args_list[0].args, (15, 15))
+        self.assertEqual(load.call_args_list[1].args, (304, 15))
+        generate.assert_not_called()
+        self.assertEqual(context["food_analysis_scope"], "current_vs_history")
+        self.assertEqual(context["food_analysis"]["product"]["formula_id"], 15)
+        self.assertEqual(
+            context["food_history_analyses"][0]["food_analysis"]["product"]["formula_id"], 304,
+        )
+
     def test_model_json_accepts_fenced_output(self):
         result = service._parse_model_json('```json\n{"primary_intent":"food_switch"}\n```')
         self.assertEqual(result["primary_intent"], "food_switch")

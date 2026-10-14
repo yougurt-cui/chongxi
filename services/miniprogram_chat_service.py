@@ -25,7 +25,7 @@ from services.guardian_food_flow_service import handle_food_flow, STATE_KEY as F
 from services.guardian_food_goals import GOALS, goals_in_text, goal_options
 from services.guardian_food_analysis_service import recommendation_text
 from services.guardian_food_scenario import (extract_health, build_scenario, scenario_question, STATES, STAGES)
-from services.guardian_product_portrait_service import load_product_portraits, compare_portraits
+from services.guardian_product_portrait_service import load_product_portraits, compare_portraits, portrait_comparison_text
 from services.guardian_reminder_flow_service import handle_reminder
 from services.soft_stool_assistant_service import handle_turn as handle_soft_stool_turn
 from services.guardian_workflow import FlowStrategy, select_strategy, requested_flow, build_handoff
@@ -570,6 +570,100 @@ def _normalize_daily_records(value: Any) -> list[dict[str, Any]]:
     return result
 
 
+CURRENT_FOOD_ANALYSIS_RE = re.compile(r'(?:当前|现在|目前|正在).{0,8}(?:吃|喂|用)?.{0,6}(?:粮|主粮|食品)')
+HISTORY_FOOD_ANALYSIS_RE = re.compile(r'(?:历史|以前|之前|过去|吃过|喂过).{0,8}(?:粮|主粮|食品)')
+FOOD_COMPARISON_RE = re.compile(r'对比|比较|区别|差异|哪个好|哪款好|更适合')
+
+
+def _food_analysis_by_formula(formula_id: Any, current_formula_id: Any = None) -> dict[str, Any] | None:
+    """Load one verified standard formula and its portrait without name matching."""
+    try:
+        formula_id = int(formula_id)
+        analysis = get_catalog_product_ingredients({'catalog_key': f'formula:{formula_id}'})
+        portraits = load_product_portraits([formula_id, current_formula_id])
+        analysis['product_portrait'] = portraits.get(formula_id)
+        if current_formula_id and int(current_formula_id) != formula_id:
+            analysis['portrait_comparison'] = compare_portraits(
+                portraits.get(int(current_formula_id)), portraits.get(formula_id))
+        return analysis
+    except Exception:
+        return None
+
+
+def _prepare_saved_food_analysis(message: str, state: dict[str, Any], context: dict[str, Any]) -> None:
+    """Resolve references such as 'current food' and 'foods eaten before' from saved pet data."""
+    if state.get('primary_intent') != 'food_analysis':
+        return
+    slots = state.setdefault('slots', {})
+    current = context.get('current_food') or {}
+    history = context.get('diet_history') or []
+    current_formula_id = current.get('formula_id')
+    mentions_current = bool(CURRENT_FOOD_ANALYSIS_RE.search(message))
+    mentions_history = bool(HISTORY_FOOD_ANALYSIS_RE.search(message))
+
+    if mentions_current and mentions_history and FOOD_COMPARISON_RE.search(message):
+        records = [item for item in history if not item.get('is_current')]
+        context['food_analysis_scope'] = 'current_vs_history'
+        context['food_analysis'] = (
+            _food_analysis_by_formula(current_formula_id, current_formula_id)
+            if current_formula_id else None
+        )
+        context['food_history_analyses'] = []
+        for item in records[:10]:
+            analysis = _food_analysis_by_formula(item.get('formula_id'), current_formula_id) if item.get('formula_id') else None
+            context['food_history_analyses'].append({
+                'diet_record': item,
+                'analysis_status': 'available' if analysis else 'unavailable',
+                'food_analysis': analysis,
+            })
+        if current and records:
+            slots['food_name'] = '当前粮与历史口粮'
+        if current_formula_id:
+            slots['catalog_key'] = f'formula:{int(current_formula_id)}'
+        return
+
+    if mentions_history:
+        records = [item for item in history if not item.get('is_current')]
+        context['food_analysis_scope'] = 'history'
+        context['food_history_analyses'] = []
+        for item in records[:10]:
+            analysis = _food_analysis_by_formula(item.get('formula_id'), current_formula_id) if item.get('formula_id') else None
+            context['food_history_analyses'].append({
+                'diet_record': item,
+                'analysis_status': 'available' if analysis else 'unavailable',
+                'food_analysis': analysis,
+            })
+        if records:
+            slots['food_name'] = '历史口粮'
+        return
+
+    if mentions_current and current:
+        context['food_analysis_scope'] = 'current'
+        slots['food_name'] = ' '.join(filter(None, (current.get('brand'), current.get('product_name'))))
+        if current_formula_id:
+            slots['catalog_key'] = f'formula:{int(current_formula_id)}'
+            context['food_analysis'] = _food_analysis_by_formula(current_formula_id, current_formula_id)
+
+
+def _saved_food_comparison_text(context: dict[str, Any]) -> str | None:
+    """Render verified portrait comparisons without allowing the model to invent missing dimensions."""
+    if context.get('food_analysis_scope') != 'current_vs_history':
+        return None
+    current = context.get('current_food') or {}
+    current_name = ' '.join(filter(None, (current.get('brand'), current.get('product_name')))) or '当前粮'
+    sections = []
+    for item in context.get('food_history_analyses') or []:
+        record = item.get('diet_record') or {}
+        history_name = ' '.join(filter(None, (record.get('brand'), record.get('product') or record.get('product_name')))) or '历史粮'
+        comparison = (item.get('food_analysis') or {}).get('portrait_comparison')
+        if not comparison:
+            sections.append(f'{history_name}：缺少有效的当前版本画像，暂不能与{current_name}比较。')
+            continue
+        detail = portrait_comparison_text(comparison).replace('目标粮', '历史粮').replace('原粮', '当前粮')
+        sections.append(f'{current_name} vs {history_name}\n{detail}')
+    return '\n\n'.join(sections) if sections else '没有可用于对比的历史口粮记录。'
+
+
 def _build_context(user_id: str, conversation: dict[str, Any], state: dict[str, Any],
                    attachments: list[dict[str, Any]], client_context: dict[str, Any] | None = None) -> dict[str, Any]:
     pet = get_cat_profile(user_id, conversation["pet_id"]) if conversation.get("pet_id") else None
@@ -596,7 +690,11 @@ def _build_context(user_id: str, conversation: dict[str, Any], state: dict[str, 
                 pipeline.setdefault("slots", {}).pop("current_product", None)
                 pipeline.setdefault("slot_status", {}).pop("current_product", None)
         state["slots"]["_profile_diet_signature"] = signature
-        context["current_food"] = {"brand":pet.get("food_brand"),"product_name":pet.get("food_product")}
+        context["current_food"] = {
+            "brand": pet.get("food_brand"), "product_name": pet.get("food_product"),
+            "product_id": pet.get("food_product_id"), "formula_id": pet.get("food_formula_id"),
+            "catalog_key": f"formula:{pet['food_formula_id']}" if pet.get("food_formula_id") else None,
+        }
         state["slots"]["profile_current_food"] = " ".join(filter(None,[pet.get("food_brand"),pet.get("food_product")]))
         if not state["slots"].get("current_food"):
             state["slots"]["current_food"] = state["slots"]["profile_current_food"]
@@ -720,6 +818,9 @@ def _generate_answer(message: str, state: dict[str, Any], context: dict[str, Any
                     "回答前综合pet_profile、current_food、food_list和recent_daily_records；明确区分没有记录与数值为零，"
                     "guardian_context含前一个场景的事实与来源，切换选粮时沿用这些信息，不重复开展症状问诊。"
                     "diet_history是已确认的宠物吃粮记录；food_list仅为用户上传的产品，不代表吃过。"
+                    "food_analysis_scope为current时直接分析档案当前粮，不得再追问粮名；为history时逐条使用food_history_analyses；"
+                    "为current_vs_history时必须把food_analysis中的当前粮与food_history_analyses中的历史粮逐项对比，明确说出产品名、共同点、差异和取舍，不得漏掉任一侧。"
+                    "food_history_analyses中analysis_status=unavailable只表示该条缺少可核验的配方分析，不得忽略该条已确认吃粮记录。"
                     "health_topics只表示同期咨询话题，不能推断疾病或粮食导致症状。日期未知不推断，资料不可用不当作没有。"
                     "只有food_candidates中已有且有适用依据的产品才能作为具体候选；没有候选就给筛选方向，不编造品牌推荐。"
                     "宠物年龄是可选信息，未填写年龄也可展示已有候选，不要求先补年龄才能推荐；不要猜测年龄或声称年龄适配已验证，沿用候选中的适用阶段说明。"
@@ -796,6 +897,7 @@ def _handle_context_message(user_id, conversation, message, state, source_messag
     if attachments and not state.get("primary_intent"):
         state["primary_intent"] = "ingredient_analysis"
     context = _build_context(user_id, conversation, state, attachments, client_context)
+    _prepare_saved_food_analysis(message, state, context)
     if state.get("primary_intent") == "food_switch":
         state["slots"].update(explicit_preferences(message))
         pending = state.get('current_step')
@@ -926,6 +1028,8 @@ def _handle_context_message(user_id, conversation, message, state, source_messag
             recommendation = context.get('recommendation') or {}
             if state.get('primary_intent') == 'food_switch' and not context.get('food_candidates'):
                 text, answer_model = recommendation.get('note') or '暂未找到可核验的候选。', None
+            elif comparison_text := _saved_food_comparison_text(context):
+                text, answer_model = comparison_text, None
             else:
                 text, answer_model = _generate_answer(message,state,context,flow["status"]=="answer_with_limited_info")
             if state.get("primary_intent") == "food_switch" and context.get("food_candidates"):
