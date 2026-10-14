@@ -125,22 +125,27 @@ def run():
             assert '配料表' in body['message']['content']
             print('PASS source-only OCR serialization and chat analysis guard')
 
-            # Use real ranking math with bounded offline catalogue/profile fixtures.
-            import pandas as pd
-            from consumer_apps import product_recommendation_engine as engine
+            # Use real scenario/ranking math with bounded offline source fixtures.
             from services import guardian_recommendation_service as recommendation
+            from services.product_portrait_summary_service import build_portrait
             fixture = {'formula_id': 999998, 'product_id': 999997, 'catalog_key': 'formula:999998', 'brand': '候选牌', 'product_name': 'C',
                        'product_type': '干粮', 'life_stage': 'adult', 'ingredient_composition': '鸭肉，米', 'price': 40, 'price_max_per_jin': 50}
-            pool = pd.DataFrame([{'formula_id': 999998, 'product_name': 'C', 'brand': '候选牌', 'protein_quality_score': 85}])
-            targets = {'p': {'profile_code': 'p', 'profile_name': '肠胃参考', 'symptom_type': 'soft_stool', 'weights': {'protein_quality': 1}}}
-            with patch('sqlalchemy.create_engine') as create_engine, patch.object(engine, 'load_recommendation_profiles', return_value=targets), patch.object(engine, 'load_product_pool', return_value=pool), patch.object(recommendation, 'list_standardized_product_options', return_value={'items': [fixture]}):
+            original = {**fixture, 'formula_id': 999996, 'product_id': 999995, 'catalog_key': 'formula:999996', 'brand': '乙牌', 'product_name': 'B'}
+            feature_rows = {fid: {'id': fid, 'formula_id': fid, 'feature_version': 'soft_v1', 'protein_score': .3,
+                                 'fat_score': fat, 'fiber_score': 2.5, 'carb_score': 2., 'prebiotic_score': prebiotic}
+                            for fid, fat, prebiotic in [(999996, .6, 2.), (999998, .55, 2.25)]}
+            portrait_rows = {fid: build_portrait(row) for fid, row in feature_rows.items()}
+            with patch.object(recommendation, 'load_five_features', return_value=feature_rows), patch.object(recommendation, 'load_product_portraits', return_value=portrait_rows), patch.object(recommendation, 'load_nutrition', return_value={}), patch.object(recommendation, 'load_risks', return_value={}), patch.object(recommendation, 'list_standardized_product_options', return_value={'items': [original, fixture]}):
                 messages = '/chat/conversations/' + conversation['id'] + '/messages'
-                request('POST', messages, {'message': '帮我推荐一款主粮'})
-                request('POST', messages, {'interaction': {'slot': 'switch_reason', 'value': 'digestive'}})
-                body = request('POST', messages, {'message': '想改善肠胃，每斤50元'})
+                first_reply = request('POST', messages, {'message': '软便恢复中，想减重，帮我推荐一款主粮，每斤50元'})
+                assert first_reply['message']['interaction']['slot'] == 'food_tolerance'
+                body = request('POST', messages, {'interaction': {'slot': 'food_tolerance', 'value': 'current_good'}})
                 result = body['message']['result']
                 assert result['recommendation']['status'] == 'ready', result
-                assert result['food_candidates'][0]['fit_score'] == 85
+                assert result['recommendation']['scenario']['stage'] == 'recovering'
+                assert result['recommendation']['scenario']['goal'] == 'weight_loss'
+                assert result['food_candidates'][0]['keep_reasons']
+                assert result['food_candidates'][0]['analysis']['portrait_comparison']['status'] == 'ready'
                 assert result['food_candidates'][0]['formula_id'] == fixture['formula_id']
                 assert profiles.get_cat_profile(users[0][0], pet['id'])['food_product'] == 'B'
                 request('PATCH', '/cat-profiles/' + pet['id'], {'age_months': None})
@@ -153,10 +158,11 @@ def run():
                 assert profiles.get_cat_profile(users[0][0], pet['id'])['food_product'] == 'B'
                 print('PASS missing age still returns ranked food through real chat API')
                 from services import guardian_food_flow_service as food_flow
-                with patch.object(food_flow, 'list_standardized_product_options', return_value={'items': [fixture]}), patch.object(profiles, '_resolve_food_formula', return_value={'standard_brand_name': '候选牌', 'display_name': 'C', 'product_id': 999997, 'formula_id': 999998}):
+                with patch.object(food_flow, 'load_product_portraits', return_value=portrait_rows), patch.object(food_flow, 'list_standardized_product_options', return_value={'items': [original, fixture]}), patch.object(profiles, '_resolve_food_formula', return_value={'standard_brand_name': '候选牌', 'display_name': 'C', 'product_id': 999997, 'formula_id': 999998}):
                     planned = request('POST', messages, {'message': '选第一款'})
                     assert planned['message']['result']['food_flow']['stage'] == 'selected'
                     assert planned['message']['result']['food_analysis']
+                    assert '共同特点' in planned['message']['content']
                     assert 'switch_plan' not in planned['message']['result']
                     planned = request('POST', messages, {'interaction': {'slot': 'food_flow_action', 'value': 'switch_plan'}})
                     assert planned['message']['result']['food_flow']['stage'] == 'planned'

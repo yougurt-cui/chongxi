@@ -245,13 +245,24 @@ def comparison_text(analysis):
 
 def recommendation_text(recommendation):
     lines = []
+    scenario = recommendation.get('scenario') or {}
+    if scenario.get('label'):
+        lines.append('本次场景：' + scenario['label'])
+    if (recommendation.get('reference') or {}).get('label'):
+        lines.append('结构参考粮：' + recommendation['reference']['label'])
     for index, item in enumerate(recommendation.get('items') or [], 1):
         label = item.get('label') or ' '.join(filter(None, [item.get('brand'), item.get('product_name')]))
         lines.append(f"{index}. {label}")
         lines.append('推荐理由：' + '；'.join((item.get('strengths') or ['按已选诉求匹配现有评分资料'])[:2]))
+        if item.get('keep_reasons'):
+            lines.append('保留特点：' + '；'.join(item['keep_reasons']))
         lines.append(nutrition_text(item.get('analysis')))
         if (item.get('analysis') or {}).get('comparison'):
             lines.append(comparison_text(item['analysis']))
+        portrait_comparison = (item.get('analysis') or {}).get('portrait_comparison')
+        if portrait_comparison:
+            from services.guardian_product_portrait_service import portrait_comparison_text
+            lines.append(portrait_comparison_text(portrait_comparison))
         if item.get('current_food_reasons'):
             lines.append(item['current_food_reasons'][0])
         if item.get('history_reasons'):

@@ -13,6 +13,7 @@ V2 = {**NEW, "catalog_key": "formula:3", "formula_id": 3, "label": "蓝氏猎鸟
 
 class FoodFlowTests(unittest.TestCase):
     def setUp(self):
+        patch.object(food, 'load_product_portraits', return_value={}).start()
         patch.object(food, 'load_nutrition', return_value={}).start()
         patch.object(food, 'load_risks', return_value={}).start()
         self.state = chat._default_state("c")
