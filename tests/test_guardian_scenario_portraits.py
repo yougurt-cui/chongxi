@@ -148,6 +148,7 @@ class PortraitTest(unittest.TestCase):
         self.assertIn('f.is_current=1', sql)
         self.assertIn('MAX(v.id)', sql)
         self.assertIn('p.fat_score <=> s.fat_score', sql)
+        self.assertIn('BINARY s.feature_version=BINARY p.feature_version', sql)
         self.assertEqual(params[:2], ['soft_v1', 'five_dimension_v1'])
         conn.commit.assert_not_called()
 

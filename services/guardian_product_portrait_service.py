@@ -50,7 +50,7 @@ def load_product_portraits(formula_ids):
                     JOIN csv_labeling.catfood_standard_formula f ON f.formula_id=p.formula_id
                         AND f.status='active' AND f.is_current=1
                     JOIN sku_feature_input s ON s.id=p.source_feature_id AND s.formula_id=p.formula_id
-                        AND s.feature_version=p.feature_version
+                        AND BINARY s.feature_version=BINARY p.feature_version
                     WHERE p.status='active' AND p.feature_version=%s AND p.portrait_version=%s
                         AND p.formula_id IN ({marks}) AND {same_scores}
                         AND s.id=(SELECT MAX(v.id) FROM sku_feature_input v
