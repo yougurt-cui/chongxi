@@ -163,7 +163,7 @@ def ingest_catfood_ingredients(payload: Dict[str, Any]) -> Dict[str, Any]:
     }
 
     if "ocr_import" in steps:
-        result["results"]["ocr_import"] = import_ingredient_images(
+        ocr_import_result = import_ingredient_images(
             image_dir=image_dir,
             db_config=db_config,
             image_glob=image_glob,
@@ -172,6 +172,15 @@ def ingest_catfood_ingredients(payload: Dict[str, Any]) -> Dict[str, Any]:
             move_success_images=move_success_images,
             sleep_seconds=sleep_seconds,
         )
+        result["results"]["ocr_import"] = ocr_import_result
+        if reparse_current_upload and int(ocr_import_result.get("succeeded") or 0) == 0:
+            failure_samples = ocr_import_result.get("failure_samples") or []
+            failure_detail = ""
+            if failure_samples and isinstance(failure_samples[0], dict):
+                failure_detail = str(failure_samples[0].get("error") or "").strip()
+            raise RuntimeError(
+                f"本次上传 OCR 识别失败：{failure_detail or '未生成 OCR 结果'}"
+            )
 
     if "parse_ocr_json" in steps:
         current_source_id = None

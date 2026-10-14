@@ -42,3 +42,34 @@ def test_current_upload_is_reparsed_by_resolved_source_id(monkeypatch, tmp_path)
     assert result["source_id"] == 502
     assert captured["source_id"] == 502
     assert captured["incremental_only"] is True
+
+
+def test_current_upload_stops_with_original_ocr_error(monkeypatch, tmp_path):
+    image_path = tmp_path / "example.jpg"
+    image_path.write_bytes(b"image")
+
+    monkeypatch.setattr(service, "_configured_pipeline_paths", lambda: {})
+    monkeypatch.setattr(service, "load_default_db_config", lambda: {})
+    monkeypatch.setattr(
+        service,
+        "import_ingredient_images",
+        lambda **kwargs: {
+            "total": 1,
+            "succeeded": 0,
+            "failed": 1,
+            "failure_samples": [{"image_name": "example.jpg", "error": "Qwen OCR HTTP 429"}],
+        },
+    )
+
+    try:
+        service.ingest_catfood_ingredients({
+            "image_path": str(image_path),
+            "image_dir": str(tmp_path),
+            "image_glob": image_path.name,
+            "steps": ["ocr_import", "parse_ocr_json"],
+            "reparse_current_upload": True,
+        })
+    except RuntimeError as exc:
+        assert str(exc) == "本次上传 OCR 识别失败：Qwen OCR HTTP 429"
+    else:
+        raise AssertionError("expected OCR import failure")

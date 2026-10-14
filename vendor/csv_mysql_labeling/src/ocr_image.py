@@ -26,12 +26,13 @@ from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_ex
 from .utils import now_ms, safe_json_dumps, safe_json_loads
 
 OCR_PROMPT_VERSION = "v1"
-DEFAULT_QWEN_OCR_MODEL = "qwen-vl-ocr-latest"
+DEFAULT_QWEN_OCR_MODEL = "qwen-vl-ocr"
 DEFAULT_QWEN_ENDPOINT = "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
 DEFAULT_QWEN_TIMEOUT_SECONDS = 300
 DEFAULT_QWEN_MAX_IMAGE_EDGE = 1600
 DEFAULT_QWEN_MAX_IMAGE_BYTES = 2_500_000
 DEFAULT_QWEN_MAX_ATTEMPTS = 3
+QWEN_RETRYABLE_HTTP_CODES = {408, 409, 425, 429}
 
 
 def _normalize_provider(ocr_cfg: Dict[str, Any]) -> str:
@@ -161,6 +162,36 @@ def _extract_content_text(content: Any) -> str:
                 parts.append(str(item.get("text") or ""))
         return "\n".join(x for x in parts if x).strip()
     return str(content or "").strip()
+
+
+def _is_qwen_retryable_api_error(error: Any) -> bool:
+    """Return whether a Qwen JSON error describes a transient failure."""
+    if not isinstance(error, dict):
+        return False
+    status = error.get("status") or error.get("status_code") or error.get("http_status")
+    try:
+        if int(status) in QWEN_RETRYABLE_HTTP_CODES or int(status) >= 500:
+            return True
+    except (TypeError, ValueError):
+        pass
+    text_value = " ".join(
+        str(error.get(key) or "") for key in ("code", "type", "message")
+    ).lower()
+    return any(
+        marker in text_value
+        for marker in (
+            "throttl",
+            "rate limit",
+            "too many request",
+            "timeout",
+            "timed out",
+            "temporar",
+            "service unavailable",
+            "internal error",
+            "server error",
+            "system error",
+        )
+    )
 
 
 def _to_data_url(image_path: Path) -> tuple[str, str]:
@@ -377,7 +408,6 @@ def _call_qwen_ocr(
         }
         req_body = safe_json_dumps(payload).encode("utf-8")
         last_exc: Optional[BaseException] = None
-        raw_text = ""
         for attempt in range(1, max_attempts + 1):
             req = Request(
                 qwen_cfg["endpoint"],
@@ -392,39 +422,44 @@ def _call_qwen_ocr(
             try:
                 with urlopen(req, timeout=float(qwen_cfg["timeout_seconds"])) as resp:
                     raw_text = resp.read().decode("utf-8", errors="ignore")
-                break
             except HTTPError as exc:
                 detail = exc.read().decode("utf-8", errors="ignore")
-                if exc.code < 500 or attempt >= max_attempts:
+                retryable = exc.code in QWEN_RETRYABLE_HTTP_CODES or exc.code >= 500
+                if not retryable or attempt >= max_attempts:
                     raise RuntimeError(f"Qwen OCR HTTP {exc.code}: {detail or exc.reason}") from exc
                 last_exc = exc
             except (URLError, TimeoutError, OSError) as exc:
                 if attempt >= max_attempts:
                     raise RuntimeError(f"Qwen OCR network error: {exc}") from exc
                 last_exc = exc
-            time.sleep(min(8, 2 ** (attempt - 1)))
+            else:
+                obj = safe_json_loads(raw_text)
+                if not isinstance(obj, dict):
+                    raise ValueError("Qwen OCR response is not a JSON object")
+                if obj.get("error"):
+                    err = obj.get("error")
+                    if _is_qwen_retryable_api_error(err) and attempt < max_attempts:
+                        last_exc = RuntimeError(str(err))
+                    else:
+                        if isinstance(err, dict):
+                            raise RuntimeError(str(err.get("message") or err.get("code") or err))
+                        raise RuntimeError(str(err))
+                else:
+                    choices = obj.get("choices") or []
+                    if not choices:
+                        raise RuntimeError("Qwen OCR response missing choices")
+                    msg = (choices[0] or {}).get("message") or {}
+                    full_text = _strip_code_fence(_extract_content_text(msg.get("content")))
+                    return {
+                        "full_text": full_text,
+                        "model_name": str(obj.get("model") or qwen_cfg["model"]),
+                        "force_jpeg": force_jpeg,
+                    }
+
+            if attempt < max_attempts:
+                time.sleep(min(8, 2 ** (attempt - 1)))
         else:
             raise RuntimeError(f"Qwen OCR network error: {last_exc}")
-
-        obj = safe_json_loads(raw_text)
-        if not isinstance(obj, dict):
-            raise ValueError("Qwen OCR response is not a JSON object")
-        if obj.get("error"):
-            err = obj.get("error")
-            if isinstance(err, dict):
-                raise RuntimeError(str(err.get("message") or err.get("code") or err))
-            raise RuntimeError(str(err))
-
-        choices = obj.get("choices") or []
-        if not choices:
-            raise RuntimeError("Qwen OCR response missing choices")
-        msg = (choices[0] or {}).get("message") or {}
-        full_text = _strip_code_fence(_extract_content_text(msg.get("content")))
-        return {
-            "full_text": full_text,
-            "model_name": str(obj.get("model") or qwen_cfg["model"]),
-            "force_jpeg": force_jpeg,
-        }
 
     parsed = _request_once(force_jpeg=False)
     if not str(parsed.get("full_text") or "").strip():

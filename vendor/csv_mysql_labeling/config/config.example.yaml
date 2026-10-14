@@ -22,8 +22,8 @@ ocr:
   qwen_endpoint: "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
   qwen_base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
   qwen_text_model: "qwen-plus"
-  qwen_ocr_model: "qwen-vl-ocr-latest"
-  qwen_guarantee_model: "qwen-vl-ocr-latest"
+  qwen_ocr_model: "qwen-vl-ocr"
+  qwen_guarantee_model: "qwen-vl-ocr"
   qwen_timeout_seconds: 300
   qwen_max_attempts: 3
   qwen_max_image_edge: 1600
