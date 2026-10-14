@@ -24,6 +24,8 @@ from services.guardian_recommendation_service import recommend_guardian_foods, e
 from services.guardian_food_flow_service import handle_food_flow, STATE_KEY as FOOD_FLOW_STATE_KEY
 from services.guardian_food_goals import GOALS, goals_in_text, goal_options
 from services.guardian_food_analysis_service import recommendation_text
+from services.guardian_food_scenario import (extract_health, build_scenario, scenario_question, STATES, STAGES)
+from services.guardian_product_portrait_service import load_product_portraits, compare_portraits
 from services.guardian_reminder_flow_service import handle_reminder
 from services.soft_stool_assistant_service import handle_turn as handle_soft_stool_turn
 from services.guardian_workflow import FlowStrategy, select_strategy, requested_flow, build_handoff
@@ -544,6 +546,8 @@ def _prepare_food_handoff(state, pet_id, extracted=None, source_message_id=None)
     if current:
         state["slots"]["current_food"] = current
     state["slots"]["switch_reason"] = "digestive"
+    # Carry the known consultation topic, but do not infer its current phase.
+    state['slots'].setdefault('food_health_state', 'soft_stool')
 
 
 def _normalize_daily_records(value: Any) -> list[dict[str, Any]]:
@@ -584,6 +588,8 @@ def _build_context(user_id: str, conversation: dict[str, Any], state: dict[str, 
         previous_signature = state["slots"].get("_profile_diet_signature")
         if previous_signature is not None and previous_signature != signature:
             state["slots"].pop("current_food", None)
+            state['slots'].pop('food_tolerance', None)
+            state['slots'].pop('_tolerated_food', None)
             pipeline = state["slots"].get(SOFT_STOOL_STATE_SLOT)
             if isinstance(pipeline, dict):
                 pipeline.setdefault("context", {}).update(baseline_loaded=False, followup_context_loaded=False)
@@ -631,6 +637,11 @@ def _build_context(user_id: str, conversation: dict[str, Any], state: dict[str, 
     if catalog_key:
         try:
             context["food_analysis"] = get_catalog_product_ingredients({"catalog_key":catalog_key})
+            formula_id = (context['food_analysis'].get('product') or {}).get('formula_id')
+            current_id = (pet or {}).get('food_formula_id')
+            portraits = load_product_portraits([formula_id, current_id])
+            context['food_analysis']['product_portrait'] = portraits.get(formula_id)
+            context['food_analysis']['portrait_comparison'] = compare_portraits(portraits.get(current_id), portraits.get(formula_id))
         except Exception:
             pass
     for attachment in attachments:
@@ -712,6 +723,8 @@ def _generate_answer(message: str, state: dict[str, Any], context: dict[str, Any
                     "health_topics只表示同期咨询话题，不能推断疾病或粮食导致症状。日期未知不推断，资料不可用不当作没有。"
                     "只有food_candidates中已有且有适用依据的产品才能作为具体候选；没有候选就给筛选方向，不编造品牌推荐。"
                     "宠物年龄是可选信息，未填写年龄也可展示已有候选，不要求先补年龄才能推荐；不要猜测年龄或声称年龄适配已验证，沿用候选中的适用阶段说明。"
+                    "recommendation.scenario是已执行的业务场景规则，保持项与改善项不可自行更改；症状阶段与长期目标不同，不能把恢复期当健康无症状。"
+                    "产品画像仅解释结构特点，互补不代表混喂或治疗；缺画像、能量或适口性数据时不得宣称已核验对应效果。"
                     "有饮水、进食、排便次数或便便形态记录时应优先结合其近期变化，但不要虚构正常参考值。"
                     "只输出合法JSON，且必须正好包含context、care、watch三个字符串字段。"
                     "context用一两句话解释少量原理或背景，care给出最重要且可执行的做法，watch说明观察重点和需要联系宠物医院的情况。"
@@ -733,6 +746,7 @@ def _handle_context_message(user_id, conversation, message, state, source_messag
     client_context = client_context or {}
     model_name = None
     previous_food_goal = state.get('slots', {}).get('food_goal')
+    previous_scene = (state['slots'].get('food_health_state'), state['slots'].get('food_health_stage'))
     if intent_result and intent_result[0].get("dialogue_action") == "pause":
         _pause_soft_stool(state)
         state.update(primary_intent="general_pet_qa", secondary_intent=None, current_step=None,
@@ -752,6 +766,14 @@ def _handle_context_message(user_id, conversation, message, state, source_messag
     if interaction:
         slot = _clean(interaction.get("slot"),64)
         if not slot: raise ValueError("interaction.slot 不能为空")
+        scene_options = {'food_health_state': STATES, 'food_health_stage': STAGES,
+                         'food_tolerance': {'current_good': '当前粮吃得稳定', 'unknown': '暂不清楚'}}
+        if slot in scene_options and interaction.get('value') not in scene_options[slot]:
+            raise ValueError('请选择有效的身体状态、阶段或耐受情况')
+        if slot.startswith('_'):
+            raise ValueError('不能修改内部会话信息')
+        if slot == 'food_health_state':
+            state['slots'].pop('food_health_stage', None)
         state["slots"][slot] = interaction.get("value")
         state["turn_count"] += 1
     elif attachments and not message:
@@ -777,10 +799,35 @@ def _handle_context_message(user_id, conversation, message, state, source_messag
     if state.get("primary_intent") == "food_switch":
         state["slots"].update(explicit_preferences(message))
         pending = state.get('current_step')
+        state['slots'].update(extract_health(message, state['slots'], pending))
+        if state['slots'].get('food_health_state') == 'none':
+            state['slots']['food_health_stage'] = 'none'
+        if pending == 'food_tolerance' and message:
+            if re.search(r'不清楚|不知道|不确定|不耐受|不适应', message):
+                state['slots']['food_tolerance'] = 'unknown'
+            elif re.search(r'当前粮|现在这款|这款粮', message) and re.search(r'耐受良好|吃得稳定|吃得适应|适应良好', message):
+                state['slots']['food_tolerance'] = 'current_good'
+        if ((interaction or {}).get('slot') == 'food_tolerance' or pending == 'food_tolerance') and state['slots'].get('food_tolerance') == 'current_good':
+            state['slots']['_tolerated_food'] = state['slots'].get('current_food')
+        if previous_scene != (state['slots'].get('food_health_state'), state['slots'].get('food_health_stage')):
+            # A previous selection/plan is no longer a decision for the new state.
+            # Keep factual feeding records, but never silently reuse an old plan.
+            previous_flow = state['slots'].get(FOOD_FLOW_STATE_KEY) or {}
+            if previous_flow.get('stage') not in {'started', 'completed'}:
+                state['slots'].pop(FOOD_FLOW_STATE_KEY, None)
+                state['slots'].pop('target_food', None)
+            else:
+                previous_flow.pop('candidates', None)
         previous_goal = previous_food_goal
         choices = goals_in_text(message)
+        # A symptom is a state, not a competing long-term goal.
+        if state['slots'].get('food_health_state') not in (None, 'none', 'unknown'):
+            long_term = [goal for goal in choices if goal not in {'soft_stool', 'black_chin'}]
+            choices = long_term or choices
+            if previous_goal and not long_term and extract_health(message, state['slots']) and not re.search(r'希望|想改善|目标|诉求', message):
+                choices = []
         historical_feedback = bool(re.search(r'(以前|之前|过去|曾经).{0,8}(吃|喂|用)', message))
-        if historical_feedback:
+        if historical_feedback or (pending == 'food_tolerance' and message):
             state['slots']['_food_history_feedback'] = message
             history_feedbacks = state['slots'].setdefault('_food_history_feedbacks', [])
             if message not in history_feedbacks:
@@ -804,6 +851,7 @@ def _handle_context_message(user_id, conversation, message, state, source_messag
                 state['slots']['_current_food_unknown'] = True
             else:
                 state['slots']['current_food'] = message
+        state['slots']['_food_scenario'] = build_scenario(state['slots'])
     submission = context.get("food_submission")
     if submission and submission.get("recognition_status") in {"pending","processing"}:
         reply = {"response_type":"processing","reply":submission.get("recognition_message") or "配料表正在识别，请稍后刷新投稿后再交给我分析。",
@@ -820,7 +868,15 @@ def _handle_context_message(user_id, conversation, message, state, source_messag
         food_reply = handle_food_flow(user_id, conversation, message, state, context, interaction) if state.get("primary_intent") == "food_switch" else None
         if not food_reply and state.get('primary_intent') == 'food_switch':
             goal = state['slots'].get('food_goal') or recommendation_goal(state['slots'])
-            if not goal:
+            scene_question = scenario_question(state['slots']['_food_scenario'])
+            if scene_question:
+                field, text, choices = scene_question
+                flow = {'status': 'need_more_info', 'next_slot': field, 'question': {
+                    'text': text, 'response_type': 'single_select',
+                    'options': [{'label': label, 'value': key} for key, label in choices.items()]}}
+            elif state['slots']['_food_scenario']['status'] in {'limited', 'blocked'}:
+                flow = {'status': 'ready_to_answer'}
+            elif not goal:
                 flow = {'status': 'need_more_info', 'next_slot': 'food_goal', 'question': {'text': '这次最希望改善哪一方面？有多个关注点时，先选最优先的；其余信息我会保留。', 'response_type': 'single_select', 'options': goal_options()}}
             elif state['slots'].get('_food_mode') == 'switch' and not state['slots'].get('current_food') and not state['slots'].get('_current_food_unknown'):
                 flow = {'status': 'need_more_info', 'next_slot': 'current_food', 'question': {'text': '它现在主要吃哪款粮？告诉我品牌和粮名就好；暂时不知道也可以继续。', 'response_type': 'text_or_select', 'options': []}}
@@ -867,7 +923,11 @@ def _handle_context_message(user_id, conversation, message, state, source_messag
                 food_state = state["slots"].setdefault(FOOD_FLOW_STATE_KEY, {"stage": "selection"})
                 food_state["candidates"] = recommendation["items"]
                 food_state['reference_food_text'] = state['slots'].get('current_food')
-            text, answer_model = _generate_answer(message,state,context,flow["status"]=="answer_with_limited_info")
+            recommendation = context.get('recommendation') or {}
+            if state.get('primary_intent') == 'food_switch' and not context.get('food_candidates'):
+                text, answer_model = recommendation.get('note') or '暂未找到可核验的候选。', None
+            else:
+                text, answer_model = _generate_answer(message,state,context,flow["status"]=="answer_with_limited_info")
             if state.get("primary_intent") == "food_switch" and context.get("food_candidates"):
                 text += '\n' + recommendation_text(context['recommendation'])
                 text += "\n可以回复“选第一款”，先看看营养、风险和适配理由；确定要换到这款时，再继续换粮安排。选中时不会更新口粮档案。"
@@ -880,6 +940,11 @@ def _handle_context_message(user_id, conversation, message, state, source_messag
                                "actions": [{"type": "diet_history", "label": "查看历史口粮", "pet_id": conversation.get("pet_id")}] if conversation.get("pet_id") else [],
                                "food_submission":submission},
                      "disclaimer":"AI内容仅供参考，不能替代兽医诊断"}
+            if recommendation.get('status') == 'baseline_needed' and not state['slots'].get('food_tolerance'):
+                state['current_step'] = 'food_tolerance'
+                reply.update(response_type='text_or_select', reply=text + '\n当前粮是否曾吃得稳定？也可以告诉我哪款历史粮吃得适应。',
+                    interaction={'slot': 'food_tolerance', 'options': [
+                        {'label': '当前粮曾吃得稳定', 'value': 'current_good'}, {'label': '暂不清楚', 'value': 'unknown'}]})
     result = {'intent': state.get('primary_intent'), **(reply.get("result") or {}), "turn_no": state["turn_count"],
               "sequence_no": 1, "model_name": model_name}
     return {**reply, "result": result, "messages": [{**reply, "result": result}]}
@@ -922,6 +987,10 @@ def _recognize_guardian_turn(message, state):
     from soft_stool_assistant.llm import _extract_rule_info, extract_user_info
     from soft_stool_assistant.policy import urgent_risk
     literal = _extract_rule_info(message, nested or {})
+    health_update = extract_health(message, state.get('slots') or {})
+    if health_update.get('food_health_state') == 'vomiting' and health_update.get('food_health_stage') in {'recovering', 'recovered'}:
+        # An explicit recovery report must not become a new vomiting episode.
+        literal.pop('vomiting', None)
     if urgent_risk(literal):
         return {"primary_intent": "symptom_consult", "slots": {}, "_target_flow": "soft_stool",
                 "_soft_extraction": {**literal, "_field_evidence": {key: message for key in literal}}}, None
@@ -932,6 +1001,11 @@ def _recognize_guardian_turn(message, state):
         return {"primary_intent": target, "slots": {}, "_target_flow": target,
                 '_food_mode': 'switch' if re.search(r'换粮|换一|换款|换猫粮|换狗粮|换主粮', message) else 'selection',
                 "_soft_extraction": {**literal, "_field_evidence": {key: message for key in literal}} if nested else None}, None
+    if state.get('primary_intent') == 'food_switch' and state.get('current_step') in {
+            'food_health_state', 'food_health_stage', 'food_tolerance'} and not SOFT_STOOL_OTHER_TOPIC_RE.search(message) and not SOFT_STOOL_PAUSE_RE.search(message):
+        return {'primary_intent': 'food_switch', 'slots': {}, '_target_flow': 'food_switch'}, None
+    if state.get('primary_intent') == 'food_switch' and extract_health(message, state.get('slots') or {}) and not SOFT_STOOL_OTHER_TOPIC_RE.search(message) and not SOFT_STOOL_PAUSE_RE.search(message):
+        return {'primary_intent': 'food_switch', 'slots': {}, '_target_flow': 'food_switch'}, None
     if state.get('primary_intent') == 'food_switch' and re.search(r'(以前|之前|过去|曾经).{0,8}(吃|喂|用)', message):
         return {'primary_intent': 'food_switch', 'slots': {}, '_target_flow': 'food_switch'}, None
     food_progress = state.get("current_step") or ((state.get("slots") or {}).get(FOOD_FLOW_STATE_KEY) or {}).get("stage") == "choose_target" or re.search(r"选|换|目标|开始|吃|喂|食欲|精神|便便|排便|呕吐|预算|每斤|国产|进口|肠胃|皮肤|泪痕|体重|过敏|推荐|还没|暂时|继续|方案|比较|对比", message)

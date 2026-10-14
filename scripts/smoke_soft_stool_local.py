@@ -111,11 +111,13 @@ def run():
             assert body["message"]["result"]["actions"][0]["target_flow"] == "food_switch"
             candidates = [{"brand": "离线样例品牌", "product_name": "样例主粮", "product_id": 90001, "formula_id": 90002}]
             with patch.object(chat, "recommend_guardian_foods", return_value={"status": "ready", "items": candidates, "note": "离线候选样例"}) as recommend:
-                request("POST", feedback_path, {"message": "帮我推荐一款主粮"})
+                first_reply = request("POST", feedback_path, {"message": "帮我推荐一款主粮"})
+                assert first_reply['message']['interaction']['slot'] == 'food_health_stage'
+                request("POST", feedback_path, {'interaction': {'slot': 'food_health_stage', 'value': 'recovering'}})
                 body = request("POST", feedback_path, {"message": "希望改善软便"})
                 assert body["message"]["result"]["recommendation"]["status"] == "ready"
                 assert body["message"]["result"]["food_candidates"] == candidates
-                assert recommend.call_count == 2  # Existing goal allows immediate recommendation; preference refinement refreshes it.
+                assert recommend.call_count == 2  # Clarify only the missing phase; preference refinement refreshes ranking.
             state = chat._load_state(feedback_conversation["id"])
             assert state["slots"][chat.GUARDIAN_CONTEXT_SLOT]["facts"]["history_foods_reviewed"] == "蓝氏猎鸟乳鸽"
             assert state["slots"]["current_food"] == "皇家BK34"

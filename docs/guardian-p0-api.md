@@ -1,5 +1,25 @@
 # 管家 P0 小程序接口文档
 
+## 2026-10-14 补充：场景推荐和产品画像（需求 16、17）
+
+后端沿用聊天接口和原有选项类型，无新增客户端能力声明。`POST /api/miniprogram/chat/conversations/{id}/messages` 的 `interaction` 可增加：
+
+| slot | value |
+| --- | --- |
+| `food_health_state` | `none`、`soft_stool`、`vomiting`、`black_chin`、`gi_history`、`unknown` |
+| `food_health_stage` | `active`、`recovering`、`recovered`、`unknown`；无症状自动为 `none` |
+| `food_tolerance` | `current_good`（明确确认当前粮曾吃得稳定）、`unknown` |
+
+也可直接回答自然语言，如“软便恢复中，想减重”。未说明的阶段继续补问；“希望改善软便”本身不是正在软便的事实。已知字段沿用，不因年龄为空阻止推荐。
+
+`result.recommendation` 新增 `scenario`（规则版本、状态、阶段、目标、保持项／改善项及边界）、`reference`（结构参考粮及耐受证据来源）；候选新增 `keep_reasons`、`scenario_assessment`、`score_kind=scenario_improvement_reference`。`fit_score` 保留为改善排序参考分，不能理解为健康效果或适配概率；前端若展示新评分名称可使用 `score_kind`，旧模板仍可读。
+
+候选 `analysis` 新增 `five_dimensions`、`product_portrait`、`portrait_comparison`；目标对比时 `result.food_comparison.portrait` 同样包含 `common`、`complements`、`shortcomings`、`missing_dimensions`、配方 ID 与版本，`status` 为 `ready/partial/unavailable`。这些结论也进入 `reply`，旧客户端可直接展示。
+
+推荐缺证据可返回 `baseline_needed`、`baseline_features_missing`、`no_scenario_match`、`limited`、`blocked`，对应 `items=[]` 和可读 `note`；不能按空数组自行补推荐，也不要把它显示成网络失败。只有在需要耐受参考且用户尚未回答时返回补问选项。画像读取失败不影响原有营养、配料对比，明确说明无法核验画像。
+
+本次仅涉及后端；发布状态、参数与业务验收边界见 [场景推荐与产品画像说明](guardian-scenarios-and-portraits.md)。
+
 版本：`main`，2026-10-11，功能发布提交 `3a5a7c7`。依据当前 Flask 路由、服务序列化和小程序调用整理；对应 [后端 PR #2（已合并并部署）](https://github.com/yougurt-cui/chongxi/pull/2) 和 [小程序草稿 PR #1（待处理、未发布）](https://github.com/yougurt-cui/xiaochengxu/pull/1)。业务变化见 [按功能审查说明](guardian-p0-review.md)。
 
 本文覆盖本次 P0 新增与调整的接口，不是整个小程序的全部接口清单。JSON 示例中的名称、ID、评分和时间为结构示例，不代表真实推荐产品。

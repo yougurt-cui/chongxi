@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import re
+import pymysql
 from copy import deepcopy
 from math import isfinite
 
@@ -11,6 +12,8 @@ from services.taobao_sku_import_service import list_standardized_product_options
 from services.guardian_food_goals import GOALS, REFERENCE_PROFILES, goals_in_text
 from services.guardian_food_analysis_service import (excluded_history_ids, reference_ids, recall_similar,
     load_nutrition, load_risks, analyse_food, comparison_reasons, FEATURE_LABELS, number, compact)
+from services.guardian_food_scenario import build_scenario, assess_candidate, DIMENSIONS, score
+from services.guardian_product_portrait_service import load_five_features, load_product_portraits, compare_portraits
 
 logger = logging.getLogger(__name__)
 REASONS = (
@@ -45,7 +48,7 @@ def reaction_from_note(note):
     text = re.sub(r'(?:没有|无|未)(?:出现|发生|发现)?(?:不适|不耐受|过敏|软便|拉稀|呕吐)', '', text)
     if re.search(r'不适|不耐受|过敏|吃.{0,8}(?:软便|拉稀|呕吐)|便便不好', text):
         return 'problem'
-    return 'good' if re.search(r'适应良好|便便正常|吃得适应|耐受良好', text) else None
+    return 'good' if re.search(r'适应良好|便便正常|吃得适应|耐受良好|吃得稳定', text) else None
 
 
 def explicit_preferences(message):
@@ -114,6 +117,8 @@ def eligible_food(item, pet, slots):
 
 
 def recommend_guardian_foods(pet, slots, history=(), *, limit=3):
+    if slots.get('food_health_state'):
+        return recommend_scenario_foods(pet, slots, history, limit=limit)
     unavailable = {'status': 'data_unavailable', 'items': [], 'note': '推荐资料暂不可用，可以先对照配料表选粮。'}
     if pet.get('animal_type') != 'cat':
         return {'status': 'unsupported_species', 'items': [], 'note': '当前推荐库是猫粮库，这次先提供选粮方向。'}
@@ -274,3 +279,107 @@ def recommend_guardian_foods(pet, slots, history=(), *, limit=3):
     except Exception as exc:
         logger.warning('guardian_recommendation_unavailable error=%s', type(exc).__name__)
         return unavailable
+
+
+def recommend_scenario_foods(pet, slots, history=(), *, limit=3):
+    """Five-dimensional preservation gates, then improvement ranking (requirement 16)."""
+    scenario = build_scenario(slots)
+    result = {'items': [], 'scenario': scenario, 'goal': slots.get('food_goal'),
+              'food_mode': slots.get('_food_mode', 'selection'), 'history_policy': 'exclude_all_confirmed_foods'}
+    def empty(status, note):
+        return {**result, 'status': status, 'note': note}
+    if pet.get('animal_type') != 'cat':
+        return empty('unsupported_species', '当前推荐库是猫粮库，暂不能提供其他宠物的具体候选。')
+    if pet.get('diseases'):
+        return empty('medical_diet_required', '档案仍有疾病记录，需要先结合医生的饮食要求筛选；恢复情况不能自动清除诊断记录。')
+    if scenario['status'] != 'ready':
+        return empty(scenario['status'], scenario.get('note') or '还需要确认身体状态和当前阶段。')
+    try:
+        options = list_standardized_product_options(compare_available=True, limit=500).get('items', [])
+        history = [dict(row) for row in history]
+        for feedback in slots.get('_food_history_feedbacks') or []:
+            text = compact(feedback)
+            for option in options:
+                label = compact(str(option.get('brand') or '') + str(option.get('product_name') or ''))
+                if label and label in text and reaction_from_note(feedback):
+                    matches = [r for r in history if reference_ids(r, options) == {option['formula_id']}]
+                    if matches:
+                        for record in matches:
+                            record['note'] = feedback
+                    else:
+                        history.append({'formula_id': option['formula_id'], 'product': option.get('product_name'), 'note': feedback})
+        excluded = excluded_history_ids(pet, history, options, slots.get('_confirmed_history_text', ''))
+        catalog = {int(row['formula_id']): row for row in options
+                   if row['formula_id'] not in excluded and eligible_food(row, pet, slots)}
+        if not catalog:
+            return empty('no_eligible_food', '暂未找到满足适用阶段、配料和偏好且未吃过的粮款。')
+        current_ids = reference_ids({'formula_id': pet.get('food_formula_id'), 'brand': pet.get('food_brand'),
+                                     'product': pet.get('food_product')}, options)
+        if not current_ids and slots.get('current_food'):
+            current_ids = reference_ids({'product': slots['current_food']}, options)
+        current_id = next(iter(current_ids)) if len(current_ids) == 1 else None
+        reference_id, reference_source = None, None
+        # User confirmation is tied to the exact food text shown when asked.
+        if (slots.get('food_tolerance') == 'current_good' and current_id
+                and slots.get('_tolerated_food') == slots.get('current_food')):
+            reference_id, reference_source = current_id, 'user_confirmed_current'
+        for record in history:
+            if reference_id:
+                break
+            ids = reference_ids(record, options)
+            if len(ids) == 1 and reaction_from_note(record.get('note')) == 'good':
+                reference_id, reference_source = next(iter(ids)), 'confirmed_history_feedback'
+        if scenario['keep'] and not reference_id:
+            return empty('baseline_needed', '这个场景需要保留已耐受的配方特点，但还没有可确认的耐受参考粮。当前在吃不等于已经耐受；可补充一款吃得稳定的粮，或先比较具体产品。')
+        # For healthy pets without preservation requirements, current food is only a comparison reference.
+        reference_id = reference_id or current_id
+        features = load_five_features([*catalog, current_id, reference_id])
+        baseline = features.get(reference_id)
+        if scenario['keep'] and (not baseline or any(baseline.get(k) is None for k in DIMENSIONS)):
+            return empty('baseline_features_missing', '已确认耐受的参考粮缺少完整五维数据，暂不能核验哪些候选保留了这些特点。')
+        ranked = []
+        for formula_id, item in catalog.items():
+            assessment = assess_candidate(features.get(formula_id, {}), baseline, scenario)
+            if not assessment['eligible']:
+                continue
+            similarity = None
+            if baseline and all(score(baseline.get(k), k) is not None for k in DIMENSIONS):
+                similarity = round(1 - sum(abs(score(features[formula_id][k], k) - score(baseline[k], k))
+                                           for k in DIMENSIONS) / len(DIMENSIONS), 4)
+            ranked.append((item, assessment, similarity))
+        ranked.sort(key=lambda row: (-row[1]['score'], -(row[2] or 0), row[0]['formula_id']))
+        ranked = ranked[:limit]
+        if not ranked:
+            return empty('no_scenario_match', '暂未找到同时满足保持项和改善项、且五维数据齐全的候选；没有放宽稳定要求来凑推荐。')
+        selected_ids = [row[0]['formula_id'] for row in ranked]
+        nutrients = load_nutrition([current_id, *selected_ids])
+        risks = load_risks([current_id, *selected_ids])
+        portraits = load_product_portraits([current_id, *selected_ids])
+        reference = next((row for row in options if row['formula_id'] == reference_id), {})
+        result['reference'] = {'formula_id': reference_id, 'source': reference_source or 'current_comparison_only',
+                               'label': reference.get('label') or reference.get('product_name'),
+                               'tolerance_confirmed': bool(reference_source)}
+        for item, assessment, similarity in ranked:
+            cautions = list(scenario['notes'])
+            if _number(pet.get('age_months')) is None:
+                cautions.append('年龄未填写，本次未按年龄筛选；请核对包装适用阶段：' + str(item.get('life_stage') or '未知'))
+            if scenario['health_state'] == 'black_chin':
+                cautions.append('五维分只核验脂肪负担；脂肪来源复杂度和调节支持不计入本轮召回评分。')
+            analysis = analyse_food(item, nutrients, cautions=cautions, current=current_id, risks=risks)
+            analysis['five_dimensions'] = {k: features[item['formula_id']][k] for k in DIMENSIONS}
+            analysis['product_portrait'] = portraits.get(item['formula_id'])
+            analysis['portrait_comparison'] = compare_portraits(portraits.get(current_id), portraits.get(item['formula_id']))
+            result['items'].append({**{k: item.get(k) for k in ('catalog_key', 'formula_id', 'product_id', 'brand',
+                'product_name', 'label', 'price', 'price_source', 'price_min_per_jin', 'price_max_per_jin', 'life_stage')},
+                'fit_score': assessment['score'], 'score_kind': 'scenario_improvement_reference',
+                'strengths': assessment['improvement_reasons'] or ['满足本场景已核验的结构条件，专项效果未据此判断'],
+                'keep_reasons': assessment['keep_reasons'], 'scenario_assessment': assessment,
+                'cautions': cautions, 'analysis': analysis, 'similarity': similarity,
+                'profile_code': scenario['version'], 'profile_name': scenario['label'],
+                'current_food_reasons': [], 'history_reasons': []})
+        return {**result, 'status': 'ready', 'note': '先验证保持项，再按改善项排序；相似度仅用于同分排序。五维结构分不是营养含量、适配概率或健康效果。',
+                'recall': {'status': 'ready', 'feature_version': 'soft_v1', 'dimensions': list(DIMENSIONS)},
+                'current_analysis': analyse_food({'formula_id': current_id}, nutrients, risks=risks) if current_id else None}
+    except (pymysql.MySQLError, ValueError, TypeError, KeyError) as error:
+        logger.warning('guardian_scenario_recommendation_unavailable error=%s', type(error).__name__)
+        return empty('data_unavailable', '场景推荐资料暂时无法读取，请稍后重试。')

@@ -5,6 +5,7 @@ GOALS = {
     "weight_loss": {"label": "减重", "pattern": r"减重|减肥|控重|weight_loss"},
     "weight_gain": {"label": "增重", "pattern": r"增重|长肉|weight_gain"},
     "coat_health": {"label": "美毛护肤", "pattern": r"美毛|毛发|掉毛|护肤|coat_health"},
+    "palatability": {"label": "适口性", "pattern": r"适口性|挑食|爱吃|palatability"},
     "soft_stool": {"label": "肠道友好", "pattern": r"digestive|肠胃|肠道|软便|腹泻|拉稀|soft_stool"},
     "black_chin": {"label": "黑下巴友好", "pattern": r"黑下巴|下巴出油|black_chin"},
     "tear_stain": {"label": "泪痕", "pattern": r"泪痕|tear_stain"},

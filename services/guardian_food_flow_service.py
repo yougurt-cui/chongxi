@@ -6,6 +6,8 @@ from services.taobao_sku_import_service import list_standardized_product_options
 from services.miniprogram_cat_profile_service import update_cat_profile
 from services.guardian_recommendation_service import eligible_food
 from services.guardian_food_analysis_service import load_nutrition, load_risks, analyse_food, nutrition_text, comparison_text
+from services.guardian_product_portrait_service import load_product_portraits, compare_portraits, portrait_comparison_text
+from services.guardian_food_scenario import build_scenario
 
 STATE_KEY = "_food_flow"
 
@@ -63,6 +65,7 @@ def card(text, flow, **result):
 def handle_food_flow(user_id, conversation, message, state, context, interaction=None):
     slots = state["slots"]
     flow = slots.setdefault(STATE_KEY, {"stage": "selection"})
+    scenario = build_scenario(slots)
     if re.search(r'先不换粮|暂时不换粮|不选这款|不要这款|取消选粮|取消换粮', message):
         state['current_step'] = None
         if flow.get('stage') in {'started', 'completed'}:
@@ -71,6 +74,8 @@ def handle_food_flow(user_id, conversation, message, state, context, interaction
         slots[STATE_KEY] = {'stage': 'selection'}
         slots.pop('target_food', None)
         return card('这次选择或换粮计划已取消，当前口粮没有改变。想继续时可以重新选粮。', slots[STATE_KEY])
+    if scenario['status'] == 'blocked':
+        return card(scenario['note'], flow, scenario=scenario)
     if interaction and interaction.get('slot') == 'food_flow_action':
         value = interaction.get('value')
         if value == 'switch_plan' and flow.get('target'):
@@ -174,21 +179,29 @@ def handle_food_flow(user_id, conversation, message, state, context, interaction
     old_matches = resolve_target(f"formula:{flow['original_formula_id']}", options) if target and flow.get("original_formula_id") else []
     if target and not old_matches and original_label != "原粮未确认":
         old_matches = resolve_target(original_label, options)
+    if len(old_matches) == 1 and not flow.get('original_formula_id'):
+        # Resolve the consultation-only reference without mutating the pet profile.
+        flow['comparison_formula_id'] = old_matches[0]['formula_id']
     old_ingredients = old_matches[0].get("ingredient_composition") if len(old_matches) == 1 else (flow.get("comparison") or {}).get("original_ingredients")
     comparison = {"original_food": original_label, "target_food": selected.get("label"),
                   "original_ingredients": old_ingredients,
                   "target_ingredients": selected.get("ingredient_composition") or None,
                   "note": "配料仅作对照，不证明适口性、耐受或症状原因；缺失资料不推算。"}
     candidate = next((row for row in flow.get('candidates', []) if row.get('formula_id') == selected['formula_id']), {})
-    comparison_id = flow.get('original_formula_id') or ((candidate.get('analysis') or {}).get('comparison_current_formula_id') if flow.get('reference_food_text') == slots.get('current_food') else None)
+    comparison_id = flow.get('original_formula_id') or flow.get('comparison_formula_id') or ((candidate.get('analysis') or {}).get('comparison_current_formula_id') if flow.get('reference_food_text') == slots.get('current_food') else None)
     nutrients = load_nutrition([comparison_id, selected['formula_id']])
     risks = load_risks([selected['formula_id']])
     analysis = analyse_food(selected, nutrients, cautions=candidate.get('cautions') or [], current=comparison_id, risks=risks)
     comparison['nutrition'] = analysis['comparison']
+    portraits = load_product_portraits([comparison_id, selected['formula_id']])
+    comparison['portrait'] = compare_portraits(portraits.get(comparison_id), portraits.get(selected['formula_id']))
+    analysis['product_portrait'] = portraits.get(selected['formula_id'])
+    analysis['portrait_comparison'] = comparison['portrait']
     flow["comparison"] = comparison
     if flow['stage'] == 'selected':
         text = f"已选定：{selected.get('label') or selected['product_name']}。当前口粮没有改变。\n" + nutrition_text(analysis)
         text += '\n' + comparison_text(analysis)
+        text += '\n' + portrait_comparison_text(comparison['portrait'])
         if candidate.get('strengths'):
             text += '\n适配理由：' + '；'.join(candidate['strengths'][:3])
         else:
@@ -217,6 +230,7 @@ def handle_food_flow(user_id, conversation, message, state, context, interaction
     text += comparison["note"] + "\n" + "\n".join(plan["steps"]) + "\n" + plan["confirmation"]
     text += '\n' + nutrition_text(analysis) + '\n' + analysis['risk_note']
     text += '\n' + comparison_text(analysis)
+    text += '\n' + portrait_comparison_text(comparison['portrait'])
     if pet.get("age_months") is None:
         stage = selected.get("life_stage")
         stage_label = {"adult": "成猫", "kitten": "幼猫", "senior": "老年猫", "all": "全阶段", "all_stages": "全阶段"}.get(stage, stage or "资料未提供")
