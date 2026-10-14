@@ -9,6 +9,8 @@ OLD = dict(catalog_key="formula:1", formula_id=1, product_id=11, brand="原牌",
 NEW = dict(catalog_key="formula:2", formula_id=2, product_id=22, brand="蓝氏", label="蓝氏猎鸟乳鸽", product_name="猎鸟乳鸽",
            ingredient_composition="鸽肉，鸭肉", life_stage="adult", product_type="干粮")
 V2 = {**NEW, "catalog_key": "formula:3", "formula_id": 3, "label": "蓝氏猎鸟乳鸽2.0", "product_name": "猎鸟乳鸽2.0"}
+INCOMPLETE = {**NEW, "catalog_key": "formula:4", "formula_id": 4, "product_id": 44,
+              "label": "渴望室内伴侣", "product_name": "室内伴侣", "product_type": None, "life_stage": None}
 
 
 class FoodFlowTests(unittest.TestCase):
@@ -155,3 +157,22 @@ class FoodFlowTests(unittest.TestCase):
         self.assertEqual(planned['result']['food_flow']['stage'], 'planned')
         self.assertTrue(planned['result']['switch_plan'])
         self.writer.assert_not_called()
+
+    def test_explicit_product_with_missing_type_and_stage_is_compared_with_warnings(self):
+        food.list_standardized_product_options.return_value = {"items": [OLD, INCOMPLETE]}
+        result = self.turn(interaction={"slot": "target_food", "value": "formula:4"})
+        self.assertIn("资料提示", result["reply"])
+        self.assertIn("产品类型资料缺失", result["reply"])
+        self.assertIn("适用阶段资料缺失", result["reply"])
+        self.assertEqual(result["result"]["food_flow"]["target"]["formula_id"], 4)
+        self.assertTrue(result["result"]["switch_plan"])
+
+    def test_explicit_product_still_blocks_known_age_conflict_and_allergen(self):
+        kitten_food = {**NEW, "life_stage": "kitten", "ingredient_composition": "鸡肉，米"}
+        food.list_standardized_product_options.return_value = {"items": [OLD, kitten_food]}
+        self.context["pet_profile"].update(age_months=36)
+        result = self.select()
+        self.assertIn("年龄与产品明确标注的适用阶段不一致", result["reply"])
+        self.context["pet_profile"].update(age_months=None, allergies=["鸡肉"])
+        result = self.select()
+        self.assertIn("配料表包含档案中的过敏原", result["reply"])

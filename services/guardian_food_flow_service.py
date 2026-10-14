@@ -4,7 +4,6 @@ from __future__ import annotations
 import re
 from services.taobao_sku_import_service import list_standardized_product_options
 from services.miniprogram_cat_profile_service import update_cat_profile
-from services.guardian_recommendation_service import eligible_food
 from services.guardian_food_analysis_service import load_nutrition, load_risks, analyse_food, nutrition_text, comparison_text
 from services.guardian_product_portrait_service import load_product_portraits, compare_portraits, portrait_comparison_text
 from services.guardian_food_scenario import build_scenario
@@ -60,6 +59,58 @@ def card(text, flow, **result):
     return {"response_type": "result_card", "reply": text,
             "result": {"intent": "food_switch", "food_flow": flow, "food_candidates": [], **result},
             "disclaimer": "AI内容仅供参考，不能替代兽医诊断"}
+
+
+def validate_explicit_target(item, pet):
+    """Validate a product the user explicitly chose; missing catalogue fields are warnings, not rejection."""
+    errors, warnings = [], []
+    kind = str(item.get('product_type') or '').strip().lower()
+    staple_types = {'dry', 'dry_food', 'dry food', '主粮', '干粮', '膨化粮', '全价猫粮',
+                    '猫粮', '烘焙粮', '冻干', '冻干主粮', '湿粮'}
+    non_staple_types = {'零食', '猫零食', '补充剂', '营养补充剂', '保健品'}
+    if not kind:
+        warnings.append('产品类型资料缺失，尚未核验是否为完整主粮，请查看包装标识')
+    elif kind in non_staple_types:
+        errors.append('该产品明确标记为零食或补充品，不能作为目标主粮')
+    elif kind not in staple_types:
+        warnings.append(f'产品类型“{item.get("product_type")}”尚未完成主粮属性核验，请查看包装标识')
+
+    stage = str(item.get('life_stage') or '').strip().lower()
+    all_stages = {'all', 'all_stages', 'all life stages', '全阶段', '全年龄', '全龄'}
+    kitten = {'kitten', '幼猫', '幼年', '幼猫期'}
+    adult = {'adult', '成猫', '成年', '成猫期'}
+    senior = {'senior', '老年猫', '老年', '老年期'}
+    known_stages = all_stages | kitten | adult | senior
+    if not stage:
+        warnings.append('适用阶段资料缺失，请核对包装说明')
+    elif stage not in known_stages:
+        warnings.append(f'适用阶段“{item.get("life_stage")}”尚未标准化，请核对包装说明')
+    else:
+        try:
+            months = float(pet.get('age_months')) if pet.get('age_months') not in (None, '') else None
+        except (TypeError, ValueError):
+            months = None
+        if months is not None and not (stage in all_stages
+                or months < 12 and stage in kitten
+                or 12 <= months < 84 and stage in adult
+                or months >= 84 and stage in senior):
+            errors.append('宠物年龄与产品明确标注的适用阶段不一致')
+
+    ingredients = str(item.get('ingredient_composition') or '').strip()
+    if not ingredients:
+        warnings.append('配料表资料缺失，暂时不能进行配料对比')
+    aliases = {'鸡肉': ('鸡', 'chicken'), '鸡': ('鸡', 'chicken'), '鱼': ('鱼', 'fish', 'salmon', 'tuna'),
+               '牛肉': ('牛', 'beef'), '牛': ('牛', 'beef'), '乳制品': ('奶', '乳', 'milk'),
+               '谷物': ('米', '麦', '玉米', 'rice', 'wheat', 'corn')}
+    for allergen in pet.get('allergies') or []:
+        tokens = aliases.get(allergen)
+        if not tokens:
+            errors.append(f'过敏原“{allergen}”尚无法与配料表可靠核对')
+        elif not ingredients:
+            errors.append(f'缺少配料表，无法排除过敏原“{allergen}”')
+        elif any(token in ingredients.lower() for token in tokens):
+            errors.append(f'配料表包含档案中的过敏原“{allergen}”')
+    return errors, warnings
 
 
 def handle_food_flow(user_id, conversation, message, state, context, interaction=None):
@@ -129,10 +180,11 @@ def handle_food_flow(user_id, conversation, message, state, context, interaction
                 "interaction": {"slot": "target_food", "options": choices},
                 "result": {"intent": "food_switch", "food_flow": flow}}
         selected = matches[0]
-        if not eligible_food(selected, pet, {}):
+        validation_errors, validation_warnings = validate_explicit_target(selected, pet)
+        if validation_errors:
             flow.pop("target", None)
             slots.pop("target_food", None)
-            return card("这款目标粮的主粮类型、配料、适用阶段或过敏条件不符合现有筛选要求，请确认资料或重新选粮。年龄未填写本身不会阻止选粮。", flow)
+            return card('这款目标粮暂不能继续：' + '；'.join(validation_errors) + '。请确认资料或重新选粮。', flow)
         # Resolve afresh for every new target; never carry a prior target's start state.
         if (flow.get("target") or {}).get("catalog_key") != selected["catalog_key"]:
             flow = {"stage": 'selected' if slots.get('_food_mode') == 'selection' else "planned", "target": selected,
@@ -144,10 +196,13 @@ def handle_food_flow(user_id, conversation, message, state, context, interaction
             slots[STATE_KEY] = flow
         else:
             flow["target"] = selected
+        flow['validation_warnings'] = validation_warnings
         slots["target_food"] = selected.get("label") or selected["product_name"]
     selected = flow["target"]
-    if not eligible_food(selected, pet, {}):
-        return card("当前年龄、过敏或产品资料已变化，请重新核对目标粮，或回复“重新推荐”。", flow)
+    validation_errors, validation_warnings = validate_explicit_target(selected, pet)
+    flow['validation_warnings'] = validation_warnings
+    if validation_errors:
+        return card('目标粮校验未通过：' + '；'.join(validation_errors) + '。请重新核对目标粮，或回复“重新推荐”。', flow)
     state["current_step"] = None
     if flow['stage'] == 'selected' and (started or slots.get('_food_mode') == 'switch'):
         flow['stage'] = 'planned'
@@ -211,6 +266,8 @@ def handle_food_flow(user_id, conversation, message, state, context, interaction
         if candidate.get('history_reasons'):
             text += '\n' + candidate['history_reasons'][0]
         text += '\n需留意：' + '；'.join(candidate.get('cautions') or [analysis['risk_note']])
+        if flow.get('validation_warnings'):
+            text += '\n资料提示：' + '；'.join(flow['validation_warnings']) + '。'
         if pet.get('age_months') is None:
             text += '\n年龄未填写，本次未按年龄筛选；请核对包装适用阶段：' + str(selected.get('life_stage') or '暂无资料') + '。'
         for risk in analysis.get('risk_models', []):
@@ -231,6 +288,8 @@ def handle_food_flow(user_id, conversation, message, state, context, interaction
     text += '\n' + nutrition_text(analysis) + '\n' + analysis['risk_note']
     text += '\n' + comparison_text(analysis)
     text += '\n' + portrait_comparison_text(comparison['portrait'])
+    if flow.get('validation_warnings'):
+        text += '\n资料提示：' + '；'.join(flow['validation_warnings']) + '。'
     if pet.get("age_months") is None:
         stage = selected.get("life_stage")
         stage_label = {"adult": "成猫", "kitten": "幼猫", "senior": "老年猫", "all": "全阶段", "all_stages": "全阶段"}.get(stage, stage or "资料未提供")
