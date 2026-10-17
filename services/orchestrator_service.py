@@ -251,11 +251,23 @@ PIPELINE_DEFINITIONS: dict[str, tuple[NodeDefinition, ...]] = {
             priority=40,
         ),
         NodeDefinition(
+            node_code="product_portrait_summary",
+            node_name="五维产品画像生成",
+            callable_path="services.product_portrait_summary_service.materialize_product_portrait",
+            api=ApiRoute(
+                method="POST",
+                url="/api/catfood/standardization/formula-portrait/materialize",
+                timeout_seconds=120,
+            ),
+            depends_on=("ingredient_standardize",),
+            priority=45,
+        ),
+        NodeDefinition(
             node_code="formula_profile",
             node_name="增量风险画像生成",
             callable_path="services.orchestrator_service.noop_node",
             api=ApiRoute(method="POST", url="/api/catfood/standardization/formula-risk/materialize", timeout_seconds=600),
-            depends_on=("ingredient_standardize",),
+            depends_on=("product_portrait_summary",),
             priority=50,
         ),
         NodeDefinition(
@@ -1759,13 +1771,13 @@ def build_node_input(task: dict[str, Any], node_def: NodeDefinition) -> dict[str
                 "formula_id": formula_input.get("formula_id"),
                 "batch_id": f"upload-{task['id']}",
             }
-        if node_def.node_code == "market_profile_build":
+        if node_def.node_code in {"product_portrait_summary", "market_profile_build"}:
             formula_input = _output_for(task, "formula_input_build")
             return {
                 "orchestrator_task_id": task["id"],
                 "orchestrator_node_code": node_def.node_code,
                 "formula_id": formula_input.get("formula_id"),
-                "scope": "full_market",
+                **({"scope": "full_market"} if node_def.node_code == "market_profile_build" else {}),
             }
 
     return payload

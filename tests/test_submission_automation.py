@@ -13,6 +13,12 @@ from services import miniprogram_food_submission_service as submissions
 
 
 class SubmissionAutomationTests(unittest.TestCase):
+    def test_portrait_node_is_required_between_scores_and_risks(self):
+        definitions = {node.node_code: node for node in jobs.get_pipeline_definition('catfood_image_analysis')}
+        portrait = definitions['product_portrait_summary']
+        self.assertEqual(portrait.depends_on, ('ingredient_standardize',))
+        self.assertEqual(definitions['formula_profile'].depends_on, ('product_portrait_summary',))
+
     def test_display_preserves_uncertainty_and_explicit_semantics(self):
         blocks = display_blocks('✅ **结构接近**：有比较依据。\n❗ **资料不足**：不能确认效果。')
         self.assertEqual([b['kind'] for b in blocks], ['positive', 'caution'])
@@ -204,6 +210,30 @@ class SubmissionAutomationTests(unittest.TestCase):
         self.assertEqual(result['recognized_brand'], '标准品牌')
         self.assertEqual(result['recognized_product_name'], '标准产品')
         self.assertTrue(result['result_available'])
+
+    def test_submission_sync_persists_formula_catalog_identity(self):
+        task = {'task_status': 'done', 'outputs': {
+            'ocr_formula': {'source_id': 514, 'ingredient_composition': '鸡肉、鱼油'},
+            'brand_standardize': {'standard_brand_name': '渴望'},
+            'product_standardize': {'product_id': 174},
+            'formula_standardize': {'product_id': 174, 'formula_id': 327},
+        }, 'nodes': [{'node_code': code, 'node_status': 'success'} for code in (
+            'ocr_formula', 'brand_standardize', 'product_standardize', 'formula_standardize',
+            'product_portrait_summary',
+        )]}
+        conn = MagicMock()
+        conn.__enter__.return_value = conn
+        conn.cursor.return_value.__enter__.return_value.fetchone.return_value = {
+            'standard_product_name': '八重守护',
+        }
+        with patch.object(submissions, 'get_orchestrator_task', return_value=task), \
+                patch.object(submissions, '_connect', return_value=conn):
+            result = submissions._sync_recognition(
+                {'id': 'submission', 'status': 'active', 'orchestrator_task_id': 'task'}
+            )
+        self.assertEqual(result['standard_product_id'], 174)
+        self.assertEqual(result['formula_id'], 327)
+        self.assertEqual(result['catalog_key'], 'formula:327')
 
     def test_cancelled_submission_does_not_show_queued_progress(self):
         with patch.object(submissions, 'get_orchestrator_task') as get_task:

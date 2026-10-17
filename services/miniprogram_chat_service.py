@@ -901,6 +901,21 @@ def _handle_context_message(user_id, conversation, message, state, source_messag
     if attachments and not state.get("primary_intent"):
         state["primary_intent"] = "ingredient_analysis"
     context = _build_context(user_id, conversation, state, attachments, client_context)
+    submission = context.get("food_submission")
+    if attachments and not message and submission and submission.get("formula_id"):
+        formula_id = int(submission["formula_id"])
+        current_id = (context.get("current_food") or {}).get("formula_id")
+        analysis = _food_analysis_by_formula(formula_id, current_id)
+        if analysis and analysis.get("product_portrait"):
+            state["primary_intent"] = "food_analysis"
+            state["slots"].update(
+                food_name=" ".join(filter(None, (
+                    submission.get("recognized_brand") or submission.get("claimed_brand"),
+                    submission.get("recognized_product_name") or submission.get("claimed_product_name"),
+                ))),
+                catalog_key=f"formula:{formula_id}",
+            )
+            context["food_analysis"] = analysis
     _prepare_saved_food_analysis(message, state, context)
     if state.get("primary_intent") == "food_switch":
         state["slots"].update(explicit_preferences(message))

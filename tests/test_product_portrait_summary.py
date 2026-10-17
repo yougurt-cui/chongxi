@@ -3,10 +3,31 @@ import unittest
 from unittest.mock import patch
 
 from main import create_app
-from services.product_portrait_summary_service import build_portrait
+from services.product_portrait_summary_service import build_portrait, materialize_product_portrait
 
 
 class ProductPortraitRuleTest(unittest.TestCase):
+    @patch("services.guardian_product_portrait_service.load_product_portraits")
+    @patch("services.product_portrait_summary_service.rebuild_product_portraits")
+    def test_pipeline_adapter_rebuilds_one_formula_and_validates_chat_loader(self, rebuild, load):
+        rebuild.return_value = {"ok": True, "created": 1}
+        load.return_value = {327: {
+            "formula_id": 327, "source_feature_id": 8217, "summary": "五维画像",
+        }}
+
+        result = materialize_product_portrait({"formula_id": 327})
+
+        rebuild.assert_called_once_with([327])
+        load.assert_called_once_with([327])
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["source_feature_id"], 8217)
+
+    @patch("services.guardian_product_portrait_service.load_product_portraits", return_value={})
+    @patch("services.product_portrait_summary_service.rebuild_product_portraits", return_value={"ok": True})
+    def test_pipeline_adapter_fails_when_chat_cannot_load_written_portrait(self, _rebuild, _load):
+        with self.assertRaisesRegex(RuntimeError, "校验失败"):
+            materialize_product_portrait({"formula_id": 327})
+
     def test_builds_expected_dr25_summary(self):
         result = build_portrait({
             "id": 7255,

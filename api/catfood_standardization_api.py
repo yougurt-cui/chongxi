@@ -44,6 +44,7 @@ from services.orchestrator_service import (
     resume_formula_tasks_for_source_ids,
     resume_ingredient_tasks_for_formula_ids,
 )
+from services.product_portrait_summary_service import materialize_product_portrait
 
 
 catfood_standardization_api = Blueprint(
@@ -90,6 +91,14 @@ def standardization_brand_resolve():
 def standardization_formula():
     try:
         return jsonify(standardize_formula(request.get_json(silent=True) or {})), 200
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+
+
+@catfood_standardization_api.post("/formula-portrait/materialize")
+def standardization_formula_portrait_materialize():
+    try:
+        return jsonify(materialize_product_portrait(request.get_json(silent=True) or {})), 200
     except Exception as exc:
         return jsonify({"ok": False, "error": str(exc)}), 400
 

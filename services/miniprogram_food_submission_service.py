@@ -258,6 +258,10 @@ def _sync_recognition(row: dict[str, Any]) -> dict[str, Any]:
     node_statuses = {n.get("node_code"): n.get("node_status") for n in task.get("nodes", [])}
     brand = outputs.get("brand_standardize") or {}
     product = outputs.get("product_standardize") or {}
+    formula = outputs.get("formula_standardize") or {}
+    formula_input = outputs.get("formula_input_build") or {}
+    product_id = product.get("product_id") or formula.get("product_id")
+    formula_id = formula.get("formula_id") or formula_input.get("formula_id") or product.get("formula_id")
     recognition_status = _recognition_status(task, output)
     values = {
         "recognition_status": recognition_status,
@@ -268,6 +272,9 @@ def _sync_recognition(row: dict[str, Any]) -> dict[str, Any]:
         "ingredient_composition": output.get("ingredient_composition"),
         "guarantee_json": json.dumps(output.get("guarantee") or {}, ensure_ascii=False),
         "recognition_result_json": json.dumps(output, ensure_ascii=False, default=str),
+        "standard_product_id": product_id,
+        "formula_id": formula_id,
+        "catalog_key": f"formula:{int(formula_id)}" if formula_id else None,
     }
     with _connect() as conn:
         with conn.cursor() as cursor:
@@ -283,7 +290,9 @@ def _sync_recognition(row: dict[str, Any]) -> dict[str, Any]:
                 parsed_row_id=COALESCE(%s,parsed_row_id),recognized_brand=COALESCE(%s,recognized_brand),
                 recognized_product_name=COALESCE(%s,recognized_product_name),
                 ingredient_composition=COALESCE(%s,ingredient_composition),guarantee_json=%s,
-                recognition_result_json=%s,updated_at=%s WHERE id=%s""",
+                recognition_result_json=%s,standard_product_id=COALESCE(%s,standard_product_id),
+                formula_id=COALESCE(%s,formula_id),catalog_key=COALESCE(%s,catalog_key),
+                updated_at=%s WHERE id=%s""",
                 (*values.values(), _now(), row["id"]),
             )
         conn.commit()
@@ -317,6 +326,8 @@ def _serialize(row: dict[str, Any], images: list[dict[str, Any]] | None = None) 
         "review_status": row.get("review_status"),
         "publish_status": row.get("publish_status"),
         "catalog_key": row.get("catalog_key") or "",
+        "standard_product_id": row.get("standard_product_id"),
+        "formula_id": row.get("formula_id"),
         "review_note": row.get("review_note") or "",
         "reject_reason": row.get("reject_reason") or "",
         "status": row.get("status"),
