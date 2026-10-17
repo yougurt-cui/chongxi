@@ -250,6 +250,7 @@ class SubmissionAutomationTests(unittest.TestCase):
         conn.__enter__.return_value = conn
         conn.cursor.return_value.__enter__.return_value.fetchone.return_value = None
         with patch.object(submissions, 'get_orchestrator_task', return_value=task), \
+                patch.object(submissions, '_formula_portrait_exists', return_value=False), \
                 patch.object(submissions, '_connect', return_value=conn):
             result = submissions._sync_recognition({
                 'id': 'submission', 'status': 'active', 'orchestrator_task_id': 'task',

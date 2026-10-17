@@ -279,10 +279,7 @@ def _sync_recognition(row: dict[str, Any]) -> dict[str, Any]:
     recognition_status = _recognition_status(task, output)
     portrait_ready = bool(formula_id) and (
         node_statuses.get("product_portrait_summary") == "success"
-        or (
-            "product_portrait_summary" not in node_statuses
-            and _formula_portrait_exists(formula_id)
-        )
+        or _formula_portrait_exists(formula_id)
     )
     auto_completed = portrait_ready and row.get("review_status") != "rejected"
     values = {
