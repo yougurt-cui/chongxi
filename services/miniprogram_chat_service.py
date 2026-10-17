@@ -13,6 +13,7 @@ import pymysql
 from openai import OpenAI
 
 from app_config import get_chat_model_config, get_mysql_config
+from services.guardian_presentation import STYLE_INSTRUCTION, present_message
 from services.miniprogram_cat_profile_service import get_cat_profile, list_cat_profiles
 from services.miniprogram_food_change_service import (
     get_catalog_product_ingredients,
@@ -221,6 +222,7 @@ def _save_state(state: dict[str, Any]) -> None:
 def _save_message(*, conversation_id: str, user_id: str, role: str, content: str,
                   response_type: str | None = None, interaction: Any = None, attachments: Any = None,
                   result: Any = None, model_name: str | None = None) -> dict[str, Any]:
+    result = present_message({"role": role, "content": content, "response_type": response_type, "result": result}).get("result")
     message_id, now = uuid.uuid4().hex, _now()
     with _connect() as conn:
         with conn.cursor() as cursor:
@@ -285,7 +287,7 @@ def list_messages(user_id: Any, conversation_id: Any, *, limit: Any = 100) -> di
               "response_type": row.get("response_type"), "interaction": _json_loads(row.get("interaction_json"), None),
               "attachments": _json_loads(row.get("attachments_json"), []), "result": _json_loads(row.get("result_json"), None),
               "created_at": str(row.get("created_at") or "")} for row in rows]
-    return {"ok": True, "count": len(items), "items": items}
+    return {"ok": True, "count": len(items), "items": [present_message(item) for item in items]}
 
 
 def delete_conversation(user_id: Any, conversation_id: Any) -> dict[str, Any]:
@@ -775,7 +777,7 @@ def _evaluate_flow(state: dict[str, Any], context: dict[str, Any]) -> dict[str, 
 def _three_point_text(data: dict[str, Any]) -> str:
     points = []
     for key in ("context", "care", "watch"):
-        value = _clean(data.get(key), 90)
+        value = _clean(data.get(key), 1000)
         if not value:
             raise ValueError(f"模型结果缺少 {key}")
         value = value.replace("初步判断", "目前看").replace("判断", "看起来")
@@ -814,6 +816,7 @@ def _generate_answer(message: str, state: dict[str, Any], context: dict[str, Any
             model=cfg["model"], temperature=0.2, response_format={"type":"json_object"}, messages=[
                 {"role":"system","content":(
                     "你是宠物饮食与日常照护管家，围绕饮食分析、个体吃粮表现和行动建议提供持续服务。"
+                    + STYLE_INSTRUCTION +
                     "只依据提供的数据回答，不得编造产品、配料、评分或疾病结论。"
                     "回答前综合pet_profile、current_food、food_list和recent_daily_records；明确区分没有记录与数值为零，"
                     "guardian_context含前一个场景的事实与来源，切换选粮时沿用这些信息，不重复开展症状问诊。"
@@ -828,6 +831,7 @@ def _generate_answer(message: str, state: dict[str, Any], context: dict[str, Any
                     "产品画像仅解释结构特点，互补不代表混喂或治疗；缺画像、能量或适口性数据时不得宣称已核验对应效果。"
                     "有饮水、进食、排便次数或便便形态记录时应优先结合其近期变化，但不要虚构正常参考值。"
                     "只输出合法JSON，且必须正好包含context、care、watch三个字符串字段。"
+                    "三个字符串内部保留上述加粗和语义标记；需要拆段时在字符串内使用换行。watch中的观察事项以❗开头。"
                     "context用一两句话解释少量原理或背景，care给出最重要且可执行的做法，watch说明观察重点和需要联系宠物医院的情况。"
                     "每个字段40到70个汉字，总体简洁；不要使用“判断”“建议”“诊断结果”等机械措辞，不要添加标题、编号或JSON以外内容。"
                     "可以自然使用一处“呀、呢、哦”，但不要称呼用户为亲、宝子或主人。"

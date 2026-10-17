@@ -187,6 +187,7 @@ def orchestrator_apply_node_result(task_id: str, node_code: str):
             call_status=str(payload.get("call_status") or "success"),
             output=dict(payload.get("output") or {}),
             error_message=payload.get("error_message"),
+            claim_token=payload.get("claim_token"),
         )
         return jsonify({"ok": True, "task": task}), 200
     except Exception as exc:
@@ -261,6 +262,7 @@ def orchestrator_dispatch_call_sync():
                 call_status=call_status,
                 output=api_result["data"] if isinstance(api_result["data"], dict) else {"result": api_result["data"]},
                 error_message=None if api_result["ok"] else str(api_result["data"].get("error") or "API 调用失败"),
+                claim_token=job.get("claim_token"),
             )
             results.append(
                 {

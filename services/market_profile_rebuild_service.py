@@ -6,6 +6,7 @@ import json
 import subprocess
 import sys
 import uuid
+import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
@@ -25,6 +26,10 @@ STEPS = (
     ("formula_profile", "build_formula_profile.py"),
 )
 _executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="market-profile")
+
+
+class MarketProfileBusy(RuntimeError):
+    pass
 
 
 def _connect(*, autocommit: bool = False):
@@ -94,6 +99,7 @@ def _result_counts() -> dict[str, dict[str, int]]:
 def _execute_steps() -> list[dict[str, Any]]:
     steps: list[dict[str, Any]] = []
     for step_key, script_name in STEPS:
+        started = time.monotonic()
         proc = subprocess.run(
             [sys.executable, str(BASE_DIR / "scripts" / script_name)],
             cwd=str(BASE_DIR),
@@ -104,6 +110,7 @@ def _execute_steps() -> list[dict[str, Any]]:
         )
         step = {
             "key": step_key,
+            "elapsed_seconds": round(time.monotonic() - started, 3),
             "status": "success" if proc.returncode == 0 else "failed",
             "returncode": proc.returncode,
             "log_tail": (proc.stdout or "").splitlines()[-40:],
@@ -129,7 +136,7 @@ def rebuild_market_profile_for_orchestrator(payload: dict[str, Any]) -> dict[str
         with lock_conn.cursor() as cursor:
             cursor.execute("SELECT GET_LOCK(%s, 0) AS acquired", (LOCK_NAME,))
             if int((cursor.fetchone() or {}).get("acquired") or 0) != 1:
-                raise RuntimeError("另一个全量配方画像构建正在运行")
+                raise MarketProfileBusy("另一个全量配方画像构建正在运行")
         steps = _execute_steps()
         return {
             "ok": True,

@@ -839,6 +839,22 @@ def get_food_submission_endpoint(submission_id: str):
         return jsonify({"ok": False, "error": str(exc)}), 500
 
 
+@miniprogram_api.post("/food-submissions/<submission_id>/result-subscription")
+def subscribe_food_result(submission_id):
+    from services.submission_notifications import subscribe
+    try:
+        return jsonify(subscribe(_user_id_from_request(required=True), submission_id,
+                                 (request.get_json(silent=True) or {}).get("decision"))), 200
+    except PermissionError as exc:
+        return _auth_error_response(exc)
+    except LookupError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 404
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    except Exception:
+        return jsonify({"ok": False, "error": "订阅关联暂时失败，请稍后重试"}), 500
+
+
 @miniprogram_api.get("/food-submissions/<submission_id>/images/<image_id>")
 def get_food_submission_image_endpoint(submission_id: str, image_id: str):
     try:

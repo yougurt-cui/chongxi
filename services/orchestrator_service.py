@@ -6,6 +6,7 @@ import importlib
 import json
 import re
 import uuid
+import threading
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -33,6 +34,14 @@ NODE_BLOCKED = "blocked"
 NODE_NEED_REVIEW = "need_review"
 NODE_WAITING_RESULT = "waiting_result"
 NODE_SKIPPED = "skipped"
+_schema_ready = False
+_schema_lock = threading.Lock()
+
+
+def wake_dispatcher() -> None:
+    # Lazy import avoids starting threads or importing Flask during CLI usage.
+    from services.orchestrator_worker import wake
+    wake()
 
 SUCCESS_CALL_STATUSES = {"success", "succeeded", "ok", "done"}
 FAILURE_CALL_STATUSES = {"failure", "failed", "fail", "error", "timeout", "cancelled", "canceled"}
@@ -1146,6 +1155,8 @@ def _check_required_fields(
 def output_check(node_code: str, output: dict[str, Any], task_payload: dict[str, Any] | None = None) -> CheckResult:
     task_payload = dict(task_payload or {})
     output = dict(output or {})
+    if node_code in {"science_feature_materialize", "ingredient_standardize", "formula_profile"} and output.get("status") in {"need_review", "science_features_not_ready"}:
+        return CheckResult(False, NODE_NEED_REVIEW, "原料或科学属性资料不完整，等待核对后继续", {"source_status": output.get("status")})
     if node_code == "upload_check":
         return _check_upload(output, task_payload)
     if node_code == "ocr_formula":
@@ -1182,6 +1193,14 @@ def output_check(node_code: str, output: dict[str, Any], task_payload: dict[str,
         if status in {"partially_ready", "need_review"}:
             return CheckResult(False, NODE_NEED_REVIEW, f"Profile 状态需要复核: {status}")
         return CheckResult(False, NODE_FAILED, f"Profile 状态异常: {status or 'empty'}")
+    if node_code == "science_feature_materialize":
+        status = str(output.get("status") or output.get("overall_status") or "").strip()
+        if status == "materialized":
+            return CheckResult(True, NODE_SUCCESS, "科学特征物化完成")
+        if status in {"need_review", "partially_materialized", "partial"}:
+            return CheckResult(False, NODE_NEED_REVIEW, f"科学特征物化需要复核: {status}",
+                               {"source_statuses": output.get("source_statuses")})
+        return CheckResult(False, NODE_FAILED, f"科学特征物化状态异常: {status or 'empty'}")
     if node_code == "ingredient_standardize":
         return _check_ingredient_standardize(output)
     if node_code == "formula_profile":
@@ -1194,7 +1213,7 @@ def output_check(node_code: str, output: dict[str, Any], task_payload: dict[str,
 
 
 def utc_now() -> str:
-    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
 
 def _connect() -> pymysql.connections.Connection:
@@ -1239,6 +1258,16 @@ def _json_loads(value: str | None, fallback: Any) -> Any:
 
 
 def init_db() -> None:
+    global _schema_ready
+    if _schema_ready:
+        return
+    with _schema_lock:
+        if not _schema_ready:
+            _initialize_schema()
+            _schema_ready = True
+
+
+def _initialize_schema() -> None:
     with _connect() as conn:
         with conn.cursor() as cursor:
             cursor.execute(
@@ -1291,6 +1320,16 @@ def init_db() -> None:
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
                 """
             )
+            cursor.execute("SELECT COLUMN_NAME FROM information_schema.columns "
+                           "WHERE table_schema=DATABASE() AND table_name='pipeline_task_node'")
+            columns = {row["COLUMN_NAME"] for row in cursor.fetchall()}
+            for name, definition in {
+                "claim_token": "VARCHAR(64) NULL",
+                "attempt_count": "INT NOT NULL DEFAULT 0",
+                "next_attempt_at": "DATETIME NULL",
+            }.items():
+                if name not in columns:
+                    cursor.execute(f"ALTER TABLE pipeline_task_node ADD COLUMN {name} {definition}")
         conn.commit()
 
 
@@ -1338,6 +1377,8 @@ def create_task(task_type: str, payload: dict[str, Any]) -> dict[str, Any]:
                     ),
                 )
         conn.commit()
+    if not payload.get("awaiting_submission_commit"):
+        wake_dispatcher()
     return get_task(task_id) or {"id": task_id}
 
 
@@ -1359,6 +1400,8 @@ def _node_from_row(row: dict[str, Any]) -> dict[str, Any]:
         "node_code": row["node_code"],
         "node_name": row["node_name"],
         "node_status": row["node_status"],
+        "claim_token": row.get("claim_token"),
+        "attempt_count": row.get("attempt_count", 0),
         "priority": row["priority"],
         "error_message": row["error_message"],
         "started_at": str(row["started_at"]) if row["started_at"] else None,
@@ -1547,6 +1590,8 @@ def _set_node_status(
             """
             UPDATE pipeline_task_node
             SET node_status = %s,
+                claim_token = NULL,
+                next_attempt_at = NULL,
                 error_message = %s,
                 started_at = COALESCE(%s, started_at),
                 finished_at = COALESCE(%s, finished_at),
@@ -1808,44 +1853,30 @@ def _call_node(task: dict[str, Any], node_def: NodeDefinition) -> dict[str, Any]
 
 
 def _execute_ready_node(task: dict[str, Any], node_def: NodeDefinition) -> None:
+    token = "manual:" + uuid.uuid4().hex
     with _connect() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT task_status FROM pipeline_task WHERE id=%s FOR UPDATE", (task["id"],))
+            row = cursor.fetchone()
+            if not row or row["task_status"] in {TASK_CANCELLED, TASK_DONE, TASK_FAILED, TASK_NEED_REVIEW}:
+                return
+            cursor.execute("UPDATE pipeline_task_node SET node_status=%s,claim_token=%s,"
+                           "attempt_count=attempt_count+1,started_at=%s,updated_at=%s "
+                           "WHERE task_id=%s AND node_code=%s AND node_status=%s",
+                           (NODE_RUNNING, token, utc_now(), utc_now(), task["id"], node_def.node_code, NODE_READY))
+            if cursor.rowcount != 1:
+                return
         _set_task_status(conn, task["id"], TASK_PROCESSING)
-        _set_node_status(conn, task["id"], node_def.node_code, NODE_RUNNING)
         conn.commit()
-
     try:
         output = _call_node(task, node_def)
-        output = _unwrap_node_output_envelope(output)
-        output = _augment_node_output(task, node_def.node_code, output)
-        output = _repair_incomplete_ingredient_extract_output(task, node_def.node_code, output)
-        ok = bool(output.get("ok", True))
     except Exception as exc:
-        with _connect() as conn:
-            _set_node_status(conn, task["id"], node_def.node_code, NODE_FAILED, str(exc))
-            _set_task_status(conn, task["id"], TASK_FAILED, str(exc))
-            conn.commit()
+        apply_node_result(task["id"], node_def.node_code, call_status="failed",
+                          error_message=str(exc), claim_token=token)
         return
-
-    with _connect() as conn:
-        _save_node_output(conn, task["id"], node_def.node_code, output)
-        check = output_check(node_def.node_code, output, task["payload"])
-        if ok and check.status == NODE_SUCCESS:
-            _set_node_status(conn, task["id"], node_def.node_code, NODE_SUCCESS)
-        elif ok and check.status == NODE_NEED_REVIEW:
-            _set_node_status(conn, task["id"], node_def.node_code, NODE_NEED_REVIEW, check.reason)
-            _set_task_status(conn, task["id"], TASK_NEED_REVIEW, check.reason)
-        elif ok and check.status == NODE_WAITING_RESULT:
-            _set_node_status(conn, task["id"], node_def.node_code, NODE_WAITING_RESULT, check.reason)
-        else:
-            _set_node_status(
-                conn,
-                task["id"],
-                node_def.node_code,
-                NODE_FAILED,
-                str(output.get("error") or check.reason or "节点执行失败"),
-            )
-            _set_task_status(conn, task["id"], TASK_FAILED, str(output.get("error") or check.reason or "节点执行失败"))
-        conn.commit()
+    apply_node_result(task["id"], node_def.node_code,
+                      call_status="success" if output.get("ok", True) else "failed",
+                      output=output, claim_token=token)
 
 
 def _finalize_task_if_possible(task_id: str) -> None:
@@ -2083,6 +2114,7 @@ def apply_node_result(
     call_status: str,
     output: dict[str, Any] | None = None,
     error_message: str | None = None,
+    claim_token: str | None = None,
 ) -> dict[str, Any]:
     task = get_task(task_id)
     if not task:
@@ -2091,14 +2123,31 @@ def apply_node_result(
     if node_code not in nodes_by_code:
         raise ValueError(f"节点不存在: {task_id}/{node_code}")
 
+    if task.get("task_status") == TASK_CANCELLED:
+        return task
+    active_token = nodes_by_code[node_code].get("claim_token")
+    if active_token and claim_token != active_token:
+        raise ValueError("节点已被其他执行轮次认领，请刷新任务")
+    if claim_token and active_token != claim_token:
+        return task
     output = _unwrap_node_output_envelope(dict(output or {}))
     output = _augment_node_output(task, node_code, output)
     normalized_status = str(call_status or "").strip().lower()
-    if normalized_status in SUCCESS_CALL_STATUSES:
-        output = _repair_incomplete_standardization_output(task, node_code, output)
-        output = _repair_incomplete_formula_input_output(task, node_code, output)
-        output = _repair_incomplete_ingredient_extract_output(task, node_code, output)
     with _connect() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT n.claim_token,t.task_status FROM pipeline_task_node n "
+                           "JOIN pipeline_task t ON t.id=n.task_id "
+                           "WHERE n.task_id=%s AND n.node_code=%s FOR UPDATE", (task_id, node_code))
+            current = cursor.fetchone()
+            if current and (current["task_status"] == TASK_CANCELLED or
+                            (current.get("claim_token") and current.get("claim_token") != claim_token) or
+                            (claim_token and current.get("claim_token") != claim_token)):
+                conn.rollback()
+                return get_task(task_id) or {"id": task_id}
+        if normalized_status in SUCCESS_CALL_STATUSES:
+            output = _repair_incomplete_standardization_output(task, node_code, output)
+            output = _repair_incomplete_formula_input_output(task, node_code, output)
+            output = _repair_incomplete_ingredient_extract_output(task, node_code, output)
         if output:
             _save_node_output(conn, task_id, node_code, output)
 
@@ -2141,6 +2190,7 @@ def apply_node_result(
     if refreshed and refreshed["task_status"] not in {TASK_DONE, TASK_FAILED, TASK_CANCELLED, TASK_NEED_REVIEW}:
         _refresh_ready_nodes(refreshed)
     _finalize_task_if_possible(task_id)
+    wake_dispatcher()
     return get_task(task_id) or {"id": task_id}
 
 
@@ -2155,6 +2205,7 @@ def cancel_task(task_id: str, reason: str | None = None) -> dict[str, Any]:
                 """
                 UPDATE pipeline_task_node
                 SET node_status = %s,
+                    claim_token = NULL,
                     error_message = COALESCE(%s, error_message),
                     updated_at = %s
                 WHERE task_id = %s
@@ -2228,46 +2279,45 @@ def reset_node_for_reextract(task_id: str, node_code: str, reason: str | None = 
                 NODE_READY if reset_code == node_code and ready else NODE_PENDING,
                 (reason or "人工触发重新抽取") if reset_code == node_code else None,
             )
+            with conn.cursor() as cursor:
+                cursor.execute("UPDATE pipeline_task_node SET attempt_count=0 WHERE task_id=%s AND node_code=%s",
+                               (task_id, reset_code))
         _set_task_status(conn, task_id, TASK_PROCESSING, None)
         conn.commit()
+    wake_dispatcher()
     return get_task(task_id) or {"id": task_id}
 
 
 def complete_duplicate_formula_tasks(source_ids: list[int]) -> list[str]:
-    """Finish image-analysis tasks whose source was confirmed as an existing formula."""
+    """Resume confirmed duplicate identities; compute and validate results normally."""
     normalized = sorted({int(value) for value in source_ids})
     if not normalized:
         return []
     placeholders = ",".join(["%s"] * len(normalized))
-    now = utc_now()
     with _connect() as conn:
         with conn.cursor() as cursor:
             cursor.execute(
-                f"""SELECT DISTINCT task_id FROM pipeline_node_output
-                    WHERE node_code='ocr_formula' AND CAST(JSON_UNQUOTE(JSON_EXTRACT(output_json,'$.source_id')) AS UNSIGNED)
-                    IN ({placeholders})""",
-                normalized,
+                f"""SELECT DISTINCT o.task_id,m.source_id,m.brand_id,m.product_id,m.formula_id
+                    FROM pipeline_node_output o
+                    JOIN pipeline_task t ON t.id=o.task_id
+                    JOIN pipeline_task_node n ON n.task_id=t.id AND n.node_code='product_standardize'
+                    JOIN catfood_ocr_standard_mapping m ON m.source_id=
+                        CAST(JSON_UNQUOTE(JSON_EXTRACT(o.output_json,'$.source_id')) AS UNSIGNED)
+                    WHERE o.node_code='ocr_formula' AND m.source_id IN ({placeholders})
+                      AND t.task_status=%s AND n.node_status=%s
+                      AND m.product_status='matched' AND m.formula_status='matched'
+                      AND m.product_id IS NOT NULL AND m.formula_id IS NOT NULL""",
+                (*normalized, TASK_NEED_REVIEW, NODE_NEED_REVIEW),
             )
-            task_ids = [row["task_id"] for row in cursor.fetchall()]
-            for task_id in task_ids:
-                cursor.execute(
-                    """UPDATE pipeline_task_node SET node_status='skipped',
-                       error_message='重复配方已确认复用，后续无需重复物化',finished_at=%s,updated_at=%s
-                       WHERE task_id=%s AND node_code IN ('formula_standardize','formula_input_build',
-                       'ingredient_extract','ingredient_standardize','formula_profile','market_profile_build')""",
-                    (now, now, task_id),
-                )
-                cursor.execute(
-                    """UPDATE pipeline_task_node SET node_status='success',error_message=NULL,
-                       finished_at=%s,updated_at=%s WHERE task_id=%s AND node_code='product_standardize'""",
-                    (now, now, task_id),
-                )
-                cursor.execute(
-                    "UPDATE pipeline_task SET task_status='success',error_message=NULL,finished_at=%s,updated_at=%s WHERE id=%s",
-                    (now, now, task_id),
-                )
-        conn.commit()
-    return task_ids
+            rows = list(cursor.fetchall())
+    resumed = []
+    for row in rows:
+        apply_node_result(row['task_id'], 'product_standardize', call_status='success',
+                          output={'source_id': row['source_id'], 'brand_id': row['brand_id'],
+                                  'product_id': row['product_id'], 'formula_id': row['formula_id'],
+                                  'product_status': 'matched', 'duplicate_formula_confirmed': True})
+        resumed.append(row['task_id'])
+    return resumed
 
 
 def resume_brand_tasks_for_source_ids(source_ids: list[int]) -> list[str]:
@@ -2367,6 +2417,7 @@ def resume_formula_tasks_for_source_ids(
             _set_node_status(conn, task_id, "formula_input_build", NODE_READY, None)
             for downstream_code in (
                 "ingredient_extract",
+                "science_feature_materialize",
                 "ingredient_standardize",
                 "formula_profile",
                 "market_profile_build",
@@ -2375,6 +2426,7 @@ def resume_formula_tasks_for_source_ids(
                 _set_node_status(conn, task_id, downstream_code, NODE_PENDING, None)
             _set_task_status(conn, task_id, TASK_PROCESSING, None)
             conn.commit()
+    wake_dispatcher()
     return task_ids
 
 
@@ -2420,6 +2472,7 @@ def claim_ready_dispatch_jobs(
     node_codes: list[str] | None = None,
     api_overrides: dict[str, Any] | None = None,
     claim: bool = True,
+    claim_prefix: str = "dispatch:",
 ) -> dict[str, Any]:
     init_db()
     limit = max(1, min(int(limit or 10), 100))
@@ -2461,6 +2514,8 @@ def claim_ready_dispatch_jobs(
         task = get_task(row["id"])
         if not task or task["task_status"] in {TASK_DONE, TASK_FAILED, TASK_CANCELLED, TASK_NEED_REVIEW}:
             continue
+        if task.get("payload", {}).get("awaiting_submission_commit"):
+            continue
         _refresh_ready_nodes(task)
         task = get_task(row["id"])
         if not task:
@@ -2497,15 +2552,32 @@ def claim_ready_dispatch_jobs(
                 ),
                 "input": build_node_input(task, node_def),
             }
-            if not api_route:
+            # upload_check is executed in-process by the worker, but still
+            # needs the same atomic claim and stale-result protection.
+            if not api_route and node_def.node_code != "upload_check":
                 job["dispatch_status"] = "api_not_configured"
                 jobs.append(job)
                 continue
             if claim:
                 with _connect() as conn:
+                    token = claim_prefix + uuid.uuid4().hex
+                    with conn.cursor() as cursor:
+                        cursor.execute("SELECT task_status FROM pipeline_task WHERE id=%s FOR UPDATE", (task["id"],))
+                        current_task = cursor.fetchone()
+                        if not current_task or current_task["task_status"] in {TASK_CANCELLED, TASK_DONE, TASK_FAILED, TASK_NEED_REVIEW}:
+                            conn.rollback()
+                            continue
+                        cursor.execute("UPDATE pipeline_task_node SET node_status=%s,claim_token=%s,"
+                                       "attempt_count=attempt_count+1,started_at=%s,updated_at=%s "
+                                       "WHERE task_id=%s AND node_code=%s AND node_status=%s "
+                                       "AND (next_attempt_at IS NULL OR next_attempt_at<=UTC_TIMESTAMP())",
+                                       (NODE_RUNNING, token, utc_now(), utc_now(), task["id"], node_def.node_code, NODE_READY))
+                        if cursor.rowcount != 1:
+                            conn.rollback()
+                            continue
                     _set_task_status(conn, task["id"], TASK_PROCESSING)
-                    _set_node_status(conn, task["id"], node_def.node_code, NODE_RUNNING)
                     conn.commit()
+                job["claim_token"] = token
             job["dispatch_status"] = "claimed" if claim else "ready"
             jobs.append(job)
 

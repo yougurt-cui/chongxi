@@ -51,6 +51,11 @@ git pull --ff-only origin "$REMOTE_BRANCH"
   services/formula_incremental_service.py \
   services/consumer_analysis_service.py \
   services/orchestrator_service.py \
+  services/orchestrator_worker.py \
+  services/submission_notifications.py \
+  services/guardian_presentation.py \
+  services/miniprogram_food_submission_service.py \
+  scripts/check_submission_config.py \
   services/pipeline_service.py \
   adapters/catfood_ingredient_adapter.py \
   scripts/rebuild_fiber_features_from_science.py \

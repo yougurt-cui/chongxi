@@ -504,7 +504,6 @@ def write_output(engine, results: list):
 
     with engine.begin() as conn:
         conn.execute(text(ddl))
-        conn.execute(text(f"DELETE FROM {quote_identifier(OUTPUT_TABLE)}"))
 
     # 展开标签为行
     rows = []
@@ -545,6 +544,7 @@ def write_output(engine, results: list):
     records = df[cols].astype(object).where(pd.notnull(df[cols]), None).to_dict(orient="records")
 
     with engine.begin() as conn:
+        conn.execute(text(f"DELETE FROM {quote_identifier(OUTPUT_TABLE)}"))
         conn.execute(insert_sql, records)
 
     print(f"\n写入 {len(records)} 行 → {OUTPUT_TABLE}")

@@ -20,6 +20,7 @@ from services.orchestrator_service import (
     cancel_task,
     create_task as create_orchestrator_task,
     get_task as get_orchestrator_task,
+    wake_dispatcher,
 )
 
 
@@ -243,19 +244,26 @@ def _recognition_status(task: dict[str, Any], output: dict[str, Any]) -> str:
 
 
 def _sync_recognition(row: dict[str, Any]) -> dict[str, Any]:
+    if row.get("status") == "cancelled":
+        return {**row, "processing_status": "cancelled", "processing_stage": "已撤销",
+                "processing_message": "已撤销此次投稿。", "result_available": False}
     task_id = row.get("orchestrator_task_id")
     if not task_id or row.get("status") != "active":
         return row
     task = get_orchestrator_task(str(task_id))
     if not task:
         return {**row, "recognition_status": "failed"} if row.get("recognition_status") in {"pending", "processing"} else row
-    output = (task.get("outputs") or {}).get("ocr_formula") or {}
+    outputs = task.get("outputs") or {}
+    output = outputs.get("ocr_formula") or {}
+    node_statuses = {n.get("node_code"): n.get("node_status") for n in task.get("nodes", [])}
+    brand = outputs.get("brand_standardize") or {}
+    product = outputs.get("product_standardize") or {}
     recognition_status = _recognition_status(task, output)
     values = {
         "recognition_status": recognition_status,
         "source_id": output.get("source_id"),
         "parsed_row_id": output.get("parsed_row_id"),
-        "recognized_brand": output.get("brand"),
+        "recognized_brand": (brand.get("standard_brand_name") if node_statuses.get("brand_standardize") == "success" else None) or output.get("brand"),
         "recognized_product_name": output.get("product_name"),
         "ingredient_composition": output.get("ingredient_composition"),
         "guarantee_json": json.dumps(output.get("guarantee") or {}, ensure_ascii=False),
@@ -263,6 +271,13 @@ def _sync_recognition(row: dict[str, Any]) -> dict[str, Any]:
     }
     with _connect() as conn:
         with conn.cursor() as cursor:
+            # OCR fallback names can come from the upload filename. Prefer
+            # the product identity that passed standardization or review.
+            if node_statuses.get("product_standardize") == "success" and product.get("product_id"):
+                cursor.execute("SELECT standard_product_name FROM catfood_standard_product WHERE product_id=%s AND active=1",
+                               (product["product_id"],))
+                canonical = cursor.fetchone() or {}
+                values["recognized_product_name"] = canonical.get("standard_product_name") or values["recognized_product_name"]
             cursor.execute(
                 f"""UPDATE {TABLE_NAME} SET recognition_status=%s,source_id=COALESCE(%s,source_id),
                 parsed_row_id=COALESCE(%s,parsed_row_id),recognized_brand=COALESCE(%s,recognized_brand),
@@ -272,10 +287,21 @@ def _sync_recognition(row: dict[str, Any]) -> dict[str, Any]:
                 (*values.values(), _now(), row["id"]),
             )
         conn.commit()
-    return {**row, **values}
+    stage = next((n for n in task.get("nodes", []) if n["node_status"] not in {"success", "skipped"}), {})
+    # Detailed node errors remain in the admin task, not in the customer page.
+    message = {
+        "failed": "本次处理暂时未能完成，请稍后重试。已上传的照片和已完成的结果会保留。",
+        "need_review": "部分资料需要核对，已完成的结果会保留，请稍后查看。",
+        "cancelled": "已撤销此次投稿。",
+    }.get(task.get("task_status"), "")
+    return {**row, **values, "processing_status": task.get("task_status"),
+            "processing_stage": stage.get("node_name") or "分析完成",
+            "processing_message": message,
+            "result_available": task.get("task_status") == "done" and recognition_status == "success"}
 
 
 def _serialize(row: dict[str, Any], images: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    from services.submission_notifications import public_config
     feedback = _recognition_feedback(row)
     row = {**row, "recognition_status": feedback["recognition_status"]}
     item = {
@@ -295,6 +321,11 @@ def _serialize(row: dict[str, Any], images: list[dict[str, Any]] | None = None) 
         "reject_reason": row.get("reject_reason") or "",
         "status": row.get("status"),
         "status_label": _status_label(row),
+        "processing_status": row.get("processing_status") or "created",
+        "processing_stage": row.get("processing_stage") or "排队中",
+        "processing_message": row.get("processing_message") or "",
+        "result_available": bool(row.get("result_available")),
+        "result_notification": public_config(),
         "created_at": str(row.get("created_at") or ""),
         "updated_at": str(row.get("updated_at") or ""),
         **feedback,
@@ -332,6 +363,8 @@ def create_food_submission(*, user_id: Any, brand_name: Any, product_name: Any,
     init_food_submission_tables()
     submission_id, now = uuid.uuid4().hex, _now()
     saved_paths: list[Path] = []
+    committed = False
+    pipeline_task = None
     try:
         cat_task = task_store.create_task("image_parse", {
             "source": "miniprogram_food_submission", "submission_id": submission_id,
@@ -349,6 +382,7 @@ def create_food_submission(*, user_id: Any, brand_name: Any, product_name: Any,
         evidence = _build_evidence(saved_paths, product_name=product_name)
         saved_paths.append(evidence)
         payload = {
+            "awaiting_submission_commit": True,
             "source": "miniprogram_food_submission", "submission_id": submission_id,
             "submitted_by_user_id": user_id, "cat_food_task_id": cat_task["id"],
             "image_id": uploaded[0]["id"], "image_ids": [item["id"] for item in uploaded],
@@ -374,11 +408,18 @@ def create_food_submission(*, user_id: Any, brand_name: Any, product_name: Any,
                         f"INSERT INTO {IMAGE_TABLE} (id,submission_id,user_id,uploaded_image_id,sort_order,created_at) VALUES (%s,%s,%s,%s,%s,%s)",
                         (uuid.uuid4().hex, submission_id, user_id, image["id"], index, now),
                     )
+                cursor.execute("UPDATE pipeline_task SET payload_json=JSON_REMOVE(payload_json,'$.awaiting_submission_commit') WHERE id=%s",
+                               (pipeline_task["id"],))
             conn.commit()
+        committed = True
+        wake_dispatcher()
         return get_food_submission(user_id, submission_id)
     except Exception:
-        for path in saved_paths:
-            path.unlink(missing_ok=True)
+        if not committed:
+            if pipeline_task:
+                cancel_task(pipeline_task["id"], "投稿未成功保存")
+            for path in saved_paths:
+                path.unlink(missing_ok=True)
         raise
 
 

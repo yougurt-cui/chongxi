@@ -2766,6 +2766,8 @@ def create_app() -> Flask:
     except Exception:
         pass
 
+    from services.orchestrator_worker import start as start_pipeline_worker
+    start_pipeline_worker(flask_app)
     return flask_app
 
 

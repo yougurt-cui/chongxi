@@ -96,8 +96,9 @@ def product_candidate_approve(product_id: int):
             action="approve",
         )
         if result.get("identity_mode") == "duplicate":
-            result["completed_task_ids"] = complete_duplicate_formula_tasks(result.get("source_ids") or [])
-            result["resumed_task_ids"] = []
+            result["resumed_task_ids"] = complete_duplicate_formula_tasks(result.get("source_ids") or [])
+            result["completed_task_ids"] = []
+            result["pipeline_complete"] = False
         else:
             result["resumed_task_ids"] = resume_product_tasks_for_source_ids(
                 result.get("source_ids") or []

@@ -9,6 +9,7 @@ from services.market_profile_rebuild_service import (
     create_rebuild_task,
     get_rebuild_task,
     rebuild_market_profile_for_orchestrator,
+    MarketProfileBusy,
 )
 
 
@@ -20,6 +21,8 @@ market_profile_api = Blueprint("market_profile_api", __name__, url_prefix="/api/
 def rebuild_market_profile_node():
     try:
         return jsonify(rebuild_market_profile_for_orchestrator(request.get_json(silent=True) or {})), 200
+    except MarketProfileBusy as exc:
+        return jsonify({"ok": False, "code": "market_profile_busy", "message": str(exc)}), 409
     except ValueError as exc:
         return jsonify({"ok": False, "message": str(exc)}), 409
     except RuntimeError as exc:

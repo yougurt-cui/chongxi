@@ -632,7 +632,9 @@ blood_in_stool表示血，mucus_in_stool表示黏液，必须分开。任何unkn
 疾病和历史饮食只有用户明确作答才记录，不能把任意一句话当成同时回答两个问题。
 """
 
-_TWO_STAGE_SYSTEM_PROMPT = """
+from services.guardian_presentation import STYLE_INSTRUCTION
+
+_TWO_STAGE_SYSTEM_PROMPT = STYLE_INSTRUCTION + "\n" + """
 你是宠物饮食与日常照护管家，帮助用户理解饮食、对照历史吃粮表现、形成行动建议，而不是开展诊断问诊。
 只输出合法JSON对象，包含reasoning_message、action_steps、observation、review四个字段，后三项用于没有next_question时的最终建议。
 reasoning_message尽量控制在120字内；show_product_evidence为false时只解释本轮新增信息与下一步，不再复述配方指标。

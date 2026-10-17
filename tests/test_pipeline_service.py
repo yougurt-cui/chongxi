@@ -11,7 +11,7 @@ def test_current_upload_is_reparsed_by_resolved_source_id(monkeypatch, tmp_path)
     monkeypatch.setattr(
         service,
         "import_ingredient_images",
-        lambda **kwargs: {"success_samples": [{"file_sha256": "abc123"}]},
+        lambda **kwargs: {"succeeded": 1, "success_samples": [{"file_sha256": "abc123"}]},
     )
     monkeypatch.setattr(
         service,
