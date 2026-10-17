@@ -263,6 +263,8 @@ def _sync_recognition(row: dict[str, Any]) -> dict[str, Any]:
     product_id = product.get("product_id") or formula.get("product_id")
     formula_id = formula.get("formula_id") or formula_input.get("formula_id") or product.get("formula_id")
     recognition_status = _recognition_status(task, output)
+    portrait_ready = bool(formula_id) and node_statuses.get("product_portrait_summary") == "success"
+    auto_completed = portrait_ready and row.get("review_status") != "rejected"
     values = {
         "recognition_status": recognition_status,
         "source_id": output.get("source_id"),
@@ -275,6 +277,8 @@ def _sync_recognition(row: dict[str, Any]) -> dict[str, Any]:
         "standard_product_id": product_id,
         "formula_id": formula_id,
         "catalog_key": f"formula:{int(formula_id)}" if formula_id else None,
+        "review_status": "approved" if auto_completed else row.get("review_status"),
+        "publish_status": "published" if auto_completed else row.get("publish_status"),
     }
     with _connect() as conn:
         with conn.cursor() as cursor:
@@ -292,8 +296,19 @@ def _sync_recognition(row: dict[str, Any]) -> dict[str, Any]:
                 ingredient_composition=COALESCE(%s,ingredient_composition),guarantee_json=%s,
                 recognition_result_json=%s,standard_product_id=COALESCE(%s,standard_product_id),
                 formula_id=COALESCE(%s,formula_id),catalog_key=COALESCE(%s,catalog_key),
+                review_status=CASE WHEN %s THEN 'approved' ELSE review_status END,
+                publish_status=CASE WHEN %s THEN 'published' ELSE publish_status END,
+                reviewed_at=CASE WHEN %s AND reviewed_at IS NULL THEN %s ELSE reviewed_at END,
+                reviewer=CASE WHEN %s AND reviewer IS NULL THEN 'pipeline:auto' ELSE reviewer END,
                 updated_at=%s WHERE id=%s""",
-                (*values.values(), _now(), row["id"]),
+                (
+                    values["recognition_status"], values["source_id"], values["parsed_row_id"],
+                    values["recognized_brand"], values["recognized_product_name"],
+                    values["ingredient_composition"], values["guarantee_json"],
+                    values["recognition_result_json"], values["standard_product_id"],
+                    values["formula_id"], values["catalog_key"], auto_completed,
+                    auto_completed, auto_completed, _now(), auto_completed, _now(), row["id"],
+                ),
             )
         conn.commit()
     stage = next((n for n in task.get("nodes", []) if n["node_status"] not in {"success", "skipped"}), {})

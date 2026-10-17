@@ -234,6 +234,51 @@ class SubmissionAutomationTests(unittest.TestCase):
         self.assertEqual(result['standard_product_id'], 174)
         self.assertEqual(result['formula_id'], 327)
         self.assertEqual(result['catalog_key'], 'formula:327')
+        self.assertEqual(result['review_status'], 'approved')
+        self.assertEqual(result['publish_status'], 'published')
+
+    def test_submission_stays_pending_until_product_portrait_succeeds(self):
+        task = {'task_status': 'need_review', 'outputs': {
+            'ocr_formula': {'ingredient_composition': '鸡肉、鱼油'},
+            'formula_standardize': {'product_id': 174, 'formula_id': 327},
+        }, 'nodes': [
+            {'node_code': 'ocr_formula', 'node_status': 'success'},
+            {'node_code': 'formula_standardize', 'node_status': 'success'},
+            {'node_code': 'product_portrait_summary', 'node_status': 'need_review'},
+        ]}
+        conn = MagicMock()
+        conn.__enter__.return_value = conn
+        conn.cursor.return_value.__enter__.return_value.fetchone.return_value = None
+        with patch.object(submissions, 'get_orchestrator_task', return_value=task), \
+                patch.object(submissions, '_connect', return_value=conn):
+            result = submissions._sync_recognition({
+                'id': 'submission', 'status': 'active', 'orchestrator_task_id': 'task',
+                'review_status': 'pending', 'publish_status': 'unpublished',
+            })
+        self.assertEqual(result['catalog_key'], 'formula:327')
+        self.assertEqual(result['review_status'], 'pending')
+        self.assertEqual(result['publish_status'], 'unpublished')
+
+    def test_pipeline_does_not_reverse_an_explicit_rejection(self):
+        task = {'task_status': 'done', 'outputs': {
+            'ocr_formula': {'ingredient_composition': '鸡肉、鱼油'},
+            'formula_standardize': {'product_id': 174, 'formula_id': 327},
+        }, 'nodes': [
+            {'node_code': 'ocr_formula', 'node_status': 'success'},
+            {'node_code': 'formula_standardize', 'node_status': 'success'},
+            {'node_code': 'product_portrait_summary', 'node_status': 'success'},
+        ]}
+        conn = MagicMock()
+        conn.__enter__.return_value = conn
+        conn.cursor.return_value.__enter__.return_value.fetchone.return_value = None
+        with patch.object(submissions, 'get_orchestrator_task', return_value=task), \
+                patch.object(submissions, '_connect', return_value=conn):
+            result = submissions._sync_recognition({
+                'id': 'submission', 'status': 'active', 'orchestrator_task_id': 'task',
+                'review_status': 'rejected', 'publish_status': 'unpublished',
+            })
+        self.assertEqual(result['review_status'], 'rejected')
+        self.assertEqual(result['publish_status'], 'unpublished')
 
     def test_cancelled_submission_does_not_show_queued_progress(self):
         with patch.object(submissions, 'get_orchestrator_task') as get_task:
