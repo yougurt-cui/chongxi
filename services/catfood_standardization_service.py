@@ -1843,6 +1843,43 @@ def _name_match_conflicts_with_formula_precheck(product_id: int, precheck: dict[
     return not any(_strong_formula_candidate(item) for item in product_formula_candidates)
 
 
+def _select_exact_formula_auto_match(
+    candidates: list[dict[str, Any]],
+    *,
+    submitted_names: list[str],
+    known_names: list[str],
+) -> dict[str, Any] | None:
+    """Return one safe exact-formula match, otherwise preserve manual review.
+
+    Ingredient fingerprints alone are not a product identity: different SKUs can
+    share a recipe.  Automatic reuse therefore also requires one same-brand
+    product, an approved name/alias match and no conflicting guarantee values.
+    Multiple active formula versions are acceptable when they belong to that
+    same product; the newest version is preferred.
+    """
+    exact = [
+        item for item in candidates
+        if item.get("formula_id")
+        and item.get("fingerprint_exact")
+        and not item.get("cross_brand")
+    ]
+    product_ids = {int(item["product_id"]) for item in exact}
+    if len(product_ids) != 1:
+        return None
+
+    submitted = {normalize_name(value) for value in submitted_names if normalize_name(value)}
+    known = {normalize_name(value) for value in known_names if normalize_name(value)}
+    if not submitted or not submitted.intersection(known):
+        return None
+
+    for item in exact:
+        nutrition = item.get("nutrition_evidence") or {}
+        if int(nutrition.get("comparable_count") or 0) and nutrition.get("differences"):
+            return None
+
+    return max(exact, key=lambda item: int(item.get("formula_version") or 0))
+
+
 def standardize_product(payload: dict[str, Any]) -> dict[str, Any]:
     init_standardization_db()
     source_id = _required_int(payload.get("source_id"), "source_id")
@@ -1890,13 +1927,67 @@ def standardize_product(payload: dict[str, Any]) -> dict[str, Any]:
                 item for item in formula_candidates
                 if item.get("formula_id") and item.get("fingerprint_exact")
             ]
+            safe_duplicate_match = None
+            same_brand_exact_product_ids = {
+                int(item["product_id"])
+                for item in duplicate_formula_matches
+                if not item.get("cross_brand")
+            }
+            if len(same_brand_exact_product_ids) == 1:
+                exact_product_id = next(iter(same_brand_exact_product_ids))
+                cursor.execute(
+                    f"""
+                    SELECT * FROM `{PRODUCT_TABLE}`
+                    WHERE product_id = %s AND brand_id = %s AND active = 1
+                    """,
+                    (exact_product_id, mapping["brand_id"]),
+                )
+                exact_product = cursor.fetchone()
+                if exact_product:
+                    cursor.execute(
+                        f"""
+                        SELECT alias_name FROM `{PRODUCT_ALIAS_TABLE}`
+                        WHERE product_id = %s AND brand_id = %s AND active = 1
+                        """,
+                        (exact_product_id, mapping["brand_id"]),
+                    )
+                    aliases = [row.get("alias_name") for row in cursor.fetchall()]
+                    safe_duplicate_match = _select_exact_formula_auto_match(
+                        duplicate_formula_matches,
+                        submitted_names=[name for name, _ in normalized_candidates],
+                        known_names=[
+                            exact_product.get("standard_product_name"),
+                            exact_product.get("display_name"),
+                            *aliases,
+                        ],
+                    )
             auto_product_ids = {
                 int(item["product_id"]) for item in auto_formula_matches
             }
             match = None
             match_method = None
             confidence: float | None = None
-            if not duplicate_formula_matches and len(auto_product_ids) == 1:
+            if safe_duplicate_match:
+                matched_product_id = int(safe_duplicate_match["product_id"])
+                cursor.execute(
+                    f"""
+                    SELECT * FROM `{PRODUCT_TABLE}`
+                    WHERE product_id = %s AND brand_id = %s AND active = 1
+                    """,
+                    (matched_product_id, mapping["brand_id"]),
+                )
+                match = cursor.fetchone()
+                if match:
+                    match_method = "exact_formula_auto_reuse"
+                    confidence = 1.0
+                    _upsert_product_alias(
+                        cursor,
+                        product_id=matched_product_id,
+                        brand_id=int(mapping["brand_id"]),
+                        alias_name=raw_name,
+                        source="exact_formula_auto_reuse",
+                    )
+            elif not duplicate_formula_matches and len(auto_product_ids) == 1:
                 matched_product_id = next(iter(auto_product_ids))
                 cursor.execute(
                     f"""
@@ -1978,7 +2069,7 @@ def standardize_product(payload: dict[str, Any]) -> dict[str, Any]:
                         match_method = "name"
                         confidence = 1.0
 
-            if duplicate_formula_matches:
+            if duplicate_formula_matches and not safe_duplicate_match:
                 status = "conflict"
                 match = None
                 match_method = "duplicate_formula"
@@ -2051,7 +2142,11 @@ def standardize_product(payload: dict[str, Any]) -> dict[str, Any]:
         "product_candidates": name_matches,
         "formula_product_candidates": formula_candidates,
         "duplicate_formula_candidates": duplicate_formula_matches,
-        "reason": "发现相同配方指纹，请确认复用已有 formula" if duplicate_formula_matches else None,
+        "reason": (
+            "发现相同配方指纹，请确认复用已有 formula"
+            if duplicate_formula_matches and not safe_duplicate_match
+            else None
+        ),
         "review_candidate_id": candidate_product_id,
     }
     return result

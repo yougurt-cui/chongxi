@@ -6,6 +6,7 @@ from services.catfood_standardization_service import (
     _merge_product_candidate_lineage,
     _merge_json_lists,
     _preferred_value,
+    _select_exact_formula_auto_match,
     ingredient_similarity,
     nutrition_similarity,
     normalize_ingredients,
@@ -15,6 +16,60 @@ from services.catfood_standardization_service import (
 
 
 class CatfoodStandardizationServiceTest(unittest.TestCase):
+    def test_exact_formula_auto_reuses_unique_same_brand_named_product(self):
+        match = _select_exact_formula_auto_match(
+            [
+                {
+                    "product_id": 173,
+                    "formula_id": 326,
+                    "formula_version": 2,
+                    "fingerprint_exact": True,
+                    "cross_brand": False,
+                    "nutrition_evidence": {
+                        "comparable_count": 4,
+                        "differences": [],
+                    },
+                }
+            ],
+            submitted_names=["爱肯拿牧场盛宴", "牧场盛宴"],
+            known_names=["牧场盛宴"],
+        )
+        self.assertIsNotNone(match)
+        self.assertEqual(match["formula_id"], 326)
+
+    def test_exact_formula_keeps_manual_review_for_multiple_products(self):
+        match = _select_exact_formula_auto_match(
+            [
+                {"product_id": 173, "formula_id": 326, "fingerprint_exact": True, "cross_brand": False},
+                {"product_id": 174, "formula_id": 327, "fingerprint_exact": True, "cross_brand": False},
+            ],
+            submitted_names=["牧场盛宴"],
+            known_names=["牧场盛宴"],
+        )
+        self.assertIsNone(match)
+
+    def test_exact_formula_keeps_manual_review_for_name_or_nutrition_conflict(self):
+        candidate = {
+            "product_id": 173,
+            "formula_id": 326,
+            "fingerprint_exact": True,
+            "cross_brand": False,
+            "nutrition_evidence": {"comparable_count": 4, "differences": []},
+        }
+        self.assertIsNone(_select_exact_formula_auto_match(
+            [candidate], submitted_names=["海洋盛宴"], known_names=["牧场盛宴"],
+        ))
+        conflicting = {
+            **candidate,
+            "nutrition_evidence": {
+                "comparable_count": 4,
+                "differences": [{"metric": "粗蛋白"}],
+            },
+        }
+        self.assertIsNone(_select_exact_formula_auto_match(
+            [conflicting], submitted_names=["牧场盛宴"], known_names=["牧场盛宴"],
+        ))
+
     def test_page_brand_input_precedes_ocr_brand_fallback(self):
         candidates = _brand_input_candidates(
             {"brand_name": "肉垫"},
