@@ -23,7 +23,7 @@ def _config(max_attempts=3):
     return {
         "api_key": "test-key",
         "endpoint": "https://example.test/chat/completions",
-        "model": "qwen-vl-ocr-latest",
+        "model": "qwen-vl-ocr",
         "timeout_seconds": 10,
         "max_image_edge": 1600,
         "max_image_bytes": 2_500_000,

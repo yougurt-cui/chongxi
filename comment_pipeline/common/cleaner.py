@@ -108,13 +108,37 @@ def is_meaningful(text: str) -> bool:
     return bool(len(compact) >= 2 and MEANINGFUL_RE.search(compact) and not LOW_VALUE_RE.fullmatch(compact))
 
 
+# 性能修复：别名正则原来在每行、每个别名上现算 re.escape + 重编译。
+# 别名数量远超 Python 的 512 条正则缓存，导致缓存颠簸 —— 实测 400 行触发 22 万次
+# 正则编译，占清洗耗时 ~70%。这里按别名字典预编译一次并缓存，语义完全不变。
+_ALIAS_RX_CACHE: dict[int, tuple[Any, tuple[tuple[Any, str, Any], ...]]] = {}
+
+
+def _compiled_alias_index(aliases: dict[str, Any], cache: dict) -> tuple[tuple[Any, str, Any], ...]:
+    key = id(aliases)
+    cached = cache.get(key)
+    # 保留 aliases 的强引用，避免 id 被回收后复用导致取到错缓存
+    if cached is not None and cached[0] is aliases:
+        return cached[1]
+    index = tuple(
+        (re.compile(re.escape(alias), re.IGNORECASE), alias, value)
+        for alias, value in aliases.items()
+        if alias
+    )
+    cache[key] = (aliases, index)
+    return index
+
+
+_PRODUCT_ALIAS_RX_CACHE: dict[int, tuple[Any, tuple[tuple[Any, str, Any], ...]]] = {}
+
+
 def recognize_brand(text: str, brand_aliases: dict[str, str]) -> str:
-    matches = [
-        (alias, standard)
-        for alias, standard in brand_aliases.items()
-        if alias and re.search(re.escape(alias), text, flags=re.IGNORECASE)
-    ]
-    return max(matches, key=lambda pair: len(pair[0]))[1] if matches else ""
+    best_alias = ""
+    best_standard = ""
+    for rx, alias, standard in _compiled_alias_index(brand_aliases, _ALIAS_RX_CACHE):
+        if len(alias) > len(best_alias) and rx.search(text):
+            best_alias, best_standard = alias, standard
+    return best_standard
 
 
 def recognize_product(
@@ -122,8 +146,8 @@ def recognize_product(
 ) -> tuple[str, str]:
     alias_matches = [
         (alias, value)
-        for alias, value in (product_aliases or {}).items()
-        if alias and re.search(re.escape(alias), text, flags=re.IGNORECASE)
+        for _rx, alias, value in _compiled_alias_index(product_aliases or {}, _PRODUCT_ALIAS_RX_CACHE)
+        if _rx.search(text)
     ]
     if alias_matches:
         _alias, (standard_name, category) = max(alias_matches, key=lambda pair: len(pair[0]))

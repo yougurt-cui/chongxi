@@ -24,7 +24,7 @@ from .utils import now_ms, safe_json_dumps, safe_json_loads
 
 TABLE_RE = re.compile(r"^[A-Za-z0-9_]+$")
 DEFAULT_BASIS = "干物质"
-DEFAULT_MODEL = "qwen-vl-ocr-latest"
+DEFAULT_MODEL = "qwen-vl-ocr"
 DEFAULT_ENDPOINT = "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
 DEFAULT_QWEN_TIMEOUT_SECONDS = 300
 DEFAULT_QWEN_MAX_IMAGE_EDGE = 1600
