@@ -54,6 +54,20 @@ def _catalog_key_exists(catalog_key: str) -> bool:
             return cursor.fetchone() is not None
 
 
+def _formula_portrait_exists(formula_id: Any) -> bool:
+    if not formula_id:
+        return False
+    with pymysql.connect(
+        **get_feature_mysql_config(), cursorclass=pymysql.cursors.DictCursor, autocommit=True
+    ) as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                "SELECT 1 FROM catfood_formula_portrait_summary WHERE formula_id=%s LIMIT 1",
+                (int(formula_id),),
+            )
+            return cursor.fetchone() is not None
+
+
 def _clean(value: Any, max_length: int | None = None) -> str:
     text = str(value or "").strip()
     return text[:max_length] if max_length else text
@@ -263,7 +277,13 @@ def _sync_recognition(row: dict[str, Any]) -> dict[str, Any]:
     product_id = product.get("product_id") or formula.get("product_id")
     formula_id = formula.get("formula_id") or formula_input.get("formula_id") or product.get("formula_id")
     recognition_status = _recognition_status(task, output)
-    portrait_ready = bool(formula_id) and node_statuses.get("product_portrait_summary") == "success"
+    portrait_ready = bool(formula_id) and (
+        node_statuses.get("product_portrait_summary") == "success"
+        or (
+            "product_portrait_summary" not in node_statuses
+            and _formula_portrait_exists(formula_id)
+        )
+    )
     auto_completed = portrait_ready and row.get("review_status") != "rejected"
     values = {
         "recognition_status": recognition_status,

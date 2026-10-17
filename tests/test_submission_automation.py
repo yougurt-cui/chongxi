@@ -280,6 +280,28 @@ class SubmissionAutomationTests(unittest.TestCase):
         self.assertEqual(result['review_status'], 'rejected')
         self.assertEqual(result['publish_status'], 'unpublished')
 
+    def test_legacy_submission_completes_when_formula_portrait_already_exists(self):
+        task = {'task_status': 'done', 'outputs': {
+            'ocr_formula': {'ingredient_composition': '鸡肉、鱼油'},
+            'formula_standardize': {'product_id': 174, 'formula_id': 327},
+        }, 'nodes': [
+            {'node_code': 'ocr_formula', 'node_status': 'success'},
+            {'node_code': 'formula_standardize', 'node_status': 'success'},
+        ]}
+        conn = MagicMock()
+        conn.__enter__.return_value = conn
+        conn.cursor.return_value.__enter__.return_value.fetchone.return_value = None
+        with patch.object(submissions, 'get_orchestrator_task', return_value=task), \
+                patch.object(submissions, '_formula_portrait_exists', return_value=True), \
+                patch.object(submissions, '_connect', return_value=conn):
+            result = submissions._sync_recognition({
+                'id': 'legacy', 'status': 'active', 'orchestrator_task_id': 'task',
+                'review_status': 'pending', 'publish_status': 'unpublished',
+            })
+        self.assertEqual(result['catalog_key'], 'formula:327')
+        self.assertEqual(result['review_status'], 'approved')
+        self.assertEqual(result['publish_status'], 'published')
+
     def test_cancelled_submission_does_not_show_queued_progress(self):
         with patch.object(submissions, 'get_orchestrator_task') as get_task:
             result = submissions._sync_recognition({'id': 's', 'status': 'cancelled', 'orchestrator_task_id': 't'})
