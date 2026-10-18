@@ -3,6 +3,7 @@ from unittest.mock import patch
 
 from app_config import get_chat_model_config
 from services import miniprogram_chat_service as service
+from services.product_portrait_summary_service import build_portrait
 
 
 class MiniProgramChatServiceTest(unittest.TestCase):
@@ -76,19 +77,21 @@ class MiniProgramChatServiceTest(unittest.TestCase):
         analysis = {"product": {"formula_id": 15}, "ingredient_analysis": {"groups": []}}
         with patch.object(service, "_build_context", return_value=context), \
              patch.object(service, "_food_analysis_by_formula", return_value=analysis) as load, \
+             patch.object(service.health_flow, 'load_health_mappings', return_value={'status': 'ready', 'rows': []}), \
              patch.object(service, "_generate_answer", return_value=("当前粮分析结果", "test-model")) as generate:
             result = service._handle_context_message(
                 "u1", {"pet_id": "p1"}, "分析一下我现在吃的粮", state,
                 intent_result=({"primary_intent": "food_analysis", "secondary_intent": None, "slots": {}}, None),
             )
         self.assertEqual(result["response_type"], "result_card")
-        self.assertEqual(result["reply"], "当前粮分析结果")
+        self.assertIn('渴望 原始猎食原味', result['reply'])
+        self.assertEqual(result['result']['health_analysis']['subjects'][0]['reason'], 'portrait_unavailable')
         self.assertEqual(state["slots"]["food_name"], "渴望 原始猎食原味")
         self.assertEqual(state["slots"]["catalog_key"], "formula:15")
-        self.assertIsNone(state["current_step"])
+        self.assertEqual(state['current_step'], service.health_flow.CONFIRM_SLOT)
         load.assert_called_once_with(15, 15)
-        self.assertEqual(generate.call_args.args[2]["food_analysis"], analysis)
-        self.assertEqual(generate.call_args.args[2]["food_analysis_scope"], "current")
+        generate.assert_not_called()
+        self.assertEqual(context['food_analysis_scope'], 'current')
 
     def test_history_food_analysis_uses_every_saved_formula_and_keeps_unlinked_records(self):
         state = service._default_state("c1")
@@ -105,20 +108,23 @@ class MiniProgramChatServiceTest(unittest.TestCase):
         history_analysis = {"product": {"formula_id": 304}, "ingredient_analysis": {"groups": []}}
         with patch.object(service, "_build_context", return_value=context), \
              patch.object(service, "_food_analysis_by_formula", return_value=history_analysis) as load, \
+             patch.object(service.health_flow, 'load_health_mappings', return_value={'status': 'ready', 'rows': []}), \
              patch.object(service, "_generate_answer", return_value=("历史粮分析结果", "test-model")) as generate:
             result = service._handle_context_message(
                 "u1", {"pet_id": "p1"}, "分析一下我历史吃过的粮", state,
                 intent_result=({"primary_intent": "food_analysis", "secondary_intent": None, "slots": {}}, None),
             )
         self.assertEqual(result["response_type"], "result_card")
-        self.assertEqual(result["reply"], "历史粮分析结果")
+        self.assertIn('皇家 肠道处方粮', result['reply'])
+        self.assertIn('鲜朗 烘焙全价猫粮', result['reply'])
         self.assertEqual(state["slots"]["food_name"], "历史口粮")
         load.assert_called_once_with(304, 15)
-        analyses = generate.call_args.args[2]["food_history_analyses"]
+        generate.assert_not_called()
+        analyses = context['food_history_analyses']
         self.assertEqual([item["analysis_status"] for item in analyses], ["available", "unavailable"])
         self.assertEqual(analyses[0]["diet_record"]["formula_id"], 304)
         self.assertIsNone(analyses[1]["diet_record"]["formula_id"])
-        self.assertEqual(generate.call_args.args[2]["food_analysis_scope"], "history")
+        self.assertEqual(context['food_analysis_scope'], 'history')
 
     def test_current_and_history_food_comparison_loads_both_sides(self):
         state = service._default_state("c1")
@@ -143,15 +149,20 @@ class MiniProgramChatServiceTest(unittest.TestCase):
             "missing_dimensions": ["纤维支持"],
             "note": "画像比较描述配方特点，不代表实际健康效果；互补不表示建议混喂。",
         }}
+        for fid, item, fat in ((15, current_analysis, .2), (304, history_analysis, .8)):
+            item['product_portrait'] = build_portrait({'formula_id': fid, 'id': fid, 'feature_version': 'soft_v1',
+                'protein_quality_score': .8, 'protein_score': .3, 'fat_score': fat,
+                'fiber_score': None, 'carb_score': 2, 'prebiotic_score': 1.3})
         with patch.object(service, "_build_context", return_value=context), \
              patch.object(service, "_food_analysis_by_formula", side_effect=[current_analysis, history_analysis]) as load, \
+             patch.object(service.health_flow, 'load_health_mappings', return_value={'status': 'ready', 'rows': []}), \
              patch.object(service, "_generate_answer", return_value=("对比结果", "test-model")) as generate:
             result = service._handle_context_message(
                 "u1", {"pet_id": "p1"}, "对比一下我现在吃的粮和历史粮", state,
                 intent_result=({"primary_intent": "food_analysis", "secondary_intent": None, "slots": {}}, None),
             )
         self.assertEqual(result["response_type"], "result_card")
-        self.assertIn("渴望 原始猎食原味 vs 皇家 肠道处方粮", result["reply"])
+        self.assertIn("渴望 原始猎食原味 与 皇家 肠道处方粮", result["reply"])
         self.assertIn("共同特点", result["reply"])
         self.assertIn("潜在短板", result["reply"])
         self.assertIn("画像缺项：纤维支持", result["reply"])

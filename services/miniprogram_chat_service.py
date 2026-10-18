@@ -30,6 +30,7 @@ from services.guardian_product_portrait_service import load_product_portraits, c
 from services.guardian_reminder_flow_service import handle_reminder
 from services.soft_stool_assistant_service import handle_turn as handle_soft_stool_turn
 from services.guardian_workflow import FlowStrategy, select_strategy, requested_flow, build_handoff
+from services import guardian_health_flow_service as health_flow
 
 
 CONVERSATION_TABLE = "miniprogram_chat_conversation"
@@ -645,6 +646,9 @@ def _prepare_saved_food_analysis(message: str, state: dict[str, Any], context: d
         if current_formula_id:
             slots['catalog_key'] = f'formula:{int(current_formula_id)}'
             context['food_analysis'] = _food_analysis_by_formula(current_formula_id, current_formula_id)
+    elif mentions_current:
+        context['food_analysis_scope'] = 'current'
+        context['food_analysis'] = None
 
 
 def _saved_food_comparison_text(context: dict[str, Any]) -> str | None:
@@ -677,6 +681,12 @@ def _build_context(user_id: str, conversation: dict[str, Any], state: dict[str, 
     packet = (state.get("slots") or {}).get(GUARDIAN_CONTEXT_SLOT)
     if isinstance(packet, dict) and packet.get("pet_id") == conversation.get("pet_id"):
         context["guardian_context"] = deepcopy(packet)
+    analysis_reference = (state.get('slots') or {}).get(health_flow.RECOMMENDATION_KEY)
+    if isinstance(analysis_reference, dict) and analysis_reference.get('pet_id') == conversation.get('pet_id'):
+        context['health_analysis_reference'] = deepcopy(analysis_reference)
+    previous_analysis = (state.get('slots') or {}).get(health_flow.STATE_KEY)
+    if isinstance(previous_analysis, dict) and previous_analysis.get('pet_id') == conversation.get('pet_id'):
+        context['food_health_analysis'] = deepcopy(previous_analysis)
     supplied_context = client_context if isinstance(client_context, dict) else {}
     context["recent_daily_records"] = _normalize_daily_records(supplied_context.get("recent_daily_records"))
     if pet and (pet.get("food_brand") or pet.get("food_product")):
@@ -820,6 +830,9 @@ def _generate_answer(message: str, state: dict[str, Any], context: dict[str, Any
                     "只依据提供的数据回答，不得编造产品、配料、评分或疾病结论。"
                     "回答前综合pet_profile、current_food、food_list和recent_daily_records；明确区分没有记录与数值为零，"
                     "guardian_context含前一个场景的事实与来源，切换选粮时沿用这些信息，不重复开展症状问诊。"
+                    "health_analysis_reference是用户确认后沿用的产品分析依据；其中关注点不是已确诊症状，分析对象不等于当前正在吃的粮。"
+                    "food_health_analysis保存前一次产品健康解读及来源；用户追问具体关注点时，依据它解释，不重复输出整份分析或自动推荐。"
+                    "推荐筛选与排序仍以recommendation已执行规则为准，不得声称健康解读另行改变了排序或候选一定改善了某个关注点。"
                     "diet_history是已确认的宠物吃粮记录；food_list仅为用户上传的产品，不代表吃过。"
                     "food_analysis_scope为current时直接分析档案当前粮，不得再追问粮名；为history时逐条使用food_history_analyses；"
                     "为current_vs_history时必须把food_analysis中的当前粮与food_history_analyses中的历史粮逐项对比，明确说出产品名、共同点、差异和取舍，不得漏掉任一侧。"
@@ -849,6 +862,28 @@ def _handle_context_message(user_id, conversation, message, state, source_messag
                             forced_intent=None, intent_result=None):
     attachments = attachments or []
     client_context = client_context or {}
+    previous_food_name = state['slots'].get('food_name')
+    interaction = interaction or health_flow.confirmation_interaction(message, state)
+    if interaction and interaction.get('slot') == health_flow.CONFIRM_SLOT:
+        declined = health_flow.accept_confirmation(interaction, user_id, conversation, state)
+        if declined:
+            return declined
+        interaction, message, forced_intent = None, '帮我推荐一款主粮', 'food_switch'
+        intent_result = ({'primary_intent': 'food_switch', 'slots': {}, '_target_flow': 'food_switch'}, None)
+    elif interaction and interaction.get('slot') == health_flow.CHOICE_SLOT:
+        if (state.get('current_step') != health_flow.CHOICE_SLOT
+                or interaction.get('value') not in state['slots'].get('_food_analysis_choices', [])):
+            raise ValueError('这条粮款选择已失效，请重新提供要分析的食品。')
+        state['slots']['catalog_key'] = interaction['value']
+        state['slots'].pop('_food_analysis_choices', None)
+        state.update(primary_intent='food_analysis', current_step=None)
+    elif not interaction and (message or attachments):
+        # A new question invalidates buttons belonging to a previous analysis.
+        snapshot = state['slots'].get(health_flow.STATE_KEY) or {}
+        if snapshot.get('stage') == 'pending':
+            snapshot['stage'] = 'superseded'
+            if state.get('current_step') == health_flow.CONFIRM_SLOT:
+                state['current_step'] = None
     model_name = None
     previous_food_goal = state.get('slots', {}).get('food_goal')
     previous_scene = (state['slots'].get('food_health_state'), state['slots'].get('food_health_stage'))
@@ -871,6 +906,8 @@ def _handle_context_message(user_id, conversation, message, state, source_messag
     if interaction:
         slot = _clean(interaction.get("slot"),64)
         if not slot: raise ValueError("interaction.slot 不能为空")
+        if slot == health_flow.CHOICE_SLOT:
+            state['primary_intent'] = 'food_analysis'
         scene_options = {'food_health_state': STATES, 'food_health_stage': STAGES,
                          'food_tolerance': {'current_good': '当前粮吃得稳定', 'unknown': '暂不清楚'}}
         if slot in scene_options and interaction.get('value') not in scene_options[slot]:
@@ -890,6 +927,9 @@ def _handle_context_message(user_id, conversation, message, state, source_messag
         if forced_intent:
             extraction = {**extraction, "primary_intent": forced_intent, "secondary_intent": None,
                           "slots": {key: value for key, value in (extraction.get("slots") or {}).items() if key in INTENT_SLOTS[forced_intent]}}
+        if extraction['primary_intent'] == 'food_analysis' and extraction.get('slots', {}).get('food_name'):
+            if extraction['slots']['food_name'] != state['slots'].get('food_name'):
+                state['slots'].pop('catalog_key', None)
         state["primary_intent"] = extraction["primary_intent"]
         state["secondary_intent"] = extraction.get("secondary_intent")
         state["slots"].update(extraction.get("slots") or {})
@@ -902,11 +942,12 @@ def _handle_context_message(user_id, conversation, message, state, source_messag
         state["primary_intent"] = "ingredient_analysis"
     context = _build_context(user_id, conversation, state, attachments, client_context)
     submission = context.get("food_submission")
-    if attachments and not message and submission and submission.get("formula_id"):
+    if (attachments and submission and submission.get('formula_id')
+            and state.get('primary_intent') in {'food_analysis', 'ingredient_analysis', 'general_pet_qa'}):
         formula_id = int(submission["formula_id"])
         current_id = (context.get("current_food") or {}).get("formula_id")
         analysis = _food_analysis_by_formula(formula_id, current_id)
-        if analysis and analysis.get("product_portrait"):
+        if analysis:
             state["primary_intent"] = "food_analysis"
             state["slots"].update(
                 food_name=" ".join(filter(None, (
@@ -916,7 +957,16 @@ def _handle_context_message(user_id, conversation, message, state, source_messag
                 catalog_key=f"formula:{formula_id}",
             )
             context["food_analysis"] = analysis
+            context['food_analysis_scope'] = 'catalog'
     _prepare_saved_food_analysis(message, state, context)
+    analysis_followup = (state.get('primary_intent') == 'food_analysis'
+                         and bool(state['slots'].get(health_flow.STATE_KEY))
+                         and not attachments and not interaction and bool(message)
+                         and not health_flow.named_request(message)
+                         and previous_food_name == state['slots'].get('food_name'))
+    analysis_reply = None
+    if state.get('primary_intent') == 'food_analysis' and not analysis_followup:
+        analysis_reply = health_flow.prepare_named_analysis(message, state, context, _food_analysis_by_formula)
     if state.get("primary_intent") == "food_switch":
         state["slots"].update(explicit_preferences(message))
         pending = state.get('current_step')
@@ -985,6 +1035,13 @@ def _handle_context_message(user_id, conversation, message, state, source_messag
                  "result": {"resource": "food_submission", "id": submission["id"],
                             "recognition_status": submission.get("recognition_status"),
                             "can_reupload": submission.get("can_reupload", False)}}
+    elif analysis_followup:
+        text, model_name = _generate_answer(message, state, context, False)
+        state['current_step'] = None
+        reply = {'response_type': 'text', 'reply': text, 'result': {'intent': 'food_analysis',
+                 'analysis_id': state['slots'][health_flow.STATE_KEY]['analysis_id'], 'food_candidates': []}}
+    elif state.get('primary_intent') == 'food_analysis':
+        reply = analysis_reply or health_flow.build_analysis_reply(user_id, conversation, state, context)
     else:
         food_reply = handle_food_flow(user_id, conversation, message, state, context, interaction) if state.get("primary_intent") == "food_switch" else None
         if not food_reply and state.get('primary_intent') == 'food_switch':
@@ -1060,6 +1117,7 @@ def _handle_context_message(user_id, conversation, message, state, source_messag
                                "limited_info":flow["status"]=="answer_with_limited_info",
                                "food_candidates":context.get("food_candidates") or [],
                                "recommendation":context.get("recommendation"),
+                               "health_recommendation_context": state['slots'].get(health_flow.RECOMMENDATION_KEY),
                                "actions": [{"type": "diet_history", "label": "查看历史口粮", "pet_id": conversation.get("pet_id")}] if conversation.get("pet_id") else [],
                                "food_submission":submission},
                      "disclaimer":"AI内容仅供参考，不能替代兽医诊断"}
@@ -1117,6 +1175,9 @@ def _recognize_guardian_turn(message, state):
     if urgent_risk(literal):
         return {"primary_intent": "symptom_consult", "slots": {}, "_target_flow": "soft_stool",
                 "_soft_extraction": {**literal, "_field_evidence": {key: message for key in literal}}}, None
+    analysis_query = health_flow.named_request(message)
+    if analysis_query and not requested_flow(message):
+        return {'primary_intent': 'food_analysis', 'slots': {'food_name': analysis_query}, '_target_flow': 'general'}, None
     target = requested_flow(message)
     if target == 'reminder' or (state.get('primary_intent') == 'reminder' and state.get('current_step') and not target and not SOFT_STOOL_PAUSE_RE.search(message)):
         return {'primary_intent': 'reminder', 'slots': {}, '_target_flow': 'reminder'}, None
@@ -1183,6 +1244,8 @@ def handle_message(user_id: Any, conversation_id: Any, payload: dict[str, Any]) 
     if not message and not interaction and not attachments:
         raise ValueError("message、interaction、attachments 至少提供一项")
     state = _load_state(conversation_id)
+    if not interaction and not attachments:
+        interaction = health_flow.confirmation_interaction(message, state)
     user_message = _save_message(conversation_id=conversation_id,user_id=user_id,role="user",content=message,
                   interaction=interaction,attachments=attachments,
                   result={"turn_no": state["turn_count"] + 1, "sequence_no": 0})
