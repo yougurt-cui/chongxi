@@ -13,7 +13,8 @@ from services.product_portrait_summary_service import build_portrait
 
 
 def features(fid=1, **changes):
-    return {'id': fid, 'formula_id': fid, 'feature_version': 'soft_v1', 'protein_score': .30,
+    return {'id': fid, 'formula_id': fid, 'feature_version': 'soft_v1',
+            'protein_quality_score': .80, 'protein_score': .30,
             'fat_score': .60, 'fiber_score': 2.5, 'carb_score': 2., 'prebiotic_score': 2., **changes}
 
 
@@ -149,7 +150,7 @@ class PortraitTest(unittest.TestCase):
         self.assertIn('MAX(v.id)', sql)
         self.assertIn('p.fat_score <=> s.fat_score', sql)
         self.assertIn('BINARY s.feature_version=BINARY p.feature_version', sql)
-        self.assertEqual(params[:2], ['soft_v1', 'five_dimension_v1'])
+        self.assertEqual(params[:2], ['soft_v1', portraits.PORTRAIT_VERSION])
         conn.commit.assert_not_called()
 
     def test_corrupt_rows_and_unbuilt_table_are_unavailable(self):

@@ -36,6 +36,7 @@ class ProductPortraitRuleTest(unittest.TestCase):
             "sku_name": "DR25",
             "brand_name": "皇家",
             "feature_version": "soft_v1",
+            "protein_quality_score": "0.9190",
             "protein_score": "0.2550",
             "fat_score": "0.6870",
             "fiber_score": "4.4600",
@@ -47,12 +48,13 @@ class ProductPortraitRuleTest(unittest.TestCase):
             "q_level": "低Q",
             "pq_combo_name": "高纤维纯托底型",
         })
+        self.assertEqual(result["dimensions"]["protein_quality"]["level"], "high")
         self.assertEqual(result["dimensions"]["protein"]["level"], "low")
         self.assertEqual(result["dimensions"]["fiber"]["level"], "high")
         self.assertEqual(result["dimensions"]["prebiotic"]["level"], "low")
         self.assertEqual(
             result["summary"],
-            "高纤维托底、益生元支持偏低，蛋白压力较低，但脂肪来源复杂且脂肪负担偏明显；碳水负担中低。",
+            "蛋白质量较高，高纤维托底、益生元支持偏低，蛋白压力较低，但脂肪来源复杂且脂肪负担偏明显；碳水负担中低。",
         )
 
     def test_missing_values_are_not_invented(self):

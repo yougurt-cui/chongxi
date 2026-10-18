@@ -14,7 +14,7 @@ from app_config import get_feature_mysql_config
 
 TABLE = "catfood_formula_portrait_summary"
 DEFAULT_FEATURE_VERSION = "soft_v1"
-PORTRAIT_VERSION = "five_dimension_v1"
+PORTRAIT_VERSION = "six_dimension_v2"
 
 
 def _connect():
@@ -36,6 +36,9 @@ def ensure_portrait_table(conn=None) -> None:
                     formula_id BIGINT UNSIGNED NOT NULL,
                     feature_version VARCHAR(32) NOT NULL,
                     portrait_version VARCHAR(32) NOT NULL,
+                    protein_quality_score DECIMAL(10,4) NULL,
+                    protein_quality_level VARCHAR(32) NULL,
+                    protein_quality_label VARCHAR(255) NULL,
                     protein_score DECIMAL(10,4) NULL,
                     protein_level VARCHAR(32) NULL,
                     protein_label VARCHAR(255) NULL,
@@ -66,6 +69,24 @@ def ensure_portrait_table(conn=None) -> None:
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
                 """
             )
+            cursor.execute("SELECT DATABASE() AS database_name")
+            database_name = cursor.fetchone()["database_name"]
+            cursor.execute(
+                """SELECT column_name FROM information_schema.columns
+                   WHERE table_schema=%s AND table_name=%s
+                     AND column_name IN ('protein_quality_score','protein_quality_level','protein_quality_label')""",
+                (database_name, TABLE),
+            )
+            existing_columns = {row["column_name"] for row in cursor.fetchall()}
+            for column_name, definition in (
+                ("protein_quality_score", "DECIMAL(10,4) NULL AFTER portrait_version"),
+                ("protein_quality_level", "VARCHAR(32) NULL AFTER protein_quality_score"),
+                ("protein_quality_label", "VARCHAR(255) NULL AFTER protein_quality_level"),
+            ):
+                if column_name not in existing_columns:
+                    cursor.execute(
+                        f"ALTER TABLE `{TABLE}` ADD COLUMN `{column_name}` {definition}"
+                    )
         conn.commit()
     finally:
         if owns_connection:
@@ -111,7 +132,8 @@ def _support_level(value: float | None, scale_max: float) -> tuple[str, str]:
 
 def _source_hash(row: dict[str, Any]) -> str:
     fields = (
-        "formula_id", "id", "feature_version", "protein_score", "fat_score",
+        "formula_id", "id", "feature_version", "protein_quality_score",
+        "protein_score", "fat_score",
         "fiber_score", "carb_score", "prebiotic_score", "fat_structure_type",
         "fat_reason_tags", "p_level", "q_level", "pq_combo_name",
     )
@@ -123,18 +145,21 @@ def _source_hash(row: dict[str, Any]) -> str:
 
 def build_portrait(row: dict[str, Any]) -> dict[str, Any]:
     """Build a deterministic user-facing portrait from one feature row."""
+    protein_quality = _number(row.get("protein_quality_score"))
     protein = _number(row.get("protein_score"))
     fat = _number(row.get("fat_score"))
     fiber = _number(row.get("fiber_score"))
     carb = _number(row.get("carb_score"))
     prebiotic = _number(row.get("prebiotic_score"))
 
+    protein_quality_level, protein_quality_text = _support_level(protein_quality, 1.0)
     protein_level, protein_text = _burden_level(protein, 1.0)
     fat_level, fat_text = _burden_level(fat, 1.0)
     fiber_level, fiber_text = _support_level(fiber, 5.0)
     carb_level, carb_text = _burden_level(carb, 5.0)
     prebiotic_level, prebiotic_text = _support_level(prebiotic, 5.0)
 
+    protein_quality_label = f"蛋白质量{protein_quality_text}"
     protein_label = f"蛋白压力{protein_text}"
     fat_label = f"脂肪负担{fat_text}"
     fiber_label = "高纤维托底" if fiber_level == "high" else f"纤维支持{fiber_text}"
@@ -150,14 +175,18 @@ def build_portrait(row: dict[str, Any]) -> dict[str, Any]:
     if is_complex_fat:
         fat_clause = f"脂肪来源复杂且{fat_label}"
 
-    headline = f"{fiber_label}，{fat_label}"
+    headline = f"{protein_quality_label}，{fiber_label}，{fat_label}"
     connector = "但" if fat_level in {"elevated", "high"} else "同时"
     summary = (
-        f"{fiber_label}、{prebiotic_label}，{protein_label}，"
+        f"{protein_quality_label}，{fiber_label}、{prebiotic_label}，{protein_label}，"
         f"{connector}{fat_clause}；{carb_label}。"
     )
 
     dimensions = {
+        "protein_quality": {"score": protein_quality, "scale_max": 1,
+                            "level": protein_quality_level,
+                            "label": protein_quality_label,
+                            "direction": "higher_is_support"},
         "protein": {"score": protein, "scale_max": 1, "level": protein_level,
                     "label": protein_label, "direction": "higher_is_burden"},
         "fat": {"score": fat, "scale_max": 1, "level": fat_level,
@@ -203,7 +232,8 @@ def _load_feature_rows(
     cursor.execute(
         f"""
         SELECT s.id, s.formula_id, s.sku_id, s.sku_name, s.brand_name,
-               s.feature_version, s.protein_score, s.fat_score, s.fiber_score,
+               s.feature_version, w.protein_quality_score,
+               s.protein_score, s.fat_score, s.fiber_score,
                s.carb_score, s.prebiotic_score,
                w.product_key, w.brand, w.product_name, w.fat_structure_type,
                w.fat_reason_tags, w.p_level, w.q_level,
@@ -274,6 +304,7 @@ def rebuild_all_product_portraits(
                     f"""
                     INSERT INTO `{TABLE}` (
                         formula_id,feature_version,portrait_version,
+                        protein_quality_score,protein_quality_level,protein_quality_label,
                         protein_score,protein_level,protein_label,
                         fat_score,fat_level,fat_label,
                         fiber_score,fiber_level,fiber_label,
@@ -283,8 +314,9 @@ def rebuild_all_product_portraits(
                         source_data_hash,status,created_at,updated_at
                     ) VALUES (
                         %s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,
-                        %s,%s,%s,%s,%s,%s,%s,%s,'active',%s,%s
+                        %s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'active',%s,%s
                     ) ON DUPLICATE KEY UPDATE
+                        protein_quality_score=VALUES(protein_quality_score),protein_quality_level=VALUES(protein_quality_level),protein_quality_label=VALUES(protein_quality_label),
                         protein_score=VALUES(protein_score),protein_level=VALUES(protein_level),protein_label=VALUES(protein_label),
                         fat_score=VALUES(fat_score),fat_level=VALUES(fat_level),fat_label=VALUES(fat_label),
                         fiber_score=VALUES(fiber_score),fiber_level=VALUES(fiber_level),fiber_label=VALUES(fiber_label),
@@ -296,6 +328,7 @@ def rebuild_all_product_portraits(
                     """,
                     (
                         formula_id, feature_version, PORTRAIT_VERSION,
+                        d["protein_quality"]["score"], d["protein_quality"]["level"], d["protein_quality"]["label"],
                         d["protein"]["score"], d["protein"]["level"], d["protein"]["label"],
                         d["fat"]["score"], d["fat"]["level"], d["fat"]["label"],
                         d["fiber"]["score"], d["fiber"]["level"], d["fiber"]["label"],
@@ -365,12 +398,14 @@ def rebuild_product_portraits(
                 cursor.execute(
                     f"""INSERT INTO `{TABLE}` (
                         formula_id,feature_version,portrait_version,
+                        protein_quality_score,protein_quality_level,protein_quality_label,
                         protein_score,protein_level,protein_label,fat_score,fat_level,fat_label,
                         fiber_score,fiber_level,fiber_label,carb_score,carb_level,carb_label,
                         prebiotic_score,prebiotic_level,prebiotic_label,headline,summary,
                         portrait_json,source_feature_id,source_data_hash,status,created_at,updated_at
-                    ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'active',%s,%s)
+                    ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'active',%s,%s)
                     ON DUPLICATE KEY UPDATE
+                        protein_quality_score=VALUES(protein_quality_score),protein_quality_level=VALUES(protein_quality_level),protein_quality_label=VALUES(protein_quality_label),
                         protein_score=VALUES(protein_score),protein_level=VALUES(protein_level),protein_label=VALUES(protein_label),
                         fat_score=VALUES(fat_score),fat_level=VALUES(fat_level),fat_label=VALUES(fat_label),
                         fiber_score=VALUES(fiber_score),fiber_level=VALUES(fiber_level),fiber_label=VALUES(fiber_label),
@@ -380,6 +415,7 @@ def rebuild_product_portraits(
                         source_feature_id=VALUES(source_feature_id),source_data_hash=VALUES(source_data_hash),
                         status='active',updated_at=VALUES(updated_at)""",
                     (formula_id, feature_version, PORTRAIT_VERSION,
+                     d["protein_quality"]["score"], d["protein_quality"]["level"], d["protein_quality"]["label"],
                      d["protein"]["score"], d["protein"]["level"], d["protein"]["label"],
                      d["fat"]["score"], d["fat"]["level"], d["fat"]["label"],
                      d["fiber"]["score"], d["fiber"]["level"], d["fiber"]["label"],

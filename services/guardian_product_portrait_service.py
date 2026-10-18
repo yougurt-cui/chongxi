@@ -1,6 +1,7 @@
 """Read-only, formula/version keyed five-dimensional evidence and comparisons."""
 import json
 import logging
+from math import isfinite
 
 import pymysql
 from app_config import get_feature_mysql_config
@@ -8,6 +9,20 @@ from services.guardian_food_scenario import DIMENSIONS, score
 from services.product_portrait_summary_service import PORTRAIT_VERSION, DEFAULT_FEATURE_VERSION
 
 logger = logging.getLogger(__name__)
+PORTRAIT_DIMENSIONS = {
+    'protein_quality_score': ('蛋白质量', 1.0, 'protein_quality'),
+    **DIMENSIONS,
+}
+
+
+def _portrait_score(value, field, maximum):
+    if field in DIMENSIONS:
+        return score(value, field)
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number / maximum if isfinite(number) and 0 <= number <= maximum else None
 
 
 def load_five_features(formula_ids):
@@ -51,8 +66,11 @@ def load_product_portraits(formula_ids):
                         AND f.status='active' AND f.is_current=1
                     JOIN sku_feature_input s ON s.id=p.source_feature_id AND s.formula_id=p.formula_id
                         AND BINARY s.feature_version=BINARY p.feature_version
+                    LEFT JOIN catfood_protein_fat_fiber_score_wide w
+                        ON w.formula_id=p.formula_id
                     WHERE p.status='active' AND p.feature_version=%s AND p.portrait_version=%s
                         AND p.formula_id IN ({marks}) AND {same_scores}
+                        AND p.protein_quality_score <=> w.protein_quality_score
                         AND s.id=(SELECT MAX(v.id) FROM sku_feature_input v
                                   WHERE v.formula_id=s.formula_id AND v.feature_version=s.feature_version)''',
                             [DEFAULT_FEATURE_VERSION, PORTRAIT_VERSION, *ids])
@@ -72,9 +90,10 @@ def load_product_portraits(formula_ids):
                 if not isinstance(dims, dict):
                     continue
                 valid = {}
-                for field, (label, maximum, name) in DIMENSIONS.items():
+                for field, (label, maximum, name) in PORTRAIT_DIMENSIONS.items():
                     item = dims.get(name) or {}
-                    if not isinstance(item, dict) or item.get('scale_max') != maximum or score(item.get('score'), field) is None:
+                    if (not isinstance(item, dict) or item.get('scale_max') != maximum
+                            or _portrait_score(item.get('score'), field, maximum) is None):
                         continue
                     valid[name] = {**item, 'score': float(item['score'])}
                 result[int(row['formula_id'])] = {**portrait, 'dimensions': valid}
@@ -99,9 +118,10 @@ def compare_portraits(current, target):
         result['note'] = '画像版本不一致，暂不比较。'
         return result
     result.update(current_formula_id=current['formula_id'], target_formula_id=target['formula_id'])
-    for field, (label, maximum, name) in DIMENSIONS.items():
+    for field, (label, maximum, name) in PORTRAIT_DIMENSIONS.items():
         a, b = (current.get('dimensions') or {}).get(name, {}), (target.get('dimensions') or {}).get(name, {})
-        old, new = score(a.get('score'), field), score(b.get('score'), field)
+        old = _portrait_score(a.get('score'), field, maximum)
+        new = _portrait_score(b.get('score'), field, maximum)
         if old is None or new is None or a.get('scale_max') != maximum or b.get('scale_max') != maximum:
             result['missing_dimensions'].append(label)
             continue
