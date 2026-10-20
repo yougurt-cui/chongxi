@@ -13,7 +13,7 @@ from services.guardian_food_flow_service import resolve_target
 
 STATE_KEY = '_food_health_analysis'
 RECOMMENDATION_KEY = '_health_recommendation_context'
-CONFIRM_SLOT = 'food_health_recommendation'
+CONFIRM_SLOT = 'food_analysis_usage'
 CHOICE_SLOT = 'food_analysis_catalog'
 
 
@@ -22,10 +22,10 @@ def confirmation_interaction(message, state):
     if state.get('current_step') != CONFIRM_SLOT or snapshot.get('stage') != 'pending':
         return None
     text = str(message or '').strip().rstrip('。！!，,')
-    if re.fullmatch(r'(?:暂时不需要|暂不需要|暂时不用|暂时不|暂不|先不用|先不推荐|不需要|不用|不要|不推荐|先不换粮|不了)(?:了)?', text):
-        value = 'no'
-    elif re.fullmatch(r'需要(?:推荐新粮)?|要|好的?|可以|推荐吧|推荐新粮|需要推荐|帮我推荐(?:一款)?(?:新粮|猫粮|主粮)', text):
-        value = 'yes'
+    if re.fullmatch(r'(?:已经|正在|目前|现在)?(?:在)?吃(?:这款粮)?|已经开始吃(?:了)?|正在吃(?:了)?', text):
+        value = 'current'
+    elif re.fullmatch(r'(?:还没|还没有|尚未)(?:开始)?吃|准备尝试|想试试|打算尝试', text):
+        value = 'considering'
     else:
         return None
     return {'slot': CONFIRM_SLOT, 'value': value, 'analysis_id': snapshot['analysis_id']}
@@ -46,23 +46,19 @@ def accept_confirmation(interaction, user_id, conversation, state):
             or snapshot.get('user_id') != user_id or snapshot.get('pet_id') != conversation.get('pet_id')
             or snapshot.get('conversation_id') != state['conversation_id']):
         raise ValueError('这条分析的推荐选项已失效，请基于最新分析继续。')
-    if not isinstance(value, str) or value not in {'yes', 'no'}:
-        raise ValueError('请选择是否需要推荐新粮。')
+    if not isinstance(value, str) or value not in {'current', 'considering'}:
+        raise ValueError('请选择猫咪是否已经在吃这款粮。')
     state['current_step'] = None
-    if value == 'no':
-        snapshot['stage'] = 'declined'
-        state['turn_count'] += 1
-        return {'response_type': 'text', 'reply': '好的，先保留这次分析。你可以继续问这款粮的特点，或补充实际吃粮表现。',
-                'result': {'intent': 'food_analysis', 'analysis_id': snapshot['analysis_id'],
-                           'analysis_stage': 'declined', 'food_candidates': [], 'turn_no': state['turn_count']}}
-    snapshot['stage'] = 'recommended'
-    state['slots'][RECOMMENDATION_KEY] = {k: deepcopy(snapshot[k]) for k in ('analysis_id', 'pet_id', 'subjects', 'scope')}
-    # Analysis targets are references, never facts about what the pet is eating.
-    state['slots'].pop('_food_flow', None)
-    state['slots'].pop('target_food', None)
-    state['slots']['_food_mode'] = 'selection'
-    state.update(primary_intent='food_switch', secondary_intent=None, followup_count=0, missing_slots=[])
-    return None
+    snapshot['stage'] = value
+    state['turn_count'] += 1
+    reply = (
+        '好的，已记录猫咪正在吃这款粮。你可以继续告诉我它最近的便便、食欲和消化表现。'
+        if value == 'current' else
+        '好的，已记录你准备尝试这款粮。开始时建议逐步换粮，并观察便便、食欲和消化表现。'
+    )
+    return {'response_type': 'text', 'reply': reply,
+            'result': {'intent': 'food_analysis', 'analysis_id': snapshot['analysis_id'],
+                       'analysis_stage': value, 'food_candidates': [], 'turn_no': state['turn_count']}}
 
 
 def named_request(message):
@@ -170,12 +166,12 @@ def build_analysis_reply(user_id, conversation, state, context):
     lines = [report_text(item['label'], item) for item in reports]
     for item in comparison:
         lines.append(f'**{item["left"]} 与 {item["right"]} · 对比**\n' + item['text'])
-    prompt = '是否需要根据上述内容推荐新粮？'
+    prompt = '你家猫已经在吃这款粮了吗？'
     lines.append(prompt)
     return {'response_type': 'result_card', 'reply': '\n\n'.join(lines),
             'interaction': {'slot': CONFIRM_SLOT, 'analysis_id': analysis_id, 'options': [
-                {'label': '需要推荐新粮', 'value': f'yes:{analysis_id}'},
-                {'label': '暂时不用', 'value': f'no:{analysis_id}'}]},
+                {'label': '已经在吃', 'value': f'current:{analysis_id}'},
+                {'label': '还没有，准备尝试', 'value': f'considering:{analysis_id}'}]},
             'result': {'intent': 'food_analysis', 'analysis_id': analysis_id, 'analysis_stage': 'pending',
                        'health_analysis': {'version': 1, 'subjects': reports, 'comparisons': comparison, 'prompt': prompt},
                        'food_candidates': []}, 'disclaimer': 'AI内容仅供参考，不能替代兽医诊断'}

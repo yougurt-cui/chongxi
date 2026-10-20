@@ -34,6 +34,32 @@ FOCUS_GROUPS = {
 TAGS = {'attention': '重点观察', 'advantage': '配方优势参考', 'routine': '常规观察'}
 PRIORITY = {'attention': 0, 'advantage': 1, 'routine': 2}
 NOTE = '画像分数描述配方结构，不代表营养含量、患病概率或实际健康效果；请结合实际吃粮表现观察。'
+DISPLAY_NOTE = '这些是需要关注的表现，不代表这款粮会引起疾病。'
+DISPLAY_TITLES = {
+    ('肌肉与体态维持', 'advantage'): '肌肉维持',
+    ('便便状态', 'advantage'): '排便健康',
+    ('便便状态', 'attention'): '排便稳定',
+    ('消化耐受', 'advantage'): '消化耐受',
+    ('消化耐受', 'attention'): '软便、胀气',
+}
+DISPLAY_PRIORITY = {
+    'advantage': {'肌肉与体态维持': 0, '便便状态': 1, '消化耐受': 2, '体重管理': 3},
+    'attention': {'消化耐受': 0, '便便状态': 1, '体重管理': 2, '肌肉与体态维持': 3},
+}
+DISPLAY_FACTOR_SUMMARIES = {
+    ('PROTEIN_QUALITY', 'high'): '蛋白质量评价较好，有利于为猫咪维持肌肉提供营养基础。',
+    ('PROTEIN_QUALITY', 'low'): '蛋白质量支持偏弱，需要结合长期体态和肌肉状态观察。',
+    ('PROTEIN_PRESSURE', 'high'): '蛋白结构压力偏高，消化敏感的猫咪需要留意适应情况。',
+    ('PROTEIN_PRESSURE', 'low'): '蛋白结构压力较低，对日常消化耐受相对友好。',
+    ('FAT_BURDEN', 'high'): '脂肪结构负担偏高，消化敏感或需要控制体重时应谨慎。',
+    ('FAT_BURDEN', 'low'): '脂肪结构负担较低，对日常消化耐受相对友好。',
+    ('FIBER_SUPPORT', 'high'): '纤维支持较好，有助于维持正常排便。',
+    ('FIBER_SUPPORT', 'low'): '纤维支持偏弱，需要留意便便是否成形、排便是否规律。',
+    ('CARB_BURDEN', 'high'): '碳水结构负担偏高，部分消化敏感的猫咪可能不太适应。',
+    ('CARB_BURDEN', 'low'): '碳水结构负担较低，对日常消化耐受相对友好。',
+    ('PREBIOTIC_SUPPORT', 'high'): '益生元支持较好，有助于维持肠道环境和排便稳定。',
+    ('PREBIOTIC_SUPPORT', 'low'): '益生元支持偏少，需要留意便便是否经常忽软忽硬。',
+}
 
 
 def load_health_mappings():
@@ -53,16 +79,22 @@ def load_health_mappings():
 
 
 def _kind(row, dimension):
-    # A support score can also carry an observation caveat (e.g. fermentation).
-    if row.get('relation_type') in TAGS:
-        return row['relation_type']
+    # Explicit symptom topics remain cautions. For structural topics, use the
+    # direction of the six-dimension signal so a favourable score cannot be
+    # displayed under "需要留心" merely because the knowledge row also carries
+    # an observation reminder.
     if row['health_focus'] in {'软便', '便秘', '胀气'}:
         return 'attention'
     direction = FACTORS[dimension][3]
-    if (direction == 'burden' and row['factor_status'] == 'high'
-            or direction == 'support' and row['factor_status'] == 'low'):
-        return 'attention'
-    return 'advantage' if direction == 'support' else 'routine'
+    favourable = (
+        direction == 'support' and row['factor_status'] == 'high'
+        or direction == 'burden' and row['factor_status'] == 'low'
+    )
+    if favourable:
+        return 'advantage'
+    if row.get('relation_type') in TAGS:
+        return row['relation_type']
+    return 'attention'
 
 
 def analyse_portrait(portrait, knowledge, *, health_state=None):
@@ -100,10 +132,13 @@ def analyse_portrait(portrait, knowledge, *, health_state=None):
         for row in rows:
             title = FOCUS_GROUPS.get(row['health_focus'], row['health_focus'])
             kind = _kind(row, dimension)
-            group = groups.setdefault(title, {'title': title, 'kind': kind, 'evidence': [],
+            # The same health topic can contain both a structural strength and a
+            # caveat (for example high fibre plus low prebiotic support).  Keep
+            # them separate so the product card never hides an advantage inside
+            # an attention group.
+            group_key = (title, kind)
+            group = groups.setdefault(group_key, {'title': title, 'kind': kind, 'evidence': [],
                                              'mechanisms': [], 'observations': [], 'sources': []})
-            if PRIORITY[kind] < PRIORITY[group['kind']]:
-                group['kind'] = kind
             evidence = {'dimension': dimension, 'factor_code': code, 'label': item.get('label') or label,
                         'score': value, 'scale_max': maximum, 'level': level}
             if evidence not in group['evidence']:
@@ -115,31 +150,77 @@ def analyse_portrait(portrait, knowledge, *, health_state=None):
                 'health_focus', 'knowledge_version', 'review_status')})
     focus = {'soft_stool': '便便状态', 'vomiting': '消化耐受'}.get(health_state)
     ordered = sorted(groups.values(), key=lambda g: (g['title'] != focus, PRIORITY[g['kind']], -len(g['evidence']), g['title']))
-    for group in ordered[:3]:
+    for group in ordered:
         group['tag'] = TAGS[group['kind']]
         group['evidence_text'] = '；'.join(f'{e["label"]}（{e["score"]:g}/{e["scale_max"]:g}）' for e in group['evidence'])
         group['mechanism_text'] = '\n'.join(group['mechanisms'])
         group['observation_text'] = '\n'.join(group['observations'])
-    result['concerns'] = ordered[:3]
+    result['concerns'] = ordered
+    result['presentation'] = build_presentation(ordered)
     result['status'] = ('partial' if result['missing_dimensions'] or result['unmapped_dimensions'] else 'ready') if ordered else 'no_match'
     result['message'] = ('以下关注点来自产品画像与健康知识映射。' if ordered else
                          '当前没有命中可用的高低档健康映射；中间档暂不解读，不能据此判断没有健康风险。')
     return result
 
 
+def build_presentation(concerns):
+    """Create the compact product-card copy without exposing portrait scores."""
+    advantages = []
+    attentions = []
+    display_concerns = sorted(
+        concerns,
+        key=lambda item: (
+            PRIORITY.get(item.get('kind'), 9),
+            DISPLAY_PRIORITY.get(item.get('kind'), {}).get(item.get('title'), 99),
+            -len(item.get('evidence') or []),
+        ),
+    )
+    for concern in display_concerns:
+        kind = concern.get('kind')
+        if kind not in {'advantage', 'attention'}:
+            continue
+        item = {
+            'title': DISPLAY_TITLES.get((concern.get('title'), kind), concern.get('title')),
+            'summary': _display_summary(concern),
+            'observation': concern.get('observation_text') or '',
+            'source_title': concern.get('title'),
+        }
+        target = advantages if kind == 'advantage' else attentions
+        if len(target) < 2:
+            target.append(item)
+    return {
+        'advantages': advantages,
+        'attentions': attentions,
+        'note': DISPLAY_NOTE,
+    }
+
+
+def _display_summary(concern):
+    summaries = []
+    for evidence in concern.get('evidence') or []:
+        text = DISPLAY_FACTOR_SUMMARIES.get((evidence.get('factor_code'), evidence.get('level')))
+        if text and text not in summaries:
+            summaries.append(text)
+    return ''.join(summaries) or concern.get('mechanism_text') or ''
+
+
 def report_text(label, report):
     """Complete plain-text fallback for older clients and conversation history."""
-    lines = [f'**{label} · 营养健康解读**']
-    if not report['concerns']:
+    lines = [f'**{label}**']
+    presentation = report.get('presentation') or build_presentation(report.get('concerns') or [])
+    advantages = presentation.get('advantages') or []
+    attentions = presentation.get('attentions') or []
+    if not advantages and not attentions:
         lines.append(report['message'])
-    for concern in report['concerns']:
-        lines.extend([f'**{concern["title"]}（{concern["tag"]}）**', concern['evidence_text'],
-                      concern['mechanism_text'], '❗ ' + concern['observation_text']])
+    if advantages:
+        lines.append('✅ **1. 好在哪？**')
+        lines.extend(f'**{item["title"]}：** {item["summary"]}' for item in advantages)
+    if attentions:
+        lines.append('⚠️ **2. 哪里需要留心？**')
+        lines.extend(f'**{item["title"]}：** {item["summary"]}' for item in attentions)
+        lines.append(presentation.get('note') or DISPLAY_NOTE)
     if report['missing_dimensions']:
         lines.append('资料不足：' + '、'.join(report['missing_dimensions']))
     if report['unmapped_dimensions']:
         lines.append('暂缺对应知识：' + '、'.join(report['unmapped_dimensions']))
-    if report['skipped_dimensions']:
-        lines.append('中间档暂不解读：' + '、'.join(report['skipped_dimensions']))
-    lines.append(NOTE)
     return '\n\n'.join(lines)

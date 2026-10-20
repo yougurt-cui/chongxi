@@ -1,4 +1,4 @@
-"""Requirement 23: evidence, intermediate levels, scopes and explicit consent."""
+"""Product analysis: evidence, presentation groups, scopes and usage choice."""
 from copy import deepcopy
 import unittest
 from unittest.mock import MagicMock, patch
@@ -35,16 +35,36 @@ def analysis(fid=1):
 
 
 class HealthEvidenceTest(unittest.TestCase):
-    def test_groups_six_dimensions_into_three_traceable_user_concerns(self):
+    def test_groups_six_dimensions_into_traceable_presentation_sections(self):
         result = health.analyse_portrait(portrait(), knowledge())
         self.assertEqual(result['status'], 'ready')
-        groups = {r['title']: r for r in result['concerns']}
-        self.assertEqual(set(groups), {'便便状态', '肌肉与体态维持', '消化耐受'})
-        self.assertEqual(len(groups['便便状态']['evidence']), 2)
-        self.assertEqual(len(groups['消化耐受']['evidence']), 3)
-        self.assertEqual(groups['肌肉与体态维持']['tag'], '配方优势参考')
+        groups = {(r['title'], r['kind']): r for r in result['concerns']}
+        self.assertEqual(len(groups[('便便状态', 'attention')]['evidence']), 2)
+        self.assertEqual(len(groups[('消化耐受', 'advantage')]['evidence']), 3)
+        self.assertEqual(groups[('肌肉与体态维持', 'advantage')]['tag'], '配方优势参考')
         self.assertTrue(all(s['knowledge_version'] == 'v1' for g in groups.values() for s in g['sources']))
-        self.assertIn('可核验机制', health.report_text('粮1', result))
+        self.assertIn('可核验机制', groups[('肌肉与体态维持', 'advantage')]['mechanism_text'])
+        self.assertNotIn('可核验机制', health.report_text('粮1', result))
+        self.assertEqual(result['presentation']['advantages'][0]['title'], '肌肉维持')
+        self.assertEqual(result['presentation']['attentions'][0]['title'], '排便稳定')
+        self.assertNotIn('/5', health.report_text('粮1', result))
+
+    def test_favourable_and_unfavourable_signals_for_one_topic_are_split(self):
+        rows = [
+            mapping('FIBER_SUPPORT', 'high', '便便稳定', relation_type='attention'),
+            mapping('PREBIOTIC_SUPPORT', 'low', '便便稳定', relation_type='attention'),
+        ]
+        result = health.analyse_portrait(
+            portrait(fiber_score=4.12, prebiotic_score=1.16),
+            {'status': 'ready', 'rows': rows},
+        )
+        groups = {(item['title'], item['kind']) for item in result['concerns']}
+        self.assertEqual(groups, {('便便状态', 'advantage'), ('便便状态', 'attention')})
+        self.assertEqual(result['presentation']['advantages'][0]['title'], '排便健康')
+        self.assertEqual(result['presentation']['attentions'][0]['title'], '排便稳定')
+        self.assertIn('纤维支持较好', result['presentation']['advantages'][0]['summary'])
+        self.assertIn('益生元支持偏少', result['presentation']['attentions'][0]['summary'])
+        self.assertNotIn('不保证', health.report_text('粮1', result))
 
     def test_all_intermediate_levels_skip_high_and_low_mechanisms(self):
         for values in ({'protein_quality_score': .5, 'protein_score': .5, 'fat_score': .5,
@@ -118,16 +138,18 @@ class HealthChatTest(unittest.TestCase):
     def analyse(self):
         return self.turn('帮我分析一下当前粮')
 
-    def confirm(self, reply, value='yes', **changes):
+    def confirm(self, reply, value='current', **changes):
         return self.turn(interaction={'slot': flow.CONFIRM_SLOT, 'value': value,
             'analysis_id': reply['result']['analysis_id'], **changes})
 
-    def test_current_food_analysis_has_three_concerns_and_never_recalls(self):
+    def test_current_food_analysis_has_structured_sections_and_never_recalls(self):
         with patch.object(chat, 'recommend_guardian_foods') as recall:
             result = self.analyse()
         recall.assert_not_called()
         self.assertEqual(result['result']['food_candidates'], [])
-        self.assertEqual(len(result['result']['health_analysis']['subjects'][0]['concerns']), 3)
+        subject = result['result']['health_analysis']['subjects'][0]
+        self.assertTrue(subject['presentation']['advantages'])
+        self.assertTrue(subject['presentation']['attentions'])
         self.assertEqual(self.state['current_step'], flow.CONFIRM_SLOT)
 
     def test_history_and_current_comparison_keeps_both_sides_and_diet_facts(self):
@@ -147,21 +169,21 @@ class HealthChatTest(unittest.TestCase):
         self.assertEqual(self.context['current_food']['formula_id'], 1)
         self.assertNotEqual(self.state['slots'].get('current_food'), '上传牌 上传粮')
 
-    def test_decline_preserves_analysis_and_cannot_be_replayed(self):
+    def test_considering_preserves_analysis_and_cannot_be_replayed(self):
         original = self.analyse()
         with patch.object(chat, 'recommend_guardian_foods') as recall:
-            result = self.confirm(original, 'no')
+            result = self.confirm(original, 'considering')
             with self.assertRaises(ValueError):
                 self.confirm(original)
         recall.assert_not_called()
-        self.assertEqual(result['result']['analysis_stage'], 'declined')
+        self.assertEqual(result['result']['analysis_stage'], 'considering')
         self.assertTrue(self.state['slots'][flow.STATE_KEY]['subjects'])
 
     def test_old_client_echoes_scoped_value_without_new_top_level_fields(self):
         original = self.analyse()
         option = original['interaction']['options'][1]
         result = self.turn(interaction={'slot': flow.CONFIRM_SLOT, 'value': option['value']})
-        self.assertEqual(result['result']['analysis_stage'], 'declined')
+        self.assertEqual(result['result']['analysis_stage'], 'considering')
         with self.assertRaises(ValueError):
             self.turn(interaction={'slot': flow.CONFIRM_SLOT, 'value': option['value']})
 
@@ -174,16 +196,14 @@ class HealthChatTest(unittest.TestCase):
             with self.assertRaises(ValueError):
                 self.confirm(original, value)
 
-    def test_confirm_uses_original_recall_and_carries_exact_analysis(self):
+    def test_usage_choice_does_not_recall_or_mutate_current_food(self):
         original = self.analyse()
         self.state['slots'].update(food_health_state='none', food_health_stage='none', food_goal='general')
-        with patch.object(chat, 'recommend_guardian_foods', return_value={'status': 'ready', 'items': [], 'note': '原召回结果'}) as recall:
+        with patch.object(chat, 'recommend_guardian_foods') as recall:
             result = self.confirm(original)
-        recall.assert_called_once()
-        passed = recall.call_args.args[1][flow.RECOMMENDATION_KEY]
-        self.assertEqual(passed['analysis_id'], original['result']['analysis_id'])
-        self.assertEqual(passed['subjects'][0]['formula_id'], 1)
-        self.assertEqual(result['result']['health_recommendation_context']['analysis_id'], passed['analysis_id'])
+        recall.assert_not_called()
+        self.assertEqual(result['result']['analysis_stage'], 'current')
+        self.assertEqual(self.context['current_food']['formula_id'], 1)
         with self.assertRaises(ValueError):
             self.confirm(original)
 
@@ -201,16 +221,16 @@ class HealthChatTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.confirm(original)
 
-    def test_natural_confirmation_is_narrow_and_decline_is_supported(self):
+    def test_natural_usage_choice_is_narrow(self):
         self.analyse()
-        for text in ('不知道要不要', '是否需要推荐？', '先分析一下历史粮'):
+        for text in ('不知道有没有吃', '是否适合吃？', '先分析一下历史粮'):
             self.assertIsNone(flow.confirmation_interaction(text, self.state))
-        result = self.turn('暂时不用')
-        self.assertEqual(result['result']['analysis_stage'], 'declined')
+        result = self.turn('准备尝试')
+        self.assertEqual(result['result']['analysis_stage'], 'considering')
 
-    def test_followup_after_decline_answers_without_regenerating_or_recalling(self):
+    def test_followup_after_usage_choice_answers_without_regenerating_or_recalling(self):
         original = self.analyse()
-        self.confirm(original, 'no')
+        self.confirm(original, 'current')
         with patch.object(chat, 'recommend_guardian_foods') as recall, patch.object(flow, 'build_analysis_reply') as builder:
             result = self.turn('为什么纤维支持较低需要观察？')
         recall.assert_not_called(); builder.assert_not_called()

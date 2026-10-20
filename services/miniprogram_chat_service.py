@@ -865,11 +865,7 @@ def _handle_context_message(user_id, conversation, message, state, source_messag
     previous_food_name = state['slots'].get('food_name')
     interaction = interaction or health_flow.confirmation_interaction(message, state)
     if interaction and interaction.get('slot') == health_flow.CONFIRM_SLOT:
-        declined = health_flow.accept_confirmation(interaction, user_id, conversation, state)
-        if declined:
-            return declined
-        interaction, message, forced_intent = None, '帮我推荐一款主粮', 'food_switch'
-        intent_result = ({'primary_intent': 'food_switch', 'slots': {}, '_target_flow': 'food_switch'}, None)
+        return health_flow.accept_confirmation(interaction, user_id, conversation, state)
     elif interaction and interaction.get('slot') == health_flow.CHOICE_SLOT:
         if (state.get('current_step') != health_flow.CHOICE_SLOT
                 or interaction.get('value') not in state['slots'].get('_food_analysis_choices', [])):
