@@ -66,6 +66,18 @@ class HealthEvidenceTest(unittest.TestCase):
         self.assertIn('益生元支持偏少', result['presentation']['attentions'][0]['summary'])
         self.assertNotIn('不保证', health.report_text('粮1', result))
 
+    def test_same_factor_uses_distinct_copy_for_digestive_and_stool_topics(self):
+        rows = [
+            mapping('PREBIOTIC_SUPPORT', 'low', '胀气'),
+            mapping('PREBIOTIC_SUPPORT', 'low', '便便稳定'),
+        ]
+        result = health.analyse_portrait(
+            portrait(prebiotic_score=1.16), {'status': 'ready', 'rows': rows}
+        )
+        items = {item['title']: item['summary'] for item in result['presentation']['attentions']}
+        self.assertIn('腹胀或排气增多', items['软便、胀气'])
+        self.assertIn('忽软忽硬', items['排便稳定'])
+
     def test_all_intermediate_levels_skip_high_and_low_mechanisms(self):
         for values in ({'protein_quality_score': .5, 'protein_score': .5, 'fat_score': .5,
                         'fiber_score': 2, 'carb_score': 2, 'prebiotic_score': 2},

@@ -60,6 +60,10 @@ DISPLAY_FACTOR_SUMMARIES = {
     ('PREBIOTIC_SUPPORT', 'high'): '益生元支持较好，有助于维持肠道环境和排便稳定。',
     ('PREBIOTIC_SUPPORT', 'low'): '益生元支持偏少，需要留意便便是否经常忽软忽硬。',
 }
+DISPLAY_TOPIC_FACTOR_SUMMARIES = {
+    ('消化耐受', 'PREBIOTIC_SUPPORT', 'low'): '益生元支持偏少，消化敏感的猫咪需要留意腹胀或排气增多。',
+    ('便便状态', 'PREBIOTIC_SUPPORT', 'low'): '益生元支持偏少，需要留意便便是否经常忽软忽硬。',
+}
 
 
 def load_health_mappings():
@@ -198,7 +202,9 @@ def build_presentation(concerns):
 def _display_summary(concern):
     summaries = []
     for evidence in concern.get('evidence') or []:
-        text = DISPLAY_FACTOR_SUMMARIES.get((evidence.get('factor_code'), evidence.get('level')))
+        text = DISPLAY_TOPIC_FACTOR_SUMMARIES.get((
+            concern.get('title'), evidence.get('factor_code'), evidence.get('level')
+        )) or DISPLAY_FACTOR_SUMMARIES.get((evidence.get('factor_code'), evidence.get('level')))
         if text and text not in summaries:
             summaries.append(text)
     return ''.join(summaries) or concern.get('mechanism_text') or ''
