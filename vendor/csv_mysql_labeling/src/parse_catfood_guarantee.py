@@ -926,6 +926,13 @@ def _extract_guarantee_from_ocr_text(ocr_text: str) -> Dict[str, Any]:
     }
 
 
+def extract_guarantees_from_ocr_text(ocr_text: str) -> List[Dict[str, str]]:
+    """Return deterministic guarantee rows for callers that only need evidence."""
+    extracted = _extract_guarantee_from_ocr_text(ocr_text or "")
+    guarantees = extracted.get("guarantees")
+    return guarantees if isinstance(guarantees, list) else []
+
+
 def _normalize_numeric_text(raw_value: str) -> str:
     raw = _normalize_text(raw_value)
     raw = raw.replace(" ", "")

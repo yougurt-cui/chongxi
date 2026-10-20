@@ -35,6 +35,37 @@ def test_ocr_formula_accepts_ingredient_list_without_heading():
     assert result.status == service.NODE_SUCCESS
 
 
+def test_ocr_formula_accepts_columnar_nutrition_table():
+    ocr_text = """产品原料
+原料组成：新鲜三文鱼13.59%、三文鱼粉13.22%、豌豆、牛油
+产品成分分析保证值
+项目
+粗蛋白质
+粗脂肪
+粗纤维
+粗灰分
+钙
+总磷
+水分
+牛磺酸
+分析保证值
+≥37.0%
+≥16.0%
+≤6.0%
+≤10.0%
+≥0.5%
+≥0.5%
+≤10.0%
+≥0.1%
+每日推荐饲喂指南"""
+
+    result = service._check_ocr_formula({"ocr_text": ocr_text})
+
+    assert result.passed is True
+    assert result.status == service.NODE_SUCCESS
+    assert result.details["nutrition_pattern_count"] == 4
+
+
 def test_manual_ocr_edit_preserves_original_structured_output(monkeypatch):
     original_output = {
         "source_id": 462,

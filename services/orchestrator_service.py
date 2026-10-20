@@ -400,7 +400,31 @@ def _repeat_ngram_ratio(text: str, ngram_size: int = 8) -> float:
 
 
 def _nutrition_match_count(text: str) -> int:
-    return sum(1 for pattern in NUTRITION_PATTERNS if pattern.search(text or ""))
+    text = text or ""
+    inline_count = sum(1 for pattern in NUTRITION_PATTERNS if pattern.search(text))
+    if inline_count >= 2:
+        return inline_count
+
+    # OCR engines commonly serialize a two-column guarantee table by emitting
+    # the complete metric column first and the complete value column second.
+    # The inline regexes above cannot associate those rows because the matching
+    # values may be many lines away.  Reuse the guarantee parser, which already
+    # pairs that layout deterministically, instead of weakening the distance
+    # limit and accidentally matching unrelated feeding-guide numbers.
+    try:
+        from vendor.csv_mysql_labeling.src.parse_catfood_guarantee import (
+            extract_guarantees_from_ocr_text,
+        )
+
+        core_metrics = {"粗蛋白", "粗脂肪", "粗纤维", "水分"}
+        parsed_metrics = {
+            str(item.get("metric_name") or "").strip()
+            for item in extract_guarantees_from_ocr_text(text)
+            if isinstance(item, dict)
+        }
+        return max(inline_count, len(core_metrics & parsed_metrics))
+    except (ImportError, TypeError, ValueError):
+        return inline_count
 
 
 def _check_upload(output: dict[str, Any], task_payload: dict[str, Any]) -> CheckResult:
