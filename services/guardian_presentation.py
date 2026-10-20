@@ -1,6 +1,8 @@
 """Small safe display protocol: text, emphasis and explicit semantic markers."""
 import re
 
+MARKER_KINDS = {"✅": "positive", "❌": "negative", "❗": "caution", "⚠️": "caution", "⚠": "caution"}
+
 KEY_TERMS = re.compile(r"(精神明显变差|频繁呕吐|便血|尽快联系宠物医院|需要优先评估|资料不足|待核对|实际开始吃|共同特点|潜在短板|需要留意)")
 
 STYLE_INSTRUCTION = (
@@ -29,8 +31,8 @@ def display_blocks(text, response_type=None):
         if chunk:
             chunks.append(chunk)
         for text_chunk in chunks or [paragraph]:
-            marker = re.match(r"^(?:\d+[.、)]\s*)?(✅|❌|❗)\s*", text_chunk)
-            kind = {"✅": "positive", "❌": "negative", "❗": "caution"}.get(marker[1]) if marker else "caution" if response_type == "risk_alert" else "body"
+            marker = re.match(r"^(?:\d+[.、)]\s*)?(✅|❌|❗|⚠️|⚠)\s*", text_chunk)
+            kind = MARKER_KINDS.get(marker[1], "caution") if marker else "caution" if response_type == "risk_alert" else "body"
             body = text_chunk[marker.end():] if marker else text_chunk
             segments = []
             for part in re.split(r"(\*\*[^*\n]+\*\*)", body):
