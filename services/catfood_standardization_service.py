@@ -6,6 +6,7 @@ import hashlib
 import json
 import re
 import uuid
+from difflib import SequenceMatcher
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -1853,7 +1854,8 @@ def _select_exact_formula_auto_match(
 
     Ingredient fingerprints alone are not a product identity: different SKUs can
     share a recipe.  Automatic reuse therefore also requires one same-brand
-    product, an approved name/alias match and no conflicting guarantee values.
+    product, a strong approved name/alias match and no conflicting guarantee values.
+    A small OCR/user typo is accepted, but short or merely generic names are not.
     Multiple active formula versions are acceptable when they belong to that
     same product; the newest version is preferred.
     """
@@ -1869,7 +1871,18 @@ def _select_exact_formula_auto_match(
 
     submitted = {normalize_name(value) for value in submitted_names if normalize_name(value)}
     known = {normalize_name(value) for value in known_names if normalize_name(value)}
-    if not submitted or not submitted.intersection(known):
+    name_similarity = max(
+        (
+            SequenceMatcher(None, submitted_name, known_name).ratio()
+            for submitted_name in submitted
+            for known_name in known
+            if min(len(submitted_name), len(known_name)) >= 4
+        ),
+        default=0.0,
+    )
+    if not submitted or not known or (
+        not submitted.intersection(known) and name_similarity < 0.72
+    ):
         return None
 
     for item in exact:
@@ -1877,7 +1890,8 @@ def _select_exact_formula_auto_match(
         if int(nutrition.get("comparable_count") or 0) and nutrition.get("differences"):
             return None
 
-    return max(exact, key=lambda item: int(item.get("formula_version") or 0))
+    selected = max(exact, key=lambda item: int(item.get("formula_version") or 0))
+    return {**selected, "name_similarity": round(name_similarity or 1.0, 5)}
 
 
 def standardize_product(payload: dict[str, Any]) -> dict[str, Any]:
@@ -2137,6 +2151,10 @@ def standardize_product(payload: dict[str, Any]) -> dict[str, Any]:
         "product_status": status,
         "product_confidence": confidence,
         "product_match_method": match_method,
+        "formula_id": safe_duplicate_match.get("formula_id") if safe_duplicate_match else None,
+        "formula_version": safe_duplicate_match.get("formula_version") if safe_duplicate_match else None,
+        "exact_formula_reuse": bool(safe_duplicate_match and match),
+        "name_similarity": safe_duplicate_match.get("name_similarity") if safe_duplicate_match else None,
         "product_name_candidates": product_name_candidates,
         "formula_precheck": formula_precheck,
         "product_candidates": name_matches,

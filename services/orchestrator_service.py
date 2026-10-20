@@ -1935,6 +1935,62 @@ def _finalize_task_if_possible(task_id: str) -> None:
         conn.commit()
 
 
+def _complete_exact_formula_reuse(task_id: str, output: dict[str, Any]) -> bool:
+    """Finish a submission from a current, already-materialized exact formula.
+
+    Product standardization has already established the strict identity boundary:
+    one same-brand product, an exact ingredient fingerprint, a strong name/alias
+    match and no nutrition conflict.  We only bypass calculation when the current
+    portrait loader also considers the stored result fresh and valid.
+    """
+    if not output.get("exact_formula_reuse"):
+        return False
+    product_id = output.get("product_id")
+    formula_id = output.get("formula_id")
+    if not product_id or not formula_id:
+        return False
+
+    from services.guardian_product_portrait_service import load_product_portraits
+
+    if int(formula_id) not in load_product_portraits([int(formula_id)]):
+        return False
+
+    reused_output = {
+        "ok": True,
+        "source_id": output.get("source_id"),
+        "brand_id": output.get("brand_id"),
+        "product_id": int(product_id),
+        "formula_id": int(formula_id),
+        "formula_version": output.get("formula_version"),
+        "formula_status": "matched",
+        "overall_status": "matched",
+        "reused_existing_result": True,
+    }
+    with _connect() as conn:
+        _save_node_output(conn, task_id, "formula_standardize", reused_output)
+        for node_def in get_pipeline_definition("catfood_image_analysis"):
+            if node_def.node_code in {
+                "formula_standardize",
+                "formula_input_build",
+                "ingredient_extract",
+                "science_feature_materialize",
+                "ingredient_standardize",
+                "product_portrait_summary",
+                "formula_profile",
+                "market_profile_build",
+            }:
+                _set_node_status(
+                    conn,
+                    task_id,
+                    node_def.node_code,
+                    NODE_SKIPPED,
+                    "精确匹配已有配方，复用有效画像",
+                )
+        _set_task_status(conn, task_id, TASK_DONE)
+        conn.commit()
+    return True
+
+
 def run_task(task_id: str, *, max_steps: int = 100) -> dict[str, Any]:
     task = get_task(task_id)
     if not task:
@@ -2221,6 +2277,14 @@ def apply_node_result(
         else:
             _set_task_status(conn, task_id, TASK_FAILED, check.reason)
         conn.commit()
+
+    if (
+        node_code == "product_standardize"
+        and check.status == NODE_SUCCESS
+        and _complete_exact_formula_reuse(task_id, output)
+    ):
+        wake_dispatcher()
+        return get_task(task_id) or {"id": task_id}
 
     refreshed = get_task(task_id)
     if refreshed and refreshed["task_status"] not in {TASK_DONE, TASK_FAILED, TASK_CANCELLED, TASK_NEED_REVIEW}:

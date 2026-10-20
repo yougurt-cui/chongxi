@@ -13,6 +13,42 @@ from services import miniprogram_food_submission_service as submissions
 
 
 class SubmissionAutomationTests(unittest.TestCase):
+    def test_exact_formula_fast_path_reuses_valid_portrait_and_finishes(self):
+        conn = MagicMock()
+        conn.__enter__.return_value = conn
+        task = {
+            'id': 'task-fast',
+            'task_type': 'catfood_image_analysis',
+            'nodes': [],
+        }
+        output = {
+            'exact_formula_reuse': True,
+            'source_id': 519,
+            'brand_id': 12,
+            'product_id': 63,
+            'formula_id': 70,
+            'formula_version': 1,
+        }
+        with patch('services.guardian_product_portrait_service.load_product_portraits',
+                   return_value={70: {'formula_id': 70}}), \
+                patch.object(jobs, '_connect', return_value=conn), \
+                patch.object(jobs, '_save_node_output') as save_output, \
+                patch.object(jobs, '_set_node_status') as set_node, \
+                patch.object(jobs, '_set_task_status') as set_task:
+            self.assertTrue(jobs._complete_exact_formula_reuse('task-fast', output))
+        save_output.assert_called_once()
+        self.assertTrue(any(call.args[2] == 'formula_standardize' for call in save_output.mock_calls))
+        self.assertEqual(set_node.call_count, 8)
+        set_task.assert_called_once_with(conn, 'task-fast', jobs.TASK_DONE)
+
+    def test_exact_formula_fast_path_keeps_pipeline_when_portrait_is_stale(self):
+        with patch('services.guardian_product_portrait_service.load_product_portraits', return_value={}), \
+                patch.object(jobs, '_connect') as connect:
+            self.assertFalse(jobs._complete_exact_formula_reuse('task', {
+                'exact_formula_reuse': True, 'product_id': 63, 'formula_id': 70,
+            }))
+        connect.assert_not_called()
+
     def test_portrait_node_is_required_between_scores_and_risks(self):
         definitions = {node.node_code: node for node in jobs.get_pipeline_definition('catfood_image_analysis')}
         portrait = definitions['product_portrait_summary']

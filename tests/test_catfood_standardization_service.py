@@ -70,6 +70,36 @@ class CatfoodStandardizationServiceTest(unittest.TestCase):
             [conflicting], submitted_names=["牧场盛宴"], known_names=["牧场盛宴"],
         ))
 
+    def test_exact_formula_accepts_one_character_product_name_typo(self):
+        match = _select_exact_formula_auto_match(
+            [{
+                "product_id": 63,
+                "formula_id": 70,
+                "formula_version": 1,
+                "fingerprint_exact": True,
+                "cross_brand": False,
+                "nutrition_evidence": {"comparable_count": 4, "differences": []},
+            }],
+            submitted_names=["奇境本原"],
+            known_names=["奇境本源"],
+        )
+        self.assertIsNotNone(match)
+        self.assertEqual(match["formula_id"], 70)
+        self.assertEqual(match["name_similarity"], 0.75)
+
+    def test_exact_formula_does_not_use_short_fuzzy_name(self):
+        self.assertIsNone(_select_exact_formula_auto_match(
+            [{
+                "product_id": 63,
+                "formula_id": 70,
+                "fingerprint_exact": True,
+                "cross_brand": False,
+                "nutrition_evidence": {"comparable_count": 4, "differences": []},
+            }],
+            submitted_names=["本原"],
+            known_names=["本源"],
+        ))
+
     def test_page_brand_input_precedes_ocr_brand_fallback(self):
         candidates = _brand_input_candidates(
             {"brand_name": "肉垫"},
