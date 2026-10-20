@@ -1,12 +1,32 @@
 import os
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from main import create_app
-from services.product_portrait_summary_service import build_portrait, materialize_product_portrait
+from services.product_portrait_summary_service import (
+    build_portrait,
+    ensure_portrait_table,
+    materialize_product_portrait,
+)
 
 
 class ProductPortraitRuleTest(unittest.TestCase):
+    def test_schema_check_accepts_uppercase_information_schema_keys(self):
+        conn = MagicMock()
+        cursor = conn.cursor.return_value.__enter__.return_value
+        cursor.fetchone.return_value = {"database_name": "protein_feature_platform"}
+        cursor.fetchall.return_value = [
+            {"COLUMN_NAME": "protein_quality_score"},
+            {"COLUMN_NAME": "protein_quality_level"},
+            {"COLUMN_NAME": "protein_quality_label"},
+        ]
+
+        ensure_portrait_table(conn)
+
+        statements = [call.args[0] for call in cursor.execute.call_args_list]
+        self.assertFalse(any(statement.startswith("ALTER TABLE") for statement in statements))
+        conn.commit.assert_called_once_with()
+
     @patch("services.guardian_product_portrait_service.load_product_portraits")
     @patch("services.product_portrait_summary_service.rebuild_product_portraits")
     def test_pipeline_adapter_rebuilds_one_formula_and_validates_chat_loader(self, rebuild, load):

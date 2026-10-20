@@ -11,6 +11,17 @@ from services import miniprogram_food_submission_service as service
 
 
 class MiniProgramFoodSubmissionServiceTest(unittest.TestCase):
+    @patch("services.guardian_product_portrait_service.load_product_portraits")
+    def test_portrait_exists_requires_current_chat_loadable_portrait(self, load):
+        load.return_value = {}
+        self.assertFalse(service._formula_portrait_exists(70))
+        load.assert_called_once_with([70])
+
+        load.reset_mock()
+        load.return_value = {70: {"formula_id": 70}}
+        self.assertTrue(service._formula_portrait_exists(70))
+        load.assert_called_once_with([70])
+
     def test_status_label_does_not_call_approved_submission_published(self):
         self.assertEqual(service._status_label({
             "status": "active",

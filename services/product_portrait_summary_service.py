@@ -77,7 +77,15 @@ def ensure_portrait_table(conn=None) -> None:
                      AND column_name IN ('protein_quality_score','protein_quality_level','protein_quality_label')""",
                 (database_name, TABLE),
             )
-            existing_columns = {row["column_name"] for row in cursor.fetchall()}
+            # MariaDB/MySQL drivers do not agree on the casing used for
+            # INFORMATION_SCHEMA result keys.  Production currently returns
+            # ``COLUMN_NAME`` while local MySQL returns ``column_name``.
+            existing_columns = {
+                str(value)
+                for row in cursor.fetchall()
+                for key, value in row.items()
+                if str(key).lower() == "column_name"
+            }
             for column_name, definition in (
                 ("protein_quality_score", "DECIMAL(10,4) NULL AFTER portrait_version"),
                 ("protein_quality_level", "VARCHAR(32) NULL AFTER protein_quality_score"),

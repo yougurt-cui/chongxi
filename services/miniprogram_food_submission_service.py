@@ -57,15 +57,12 @@ def _catalog_key_exists(catalog_key: str) -> bool:
 def _formula_portrait_exists(formula_id: Any) -> bool:
     if not formula_id:
         return False
-    with pymysql.connect(
-        **get_feature_mysql_config(), cursorclass=pymysql.cursors.DictCursor, autocommit=True
-    ) as conn:
-        with conn.cursor() as cursor:
-            cursor.execute(
-                "SELECT 1 FROM catfood_formula_portrait_summary WHERE formula_id=%s LIMIT 1",
-                (int(formula_id),),
-            )
-            return cursor.fetchone() is not None
+    # Use the same freshness and version validation as the chat health flow.
+    # A historical portrait row is not enough: its feature scores may have
+    # changed since materialization, in which case chat deliberately rejects it.
+    from services.guardian_product_portrait_service import load_product_portraits
+
+    return int(formula_id) in load_product_portraits([int(formula_id)])
 
 
 def _clean(value: Any, max_length: int | None = None) -> str:
