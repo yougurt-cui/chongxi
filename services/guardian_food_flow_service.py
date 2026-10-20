@@ -7,6 +7,7 @@ from services.miniprogram_cat_profile_service import update_cat_profile
 from services.guardian_food_analysis_service import load_nutrition, load_risks, analyse_food, nutrition_text, comparison_text
 from services.guardian_product_portrait_service import load_product_portraits, compare_portraits, portrait_comparison_text
 from services.guardian_food_scenario import build_scenario
+from services.guardian_recommendation_presentation import alternatives_requested
 
 STATE_KEY = "_food_flow"
 
@@ -153,7 +154,7 @@ def handle_food_flow(user_id, conversation, message, state, context, interaction
     if started and flow.get("stage") in {'planned', 'selected'} and not target:
         target = (flow.get("target") or {}).get("catalog_key")
     target = target or (slots.get("target_food") if not flow.get("target") else None)
-    if re.search(r"重新(?:选|推荐)|再推荐|继续推荐|重新挑", message):
+    if re.search(r"重新(?:选|推荐)|再推荐|继续推荐|重新挑", message) or alternatives_requested(message):
         flow = {"stage": "selection"}
         slots[STATE_KEY] = flow
         slots.pop("target_food", None)
@@ -243,10 +244,12 @@ def handle_food_flow(user_id, conversation, message, state, context, interaction
                   "target_ingredients": selected.get("ingredient_composition") or None,
                   "note": "配料仅作对照，不证明适口性、耐受或症状原因；缺失资料不推算。"}
     candidate = next((row for row in flow.get('candidates', []) if row.get('formula_id') == selected['formula_id']), {})
+    detail = candidate.get('recommendation_detail') or {}
+    full_cautions = list(dict.fromkeys((detail.get('cautions') or []) + (candidate.get('cautions') or [])))
     comparison_id = flow.get('original_formula_id') or flow.get('comparison_formula_id') or ((candidate.get('analysis') or {}).get('comparison_current_formula_id') if flow.get('reference_food_text') == slots.get('current_food') else None)
     nutrients = load_nutrition([comparison_id, selected['formula_id']])
     risks = load_risks([selected['formula_id']])
-    analysis = analyse_food(selected, nutrients, cautions=candidate.get('cautions') or [], current=comparison_id, risks=risks)
+    analysis = analyse_food(selected, nutrients, cautions=full_cautions, current=comparison_id, risks=risks)
     comparison['nutrition'] = analysis['comparison']
     portraits = load_product_portraits([comparison_id, selected['formula_id']])
     comparison['portrait'] = compare_portraits(portraits.get(comparison_id), portraits.get(selected['formula_id']))
@@ -265,7 +268,7 @@ def handle_food_flow(user_id, conversation, message, state, context, interaction
             text += '\n' + candidate['current_food_reasons'][0]
         if candidate.get('history_reasons'):
             text += '\n' + candidate['history_reasons'][0]
-        text += '\n需留意：' + '；'.join(candidate.get('cautions') or [analysis['risk_note']])
+        text += '\n需留意：' + '；'.join(full_cautions or [analysis['risk_note']])
         if flow.get('validation_warnings'):
             text += '\n资料提示：' + '；'.join(flow['validation_warnings']) + '。'
         if pet.get('age_months') is None:

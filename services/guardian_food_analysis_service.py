@@ -244,35 +244,30 @@ def comparison_text(analysis):
 
 
 def recommendation_text(recommendation):
-    lines = []
-    scenario = recommendation.get('scenario') or {}
-    if scenario.get('label'):
-        lines.append('本次场景：' + scenario['label'])
-    if (recommendation.get('reference') or {}).get('label'):
-        lines.append('结构参考粮：' + recommendation['reference']['label'])
+    """Short summary; existing target-selection flow retains the full details."""
+    lines = [recommendation.get('selection_summary') or '按本次目标筛选以下候选']
+    lines.extend((recommendation.get('scenario') or {}).get('notes') or [])
+    if recommendation.get('missing_assessment_fields'):
+        lines.append('部分相关指标缺少资料，未计入评分，也未认定已通过对应风险筛选。')
+    reference = recommendation.get('reference') or {}
+    if reference.get('label'):
+        lines.append('结构参考粮：' + reference['label'])
+    elif not recommendation.get('current_analysis'):
+        lines.append('暂无可核验原粮，仅比较候选自身特点，不认定相对改善。')
     for index, item in enumerate(recommendation.get('items') or [], 1):
         label = item.get('label') or ' '.join(filter(None, [item.get('brand'), item.get('product_name')]))
-        lines.append(f"{index}. {label}")
-        lines.append('推荐理由：' + '；'.join((item.get('strengths') or ['按已选诉求匹配现有评分资料'])[:2]))
-        if item.get('keep_reasons'):
-            lines.append('保留特点：' + '；'.join(item['keep_reasons']))
-        lines.append(nutrition_text(item.get('analysis')))
-        if (item.get('analysis') or {}).get('comparison'):
-            lines.append(comparison_text(item['analysis']))
-        portrait_comparison = (item.get('analysis') or {}).get('portrait_comparison')
-        if portrait_comparison:
-            from services.guardian_product_portrait_service import portrait_comparison_text
-            lines.append(portrait_comparison_text(portrait_comparison))
-        if item.get('current_food_reasons'):
-            lines.append(item['current_food_reasons'][0])
-        if item.get('history_reasons'):
-            lines.append(item['history_reasons'][0])
-        lines.append('需留意：' + '；'.join((item.get('cautions') or ['风险资料有限，不能视为无风险'])[:2]))
-        for risk in (item.get('analysis') or {}).get('risk_models', [])[:2]:
-            name = '软便' if risk['kind'] == 'soft_stool' else '黑下巴'
-            lines.append(name + '结构风险参考：' + str(risk.get('relative_risk_level') or '等级暂无') + '（非患病概率）。')
-    if recommendation.get('missing_assessment_fields'):
-        lines.append('本次未评估：' + '、'.join(FEATURE_LABELS.get(name, name) for name in recommendation['missing_assessment_fields']) + '；这些缺项未按默认分计入，也未认定已通过风险筛选。')
-    if recommendation.get('recall', {}).get('status') not in ('not_required', 'ready', None):
-        lines.append('当前粮缺少可核验的相似度资料，这次改按诉求筛选候选。')
-    return '\n'.join(lines)
+        lines.append(f'**{index}. {label}**')
+        lines.append('✅ 入选依据：' + '；'.join((item.get('strengths') or ['满足本次已核验的筛选条件'])[:2]))
+        differences = []
+        if item.get('life_stage'):
+            differences.append('适用阶段：' + str(item['life_stage']))
+        low, high = item.get('price_min_per_jin'), item.get('price_max_per_jin')
+        if low is not None and high is not None:
+            differences.append(f'品牌参考价 {low}～{high} 元/斤，非实时售价')
+        if differences:
+            lines.append('；'.join(differences))
+        cautions = item.get('cautions') or ['资料有限，选中后可查看完整依据。']
+        lines.append('❗ ' + '；'.join(cautions[:2]))
+    if len(recommendation.get('items') or []) < 3:
+        lines.append('本次只展示已有的合格候选，不为凑数量放宽条件。')
+    return '\n\n'.join(lines)

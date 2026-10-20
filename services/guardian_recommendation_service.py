@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import re
+from collections import Counter
 import pymysql
 from copy import deepcopy
 from math import isfinite
@@ -14,6 +15,7 @@ from services.guardian_food_analysis_service import (excluded_history_ids, refer
     load_nutrition, load_risks, analyse_food, comparison_reasons, FEATURE_LABELS, number, compact)
 from services.guardian_food_scenario import build_scenario, assess_candidate, DIMENSIONS, score
 from services.guardian_product_portrait_service import load_five_features, load_product_portraits, compare_portraits
+from services.guardian_recommendation_presentation import select_candidates, compact_recommendation
 
 logger = logging.getLogger(__name__)
 REASONS = (
@@ -117,6 +119,12 @@ def eligible_food(item, pet, slots):
 
 
 def recommend_guardian_foods(pet, slots, history=(), *, limit=3):
+    result = _recommend_guardian_foods(pet, slots, history, limit=limit)
+    logger.info('guardian_recommendation status=%s goal=%s audit=%s', result.get('status'), result.get('goal'), result.get('selection_audit'))
+    return compact_recommendation(result)
+
+
+def _recommend_guardian_foods(pet, slots, history=(), *, limit=3):
     if slots.get('food_health_state'):
         return recommend_scenario_foods(pet, slots, history, limit=limit)
     unavailable = {'status': 'data_unavailable', 'items': [], 'note': '推荐资料暂不可用，可以先对照配料表选粮。'}
@@ -164,6 +172,7 @@ def recommend_guardian_foods(pet, slots, history=(), *, limit=3):
                        and (i.get('brand'), i.get('product_name')) != current_name}
             if not catalog:
                 return {'status': 'no_eligible_food', 'items': [], 'note': '暂未找到适用阶段、配料和偏好资料齐全的候选，可调整偏好或比较具体粮款。'}
+            audit = {'catalog_count': len(options), 'eligible_count': len(catalog), 'goal': goal}
             pool = engine.load_product_pool(db)
             if 'formula_id' not in pool.columns:
                 return unavailable
@@ -239,15 +248,30 @@ def recommend_guardian_foods(pet, slots, history=(), *, limit=3):
                 return unavailable
             # The UI engine fills missing metrics with neutral scores; the assistant must not.
             pool = pool.dropna(subset=fields)
+            audit['complete_feature_count'] = len(pool)
             if pool.empty:
                 return unavailable
-            ranked = engine.recommend_products(pool, adjusted, top_n=limit)
+            ranked = engine.recommend_products(pool, adjusted, top_n=len(pool))
+            raw_rows = engine.make_json_safe(ranked.to_dict('records'))
+            excluded_shown = set(slots.get('_recommendation_exclude_ids') or [])
+            raw_rows = [row for row in raw_rows if row.get('formula_id') and (_number(row.get('fit_score')) or 0) > 0]
+            available = [row for row in raw_rows if int(row['formula_id']) not in excluded_shown]
+            audit['ranked_count'] = len(raw_rows)
+            audit['unseen_count'] = len(available)
+            if not available and raw_rows and excluded_shown:
+                return {'status': 'alternatives_exhausted', 'items': [], 'goal': goal,
+                        'note': '本轮符合条件的候选已展示完，没有降低筛选要求来更换产品。可以调整预算、品牌等偏好。'}
+            selected = select_candidates([(catalog[int(row['formula_id'])], {'score': float(row['fit_score']), 'raw': row}, None)
+                                          for row in available], limit)
+            raw_rows = [row[1]['raw'] for row in selected]
+            audit['returned_count'] = len(raw_rows)
+            ranked = ranked[ranked['formula_id'].isin([row['formula_id'] for row in raw_rows])]
             nutrients = load_nutrition([anchor_id] + [int(value) for value in ranked.get('formula_id', [])])
             risks = load_risks([anchor_id] + [int(value) for value in ranked.get('formula_id', [])])
             similarities = {row['formula_id']: row['similarity'] for row in recall['items']}
             items = []
-            for raw in engine.make_json_safe(ranked.to_dict('records')):
-                if not raw.get('formula_id') or not raw.get('fit_score'):
+            for raw in raw_rows:
+                if not raw.get('formula_id') or raw.get('fit_score') is None:
                     continue
                 item = catalog[int(raw['formula_id'])]
                 items.append({k: item.get(k) for k in ('catalog_key', 'formula_id', 'product_id', 'brand', 'product_name', 'label', 'price', 'price_source', 'price_min_per_jin', 'price_max_per_jin', 'life_stage')})
@@ -269,6 +293,7 @@ def recommend_guardian_foods(pet, slots, history=(), *, limit=3):
             return {'status': 'ready' if items else 'no_eligible_food', 'items': items,
                     'note': '候选来自当前配方与评分库，匹配分仅作参考；价格是品牌区间参考，不是实时售价。同期咨询不作为病因或负面吃粮反馈。',
                     'goal': goal, 'food_mode': slots.get('_food_mode', 'selection'), 'recall': recall,
+                    'selection_audit': audit,
                     'history_note': '仅使用明确的历史好/坏反馈微调；缺少反馈或特征时只保留背景，不猜耐受表现。',
                     'missing_assessment_fields': sorted(missing), 'assessment_weight_coverage': round(covered_weight / total_weight, 4),
                     'current_analysis': analyse_food({'formula_id': anchor_id}, nutrients, current_row) if anchor_id else None,
@@ -311,6 +336,8 @@ def recommend_scenario_foods(pet, slots, history=(), *, limit=3):
         excluded = excluded_history_ids(pet, history, options, slots.get('_confirmed_history_text', ''))
         catalog = {int(row['formula_id']): row for row in options
                    if row['formula_id'] not in excluded and eligible_food(row, pet, slots)}
+        result['selection_audit'] = {'catalog_count': len(options), 'eligible_count': len(catalog),
+                                     'goal': scenario['goal'], 'rejections': {}}
         if not catalog:
             return empty('no_eligible_food', '暂未找到满足适用阶段、配料和偏好且未吃过的粮款。')
         current_ids = reference_ids({'formula_id': pet.get('food_formula_id'), 'brand': pet.get('food_brand'),
@@ -337,10 +364,11 @@ def recommend_scenario_foods(pet, slots, history=(), *, limit=3):
         baseline = features.get(reference_id)
         if scenario['keep'] and (not baseline or any(baseline.get(k) is None for k in DIMENSIONS)):
             return empty('baseline_features_missing', '已确认耐受的参考粮缺少完整五维数据，暂不能核验哪些候选保留了这些特点。')
-        ranked = []
+        ranked, rejected = [], Counter()
         for formula_id, item in catalog.items():
             assessment = assess_candidate(features.get(formula_id, {}), baseline, scenario)
             if not assessment['eligible']:
+                rejected.update(assessment.get('failed_dimensions') or [assessment.get('reason', 'ineligible')])
                 continue
             similarity = None
             if baseline and all(score(baseline.get(k), k) is not None for k in DIMENSIONS):
@@ -348,7 +376,14 @@ def recommend_scenario_foods(pet, slots, history=(), *, limit=3):
                                            for k in DIMENSIONS) / len(DIMENSIONS), 4)
             ranked.append((item, assessment, similarity))
         ranked.sort(key=lambda row: (-row[1]['score'], -(row[2] or 0), row[0]['formula_id']))
-        ranked = ranked[:limit]
+        result['selection_audit'].update(scenario_match_count=len(ranked), rejections=dict(rejected),
+                                         distinct_scores=len({row[1]['score'] for row in ranked}))
+        shown = set(slots.get('_recommendation_exclude_ids') or [])
+        unseen = [row for row in ranked if row[0]['formula_id'] not in shown]
+        if ranked and not unseen:
+            return empty('alternatives_exhausted', '本轮符合条件的候选已展示完，没有降低筛选要求来更换产品。可以调整预算、品牌等偏好。')
+        ranked = select_candidates(unseen, limit)
+        result['selection_audit']['returned_count'] = len(ranked)
         if not ranked:
             return empty('no_scenario_match', '暂未找到同时满足保持项和改善项、且五维数据齐全的候选；没有放宽稳定要求来凑推荐。')
         selected_ids = [row[0]['formula_id'] for row in ranked]

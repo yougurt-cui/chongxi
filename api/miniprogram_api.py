@@ -38,6 +38,7 @@ from services.miniprogram_food_submission_service import (
 )
 from services.miniprogram_diet_history_service import list_diet_history, add_diet_history, delete_diet_history
 from services import miniprogram_reminder_service as reminders
+from services import miniprogram_daily_record_service as daily_records
 from services.soft_stool_assistant_service import (
     find_products as find_soft_stool_products,
     handle_turn as handle_soft_stool_turn,
@@ -81,6 +82,29 @@ from services.miniprogram_idea_service import (
 
 
 miniprogram_api = Blueprint("miniprogram_api", __name__, url_prefix="/api/miniprogram")
+
+
+def _daily_record_response(action):
+    try:
+        return jsonify(action(_current_user_id(required=True))), 200
+    except PermissionError as error:
+        return _auth_error_response(error)
+    except LookupError as error:
+        return jsonify({'ok': False, 'error': str(error)}), 404
+    except ValueError as error:
+        return jsonify({'ok': False, 'error': str(error)}), 400
+    except Exception:
+        return jsonify({'ok': False, 'error': '日常记录保存或读取失败，请稍后重试'}), 500
+
+
+@miniprogram_api.get('/cat-profiles/<pet_id>/daily-records')
+def list_daily_records_endpoint(pet_id):
+    return _daily_record_response(lambda user: daily_records.list_daily_records(user, pet_id))
+
+
+@miniprogram_api.put('/cat-profiles/<pet_id>/daily-records/<day>')
+def save_daily_record_endpoint(pet_id, day):
+    return _daily_record_response(lambda user: daily_records.save_daily_record(user, pet_id, {**_json_payload(), 'day': day}))
 
 
 def _reminder_response(action, status=200):

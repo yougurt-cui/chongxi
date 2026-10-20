@@ -101,7 +101,17 @@ def _date(value, name):
 
 
 def normalize_history(payload):
+    product_id, formula_id = payload.get('product_id'), payload.get('formula_id')
+    resolved = None
+    if product_id is not None or formula_id is not None:
+        if any(isinstance(value, bool) or not isinstance(value, int) or value <= 0 for value in (product_id, formula_id)):
+            raise ValueError('product_id 与 formula_id 须同时提供正整数')
+        from services.miniprogram_cat_profile_service import _resolve_food_formula
+        resolved = _resolve_food_formula(product_id, formula_id)
     brand, product = str(payload.get('brand') or '').strip(), str(payload.get('product') or '').strip()
+    if resolved:
+        brand = resolved['standard_brand_name']
+        product = resolved.get('display_name') or resolved['standard_product_name']
     if not brand or not product or len(brand) > 128 or len(product) > 512:
         raise ValueError('请填写品牌（128字以内）和具体产品（512字以内）')
     start, end = _date(payload.get('started_on'), '开始日期'), _date(payload.get('ended_on'), '结束日期')
@@ -110,7 +120,7 @@ def normalize_history(payload):
     note = str(payload.get('note') or '').strip()
     if len(note) > 1000:
         raise ValueError('备注不能超过1000字')
-    return {'brand': brand, 'product': product, 'started': start,
+    return {'brand': brand, 'product': product, 'product_id': product_id, 'formula_id': formula_id, 'started': start,
             'ended': end + timedelta(days=1) if end else None, 'note': note}
 
 
@@ -137,7 +147,9 @@ def _find_duplicate_history(cursor, user_id, pet_id, data, replay_id=None):
         FOR UPDATE''', (user_id, pet_id))
     wanted = _food_key(data.get('brand'), data.get('product'))
     return next((row for row in cursor.fetchall()
-                 if wanted == _food_key(row.get('brand'), row.get('product'))), None)
+                 if wanted == _food_key(row.get('brand'), row.get('product'))
+                 and (not data.get('formula_id') or row.get('formula_id') == data['formula_id']
+                      or not row.get('formula_id') and not row.get('is_current'))), None)
 
 
 def _merge_missing_history(cursor, row, data):
@@ -146,7 +158,8 @@ def _merge_missing_history(cursor, row, data):
         return
     updates, params = [], []
     for column, incoming in (('started_at', data.get('started')), ('ended_at', data.get('ended')),
-                             ('note', data.get('note'))):
+                             ('note', data.get('note')), ('product_id', data.get('product_id')),
+                             ('formula_id', data.get('formula_id'))):
         if not row.get(column) and incoming:
             updates.append(f'{column}=%s')
             params.append(incoming)

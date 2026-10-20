@@ -49,6 +49,12 @@ def present_message(message):
     if message.get("role") == "assistant":
         result = dict(message.get("result") or {})
         result["display_version"] = 1
-        result["display_blocks"] = display_blocks(message.get("content") or message.get("reply"), message.get("response_type"))
+        text = message.get("content") or message.get("reply")
+        recommendation = result.get('recommendation') or {}
+        # Existing clients render both blocks and candidate cards. Keep the full
+        # content for clients without blocks, but avoid displaying every card twice.
+        if result.get('food_candidates') and recommendation.get('status') == 'ready' and recommendation.get('display_intro'):
+            text = recommendation['display_intro']
+        result["display_blocks"] = display_blocks(text, message.get("response_type"))
         message = {**message, "result": result}
     return message
