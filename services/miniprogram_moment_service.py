@@ -129,6 +129,20 @@ def _clean_decimal(value: Any, field_name: str) -> Decimal | None:
     return parsed.quantize(Decimal("0.01"))
 
 
+def _clean_source_published_at(value: Any) -> str | None:
+    if value in (None, ""):
+        return None
+    if isinstance(value, datetime):
+        parsed = value
+    else:
+        raw = _clean(value, 32).replace("T", " ").removesuffix("Z")
+        try:
+            parsed = datetime.fromisoformat(raw)
+        except ValueError as exc:
+            raise ValueError("source_published_at 必须是有效时间") from exc
+    return parsed.strftime("%Y-%m-%d %H:%M:%S")
+
+
 def _clean_images(value: Any) -> list[dict[str, Any]]:
     if value in (None, ""):
         return []
@@ -202,12 +216,14 @@ def _normalize_payload(payload: dict[str, Any]) -> dict[str, Any]:
         "sex": _clean_sex(payload.get("sex") or payload.get("cat_sex")),
         "author_name": _clean(payload.get("author_name"), 64),
         "author_avatar": _clean(payload.get("author_avatar"), 1024),
+        "source_published_at": _clean_source_published_at(payload.get("source_published_at")),
     }
 
 
 def _serialize(row: dict[str, Any]) -> dict[str, Any]:
     visibility = row.get("visibility") or "public"
     anonymous = visibility == "anonymous"
+    display_time = row.get("source_published_at") or row.get("created_at")
     return {
         "id": row.get("id"),
         "user_id": row.get("user_id"),
@@ -227,7 +243,7 @@ def _serialize(row: dict[str, Any]) -> dict[str, Any]:
         "author": {
             "name": "匿名铲屎官" if anonymous else (row.get("author_name") or "我"),
             "avatar": "" if anonymous else (row.get("author_avatar") or ""),
-            "date": str(row.get("created_at") or "")[5:16],
+            "date": str(display_time or "")[5:16],
         },
         "likes": int(row.get("like_count") or 0),
         "comment_count": int(row.get("comment_count") or 0),
@@ -235,6 +251,7 @@ def _serialize(row: dict[str, Any]) -> dict[str, Any]:
         "liked": bool(row.get("liked")),
         "comments": row.get("comments") or [],
         "status": row.get("status") or "",
+        "source_published_at": str(row.get("source_published_at") or ""),
         "created_at": str(row.get("created_at") or ""),
         "updated_at": str(row.get("updated_at") or ""),
     }
@@ -278,6 +295,7 @@ def init_miniprogram_moment_tables() -> None:
                     cat_name VARCHAR(64) NULL,
                     author_name VARCHAR(64) NULL,
                     author_avatar VARCHAR(1024) NULL,
+                    source_published_at DATETIME NULL,
                     like_count INT NOT NULL DEFAULT 0,
                     comment_count INT NOT NULL DEFAULT 0,
                     status VARCHAR(16) NOT NULL DEFAULT 'active',
@@ -291,6 +309,12 @@ def init_miniprogram_moment_tables() -> None:
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
                 """
             )
+            cursor.execute(f"SHOW COLUMNS FROM {TABLE_NAME} LIKE 'source_published_at'")
+            if not cursor.fetchone():
+                cursor.execute(
+                    f"ALTER TABLE {TABLE_NAME} ADD COLUMN source_published_at DATETIME NULL "
+                    "AFTER author_avatar"
+                )
             cursor.execute(
                 f"""
                 CREATE TABLE IF NOT EXISTS {LIKE_TABLE_NAME} (
@@ -452,15 +476,16 @@ def create_moment(payload: dict[str, Any]) -> dict[str, Any]:
                 f"""
                 INSERT INTO {TABLE_NAME} (
                     id,user_id,cat_profile_id,category_code,category_name,category_color,title,content,
-                    images_json,visibility,breed,age_text,weight_kg,cat_name,author_name,author_avatar,
+                    images_json,visibility,breed,age_text,weight_kg,cat_name,author_name,author_avatar,source_published_at,
                     like_count,comment_count,status,created_at,updated_at
-                ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,0,0,'active',%s,%s)
+                ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,0,0,'active',%s,%s)
                 """,
                 (
                     post_id, data["user_id"], data["cat_profile_id"], data["category_code"],
                     data["category_name"], data["category_color"], data["title"], data["content"],
                     _json_dumps(data["images"]), data["visibility"], breed or None, age_text or None,
                     weight_kg, cat_name or None, data["author_name"] or None, data["author_avatar"] or None,
+                    data["source_published_at"],
                     now, now,
                 ),
             )

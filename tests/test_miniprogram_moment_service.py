@@ -19,6 +19,7 @@ class MiniProgramMomentServiceTest(unittest.TestCase):
             "age": "2岁3个月",
             "weight": "4.6",
             "visibility": "public",
+            "source_published_at": "2026-10-21 16:33:35",
         })
 
         self.assertEqual(result["category_code"], "SLEEP")
@@ -26,6 +27,17 @@ class MiniProgramMomentServiceTest(unittest.TestCase):
         self.assertEqual(result["title"], "睡成这样，还能找到头？")
         self.assertEqual(result["images"], [{"url": "https://example.com/cat.jpg"}])
         self.assertEqual(result["weight_kg"], Decimal("4.60"))
+        self.assertEqual(result["source_published_at"], "2026-10-21 16:33:35")
+
+    def test_rejects_invalid_source_published_at(self):
+        with self.assertRaisesRegex(ValueError, "source_published_at 必须是有效时间"):
+            service._normalize_payload({
+                "user_id": "u1",
+                "category_code": "ADOPT",
+                "content": "领养信息",
+                "images": ["https://example.com/cat.jpg"],
+                "source_published_at": "not-a-date",
+            })
 
     def test_normalize_publish_page_accepts_weight_range_text(self):
         result = service._normalize_payload({
@@ -89,12 +101,16 @@ class MiniProgramMomentServiceTest(unittest.TestCase):
             "comment_count": 1,
             "liked": True,
             "comments": [{"id": "c1"}],
+            "source_published_at": "2026-10-01 03:04:05",
+            "created_at": "2026-10-22 06:56:38",
         })
 
         self.assertTrue(result["liked"])
         self.assertEqual(result["likes"], 2)
         self.assertEqual(result["commentCount"], 1)
         self.assertEqual(result["comments"], [{"id": "c1"}])
+        self.assertEqual(result["source_published_at"], "2026-10-01 03:04:05")
+        self.assertEqual(result["author"]["date"], "10-01 03:04")
 
     def test_serialize_comment_masks_anonymous_author(self):
         result = service._serialize_comment({
