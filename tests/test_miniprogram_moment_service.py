@@ -7,7 +7,7 @@ from services import miniprogram_moment_service as service
 class MiniProgramMomentServiceTest(unittest.TestCase):
     def test_categories_are_fixed(self):
         result = service.list_moment_categories()
-        self.assertEqual([item["code"] for item in result["items"]], ["SLEEP", "FUNNY", "CHIN", "VOMIT", "STOOL"])
+        self.assertEqual([item["code"] for item in result["items"]], ["ADOPT", "SLEEP", "FUNNY", "CHIN", "VOMIT", "STOOL"])
 
     def test_normalize_publish_page_payload(self):
         result = service._normalize_payload({

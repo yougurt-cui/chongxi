@@ -26,6 +26,7 @@ MAX_LIST_LIMIT = 100
 DEFAULT_COMMENT_LIMIT = 50
 
 CATEGORIES = {
+    "ADOPT": {"code": "ADOPT", "name": "领养信息", "color": "#D8EEDB"},
     "SLEEP": {"code": "SLEEP", "name": "睡姿大赏", "color": "#E8D5F5"},
     "FUNNY": {"code": "FUNNY", "name": "搞笑日常", "color": "#FFE0B2"},
     "CHIN": {"code": "CHIN", "name": "黑下巴观察团", "color": "#FFCDD2"},
@@ -93,7 +94,7 @@ def _clean_category(value: Any) -> dict[str, str]:
         raise ValueError("category_code 不能为空")
     code = CATEGORY_NAME_TO_CODE.get(raw) or raw.upper()
     if code not in CATEGORIES:
-        raise ValueError("category_code 仅支持 SLEEP/FUNNY/CHIN/VOMIT/STOOL")
+        raise ValueError("category_code 仅支持 ADOPT/SLEEP/FUNNY/CHIN/VOMIT/STOOL")
     return CATEGORIES[code]
 
 
