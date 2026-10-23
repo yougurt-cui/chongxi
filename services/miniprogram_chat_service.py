@@ -639,6 +639,45 @@ def _prepare_saved_food_analysis(message: str, state: dict[str, Any], context: d
         context['food_analysis'] = None
 
 
+def _handle_diet_advice_entry(user_id, conversation, state, source_message_id, client_context):
+    """The shortcut analyses owned feeding records, never the uploaded-food library."""
+    if not conversation.get('pet_id'):
+        return None
+    context = _build_context(user_id, conversation, state, [], client_context)
+    current = context.get('current_food') or {}
+    history = context.get('diet_history') or []
+    if not current and not history:
+        if context.get('diet_history_status') == 'unavailable':
+            snapshot = state['slots'].get(health_flow.STATE_KEY) or {}
+            if snapshot.get('stage') == 'pending':
+                snapshot['stage'] = 'superseded'
+                state['current_step'] = None
+            state['turn_count'] += 1
+            return {'response_type': 'text', 'reply': '口粮记录暂时无法读取，请稍后重试饮食建议。',
+                    'result': {'intent': 'general_pet_qa', 'status': 'diet_records_unavailable',
+                               'turn_no': state['turn_count'], 'sequence_no': 1}}
+        return None  # No feeding records: preserve the existing advice flow.
+    _share_guardian_context(state, conversation['pet_id'], 'food_analysis', None, source_message_id)
+    _pause_soft_stool(state)
+    state.update(primary_intent='food_analysis', secondary_intent=None, current_step=None,
+                 missing_slots=[], followup_count=0)
+    state['turn_count'] += 1
+    for key in ('catalog_key', '_food_analysis_choices'):
+        state['slots'].pop(key, None)
+    state['slots']['food_name'] = '已记录口粮'
+    context['food_analysis_scope'] = 'saved_diet'
+    current_id = current.get('formula_id')
+    context['food_analysis'] = _food_analysis_by_formula(current_id, current_id) if current_id else None
+    context['food_history_analyses'] = [
+        {'diet_record': item, 'food_analysis': _food_analysis_by_formula(item['formula_id'], current_id)
+         if item.get('formula_id') else None}
+        for item in history
+    ]
+    reply = health_flow.build_analysis_reply(user_id, conversation, state, context)
+    reply['result'].update(turn_no=state['turn_count'], sequence_no=1)
+    return reply
+
+
 def _saved_food_comparison_text(context: dict[str, Any]) -> str | None:
     """Render verified portrait comparisons without allowing the model to invent missing dimensions."""
     if context.get('food_analysis_scope') != 'current_vs_history':
@@ -1256,19 +1295,23 @@ def handle_message(user_id: Any, conversation_id: Any, payload: dict[str, Any]) 
     if not message and not interaction and not attachments:
         raise ValueError("message、interaction、attachments 至少提供一项")
     state = _load_state(conversation_id)
-    if not interaction and not attachments:
+    diet_entry = (client_context.get('entry_point') == 'diet_advice'
+                  and not interaction and not attachments and bool(message))
+    if not diet_entry and not interaction and not attachments:
         interaction = health_flow.confirmation_interaction(message, state)
     user_message = _save_message(conversation_id=conversation_id,user_id=user_id,role="user",content=message,
                   interaction=interaction,attachments=attachments,
                   result={"turn_no": state["turn_count"] + 1, "sequence_no": 0})
-    intent_result = _recognize_guardian_turn(message, state) if message and not interaction and not attachments else None
-    routing_state = {**state, "_turn_decision": intent_result[0] if intent_result else ({'_target_flow': 'reminder'} if interaction and state.get('primary_intent') == 'reminder' else {})}
-    strategy = select_strategy(message, routing_state, GUARDIAN_STRATEGIES)
-    if strategy.name == "soft_stool" and not conversation.get("pet_id"):
-        strategy = GENERAL_STRATEGY
-    reply = strategy.handle(user_id, conversation, message, state, user_message["id"],
-                            interaction=interaction, attachments=attachments,
-                            client_context=client_context, intent_result=intent_result)
+    reply = _handle_diet_advice_entry(user_id, conversation, state, user_message['id'], client_context) if diet_entry else None
+    if reply is None:
+        intent_result = _recognize_guardian_turn(message, state) if message and not interaction and not attachments else None
+        routing_state = {**state, "_turn_decision": intent_result[0] if intent_result else ({'_target_flow': 'reminder'} if interaction and state.get('primary_intent') == 'reminder' else {})}
+        strategy = select_strategy(message, routing_state, GUARDIAN_STRATEGIES)
+        if strategy.name == "soft_stool" and not conversation.get("pet_id"):
+            strategy = GENERAL_STRATEGY
+        reply = strategy.handle(user_id, conversation, message, state, user_message["id"],
+                                interaction=interaction, attachments=attachments,
+                                client_context=client_context, intent_result=intent_result)
     _save_state(state)
     with _connect() as conn:
         with conn.cursor() as cursor:

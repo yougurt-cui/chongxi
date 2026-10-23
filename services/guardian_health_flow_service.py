@@ -52,7 +52,7 @@ def accept_confirmation(interaction, user_id, conversation, state):
         if analysis_id is not None and analysis_id != encoded_id:
             raise ValueError('推荐选项与分析标识不一致，请基于最新分析继续。')
         analysis_id = encoded_id
-    expected_slot = RECOMMEND_SLOT if snapshot.get('is_multiple') else CONFIRM_SLOT
+    expected_slot = snapshot.get('confirm_slot') or (RECOMMEND_SLOT if snapshot.get('is_multiple') else CONFIRM_SLOT)
     if (analysis_id != snapshot.get('analysis_id') or not snapshot.get('analysis_id')
             or snapshot.get('stage') != 'pending' or state.get('current_step') != expected_slot
             or interaction.get('slot') != expected_slot
@@ -174,15 +174,17 @@ def build_analysis_reply(user_id, conversation, state, context):
                 return
         subjects.append({'label': label, 'formula_id': formula_id, 'portrait': portrait,
                          'key': key, 'roles': [role]})
-    if scope in {'current', 'current_vs_history', 'catalog'}:
+    if scope in {'current', 'current_vs_history', 'catalog', 'saved_diet'}:
         current = context.get('current_food') or {}
-        label = ((' '.join(filter(None, (current.get('brand'), current.get('product_name')))) or '当前粮（未记录）') if scope.startswith('current') else None)
-        if context.get('food_analysis') or scope.startswith('current'):
-            append(context.get('food_analysis'), label, 'current' if scope.startswith('current') else 'selected', current.get('formula_id'))
-    if scope in {'history', 'current_vs_history'}:
+        is_current = scope.startswith('current') or scope == 'saved_diet'
+        label = ((' '.join(filter(None, (current.get('brand'), current.get('product_name')))) or '当前粮（未记录）') if is_current else None)
+        if context.get('food_analysis') or scope.startswith('current') or (scope == 'saved_diet' and current):
+            append(context.get('food_analysis'), label, 'current' if is_current else 'selected', current.get('formula_id'))
+    if scope in {'history', 'current_vs_history', 'saved_diet'}:
         for item in context.get('food_history_analyses') or []:
             record = item.get('diet_record') or {}
-            append(item.get('food_analysis'), ' '.join(filter(None, (record.get('brand'), record.get('product') or record.get('product_name')))), 'history', record.get('formula_id'))
+            role = 'current' if scope == 'saved_diet' and record.get('is_current') else 'history'
+            append(item.get('food_analysis'), ' '.join(filter(None, (record.get('brand'), record.get('product') or record.get('product_name')))), role, record.get('formula_id'))
     for item in context.get('named_food_analyses') or []:
         append(item.get('food_analysis'), item['label'])
     if not subjects:
@@ -205,10 +207,12 @@ def build_analysis_reply(user_id, conversation, state, context):
     multiple = len(subjects) > 1
     overview = build_overview(reports, comparison) if multiple else None
     coverage_note = ('本次使用最近10条口粮记录；还有更早记录未包含，请指定要继续分析的粮款。'
-                     if scope in {'history', 'current_vs_history'} and context.get('diet_history_has_more') else '')
-    confirm_slot = RECOMMEND_SLOT if multiple else CONFIRM_SLOT
+                     if scope in {'history', 'current_vs_history', 'saved_diet'} and context.get('diet_history_has_more') else '')
+    if scope == 'saved_diet' and context.get('diet_history_status') == 'unavailable':
+        coverage_note = '历史口粮暂时无法读取，本次仅解读已读取的当前粮，请稍后重试以包含历史记录。'
+    confirm_slot = RECOMMEND_SLOT if multiple or scope == 'saved_diet' else CONFIRM_SLOT
     snapshot = {'analysis_id': analysis_id, 'user_id': user_id, 'pet_id': conversation.get('pet_id'),
-                'conversation_id': state['conversation_id'], 'scope': scope, 'stage': 'pending', 'is_multiple': multiple,
+                'conversation_id': state['conversation_id'], 'scope': scope, 'stage': 'pending', 'is_multiple': multiple, 'confirm_slot': confirm_slot,
                 'subjects': [{k: deepcopy(v) for k, v in r.items() if k != 'note'} for r in reports]}
     state['slots'][STATE_KEY] = snapshot
     state['slots'].pop(RECOMMENDATION_KEY, None)
@@ -218,12 +222,13 @@ def build_analysis_reply(user_id, conversation, state, context):
         lines.append(coverage_note)
     for item in comparison:
         lines.append(f'**{item["left"]} 与 {item["right"]} · 对比**\n' + item['text'])
-    prompt = '是否需要根据上述内容推荐新粮？' if multiple else '你家猫已经在吃这款粮了吗？'
+    ask_recommendation = confirm_slot == RECOMMEND_SLOT
+    prompt = '是否需要根据上述内容推荐新粮？' if ask_recommendation else '你家猫已经在吃这款粮了吗？'
     lines.append(prompt)
     return {'response_type': 'result_card', 'reply': '\n\n'.join(lines),
             'interaction': {'slot': confirm_slot, 'analysis_id': analysis_id, 'options': ([
                 {'label': '需要推荐新粮', 'value': f'yes:{analysis_id}'},
-                {'label': '暂时不用', 'value': f'no:{analysis_id}'}] if multiple else [
+                {'label': '暂时不用', 'value': f'no:{analysis_id}'}] if ask_recommendation else [
                 {'label': '已经在吃', 'value': f'current:{analysis_id}'},
                 {'label': '还没有，准备尝试', 'value': f'considering:{analysis_id}'}])},
             'result': {'intent': 'food_analysis', 'analysis_id': analysis_id, 'analysis_stage': 'pending',

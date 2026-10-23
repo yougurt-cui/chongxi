@@ -52,6 +52,7 @@ from services.miniprogram_moment_service import (
     list_moment_comments,
     list_moment_categories,
     list_moments,
+    record_moment_view,
     set_moment_like,
 )
 from services.miniprogram_moment_image_service import (
@@ -508,6 +509,7 @@ def list_moments_endpoint():
             visibility=request.args.get("visibility") or "public",
             include_private=str(request.args.get("include_private") or "").lower() in {"1", "true", "yes"},
             limit=request.args.get("limit") or 20,
+            sort=request.args.get("sort") or 'latest',
         )), 200
     except ValueError as exc:
         return jsonify({"ok": False, "error": str(exc)}), 400
@@ -525,6 +527,22 @@ def get_moment_endpoint(post_id: str):
         return jsonify({"ok": False, "error": str(exc)}), 400
     except Exception as exc:
         return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@miniprogram_api.post('/moments/<post_id>/view')
+def record_moment_view_endpoint(post_id: str):
+    try:
+        payload = _json_payload()
+        return jsonify(record_moment_view(post_id, user_id=_current_user_id(),
+                                         visitor_id=payload.get('visitor_id'))), 200
+    except PermissionError as exc:
+        return _auth_error_response(exc)
+    except LookupError as exc:
+        return jsonify({'ok': False, 'error': str(exc)}), 404
+    except ValueError as exc:
+        return jsonify({'ok': False, 'error': str(exc)}), 400
+    except Exception:
+        return jsonify({'ok': False, 'error': '点击统计暂时不可用'}), 500
 
 
 @miniprogram_api.get("/moment-report-reasons")

@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+import re
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
@@ -17,6 +19,8 @@ from services.miniprogram_cat_profile_service import init_miniprogram_cat_profil
 TABLE_NAME = "miniprogram_cat_moment_post"
 LIKE_TABLE_NAME = "miniprogram_cat_moment_like"
 COMMENT_TABLE_NAME = "miniprogram_cat_moment_comment"
+VIEW_TABLE_NAME = "miniprogram_cat_moment_view"
+VIEW_DEDUP_MINUTES = 30
 CAT_PROFILE_TABLE = "miniprogram_cat_profile"
 MAX_CONTENT_LENGTH = 2000
 MAX_COMMENT_LENGTH = 500
@@ -246,6 +250,7 @@ def _serialize(row: dict[str, Any]) -> dict[str, Any]:
             "date": str(display_time or "")[5:16],
         },
         "likes": int(row.get("like_count") or 0),
+        "view_count": int(row.get("view_count") or 0),
         "comment_count": int(row.get("comment_count") or 0),
         "commentCount": int(row.get("comment_count") or 0),
         "liked": bool(row.get("liked")),
@@ -297,6 +302,7 @@ def init_miniprogram_moment_tables() -> None:
                     author_avatar VARCHAR(1024) NULL,
                     source_published_at DATETIME NULL,
                     like_count INT NOT NULL DEFAULT 0,
+                    view_count BIGINT UNSIGNED NOT NULL DEFAULT 0,
                     comment_count INT NOT NULL DEFAULT 0,
                     status VARCHAR(16) NOT NULL DEFAULT 'active',
                     created_at DATETIME NOT NULL,
@@ -315,6 +321,30 @@ def init_miniprogram_moment_tables() -> None:
                     f"ALTER TABLE {TABLE_NAME} ADD COLUMN source_published_at DATETIME NULL "
                     "AFTER author_avatar"
                 )
+            cursor.execute(f"SHOW COLUMNS FROM {TABLE_NAME} LIKE 'view_count'")
+            if not cursor.fetchone():
+                try:
+                    cursor.execute(f"ALTER TABLE {TABLE_NAME} ADD COLUMN view_count BIGINT UNSIGNED NOT NULL DEFAULT 0")
+                except pymysql.MySQLError as exc:
+                    if exc.args[0] != 1060:  # Another worker completed the same migration.
+                        raise
+            cursor.execute(f"SHOW INDEX FROM {TABLE_NAME} WHERE Key_name='idx_mini_moment_popular'")
+            if not cursor.fetchone():
+                try:
+                    cursor.execute(f"CREATE INDEX idx_mini_moment_popular ON {TABLE_NAME} (visibility, status, view_count, created_at, id)")
+                except pymysql.MySQLError as exc:
+                    if exc.args[0] != 1061:
+                        raise
+            cursor.execute(
+                f"""
+                CREATE TABLE IF NOT EXISTS {VIEW_TABLE_NAME} (
+                    post_id CHAR(32) NOT NULL,
+                    viewer_key CHAR(64) NOT NULL,
+                    last_viewed_at DATETIME NOT NULL,
+                    PRIMARY KEY (post_id, viewer_key)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+                """
+            )
             cursor.execute(
                 f"""
                 CREATE TABLE IF NOT EXISTS {LIKE_TABLE_NAME} (
@@ -500,7 +530,15 @@ def list_moments(
     visibility: Any = "public",
     include_private: bool = False,
     limit: Any = 20,
+    sort: Any = "latest",
 ) -> dict[str, Any]:
+    cleaned_sort = _clean(sort) or 'latest'
+    if cleaned_sort not in {'latest', 'popular'}:
+        raise ValueError('sort 仅支持 latest/popular')
+    # Popularity is an opt-in for the public all-category feed only.
+    popular = cleaned_sort == 'popular' and not include_private and not category_code
+    order = ('view_count DESC, COALESCE(source_published_at, created_at) DESC, id DESC'
+             if popular else 'created_at DESC, id DESC')
     try:
         cleaned_limit = max(1, min(int(limit or 20), MAX_LIST_LIMIT))
     except (TypeError, ValueError):
@@ -526,13 +564,51 @@ def list_moments(
                 f"""
                 SELECT * FROM {TABLE_NAME}
                 WHERE {' AND '.join(filters)}
-                ORDER BY created_at DESC
+                ORDER BY {order}
                 LIMIT %s
                 """,
                 params,
             )
             rows = list(cursor.fetchall() or [])
     return {"ok": True, "count": len(rows), "items": [_serialize(row) for row in rows]}
+
+
+def record_moment_view(post_id: Any, *, user_id: Any = '', visitor_id: Any = '') -> dict[str, Any]:
+    """Count successful detail openings, once per viewer per rolling 30 minutes."""
+    cleaned_post_id = _clean_post_id(post_id)
+    user = _clean(user_id, 128)
+    visitor = str(visitor_id or '')
+    if not user and not re.fullmatch(r'[a-f0-9]{32}', visitor):
+        raise ValueError('visitor_id 必须是32位小写十六进制访客标识')
+    # The account identity is supplied by the authenticated endpoint, never JSON.
+    viewer_key = hashlib.sha256(f'user:{user}'.encode() if user else f'visitor:{visitor}'.encode()).hexdigest()
+    now = _now()
+    cutoff = (datetime.strptime(now, '%Y-%m-%d %H:%M:%S') - timedelta(minutes=VIEW_DEDUP_MINUTES))
+    init_miniprogram_moment_tables()
+    with _connect_app() as conn:
+        with conn.cursor() as cursor:
+            # Serialise the visibility check, deduplication and increment together.
+            cursor.execute(f"SELECT * FROM {TABLE_NAME} WHERE id=%s AND status='active' FOR UPDATE", (cleaned_post_id,))
+            post = cursor.fetchone()
+            if not post or (post.get('visibility') == 'private' and post.get('user_id') != user):
+                raise LookupError('瞬间不存在')
+            counted = False
+            if post.get('visibility') in {'public', 'anonymous'}:
+                cursor.execute(f"SELECT last_viewed_at FROM {VIEW_TABLE_NAME} WHERE post_id=%s AND viewer_key=%s",
+                               (cleaned_post_id, viewer_key))
+                previous = cursor.fetchone()
+                last = previous.get('last_viewed_at') if previous else None
+                if isinstance(last, str):
+                    last = datetime.strptime(last, '%Y-%m-%d %H:%M:%S')
+                if last is None or last <= cutoff:
+                    cursor.execute(f"INSERT INTO {VIEW_TABLE_NAME} (post_id, viewer_key, last_viewed_at) VALUES (%s,%s,%s) "
+                                   "ON DUPLICATE KEY UPDATE last_viewed_at=VALUES(last_viewed_at)",
+                                   (cleaned_post_id, viewer_key, now))
+                    cursor.execute(f"UPDATE {TABLE_NAME} SET view_count=view_count+1 WHERE id=%s", (cleaned_post_id,))
+                    post['view_count'] = int(post.get('view_count') or 0) + 1
+                    counted = True
+        conn.commit()
+    return {'ok': True, 'counted': counted, 'view_count': int(post.get('view_count') or 0)}
 
 
 def get_moment(post_id: Any, *, viewer_user_id: Any = "") -> dict[str, Any]:
