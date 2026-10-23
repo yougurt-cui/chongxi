@@ -3,6 +3,7 @@ PyMySQL
 playwright==1.48.0
 requests
 SQLAlchemy
+pypetkitapi==1.31.1
 PyYAML
 numpy
 openai
