@@ -38,6 +38,7 @@ git pull --ff-only origin "$REMOTE_BRANCH"
   api/miniprogram_api.py \
   api/pet_content_api.py \
   api/pet_health_api.py \
+  api/pet_knowledge_api.py \
   api/petkit_api.py \
   api/comment_clean_sync_api.py \
   api/pipeline_api.py \
@@ -74,6 +75,7 @@ git pull --ff-only origin "$REMOTE_BRANCH"
   services/pet_health_engine_service.py \
   services/pet_health_models.py \
   services/pet_health_rules.py \
+  services/pet_knowledge_pipeline_service.py \
   services/petkit_service.py \
   services/petkit_snapshot_cli.py \
   services/comment_clean_sync_service.py \
