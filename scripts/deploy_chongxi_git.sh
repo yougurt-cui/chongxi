@@ -59,6 +59,8 @@ git pull --ff-only origin "$REMOTE_BRANCH"
   services/submission_notifications.py \
   services/guardian_presentation.py \
   services/miniprogram_food_submission_service.py \
+  services/miniprogram_device_service.py \
+  services/petkit_user_transport.py \
   scripts/check_submission_config.py \
   scripts/run_knowledge_second_stage.py \
   services/pipeline_service.py \
