@@ -20,6 +20,9 @@ node_modules/
 .DS_Store
 .idea/
 .vscode/
+.qoder/
+.workbuddy/
+*.bak*
 
 # Secrets / local config
 vendor/csv_mysql_labeling/config/config.yaml

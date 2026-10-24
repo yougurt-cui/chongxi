@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import csv
+import hashlib
 import os
 import re
 import shutil
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
@@ -32,6 +35,7 @@ DATA_ROOT = Path(os.getenv("CHONGXI_DATA_ROOT", "/home/admin/data/chongxi"))
 DEFAULT_DOUYIN_DIR = DATA_ROOT / "douyin_csv"
 DEFAULT_XHS_DIR = DATA_ROOT / "xhs_csv"
 DEFAULT_DOUYIN_TABLE = "douyin_raw_comments"
+DEFAULT_DOUYIN_CONTENT_TABLE = "douyin_raw_content"
 DEFAULT_XHS_TABLE = "xiaohongshu_raw_comments"
 DEFAULT_TARGET_TABLE = "catfood_brand_health_candidates"
 DEFAULT_STATE_TABLE = "catfood_brand_health_extract_state"
@@ -280,6 +284,210 @@ def ingest_douyin_comments(
     }
 
 
+CONTENT_COLUMNS = [
+    "aweme_id",
+    "aweme_type",
+    "title",
+    "content",
+    "create_time",
+    "user_id",
+    "sec_uid",
+    "short_user_id",
+    "user_unique_id",
+    "user_signature",
+    "nickname",
+    "avatar",
+    "liked_count",
+    "collected_count",
+    "comment_count",
+    "share_count",
+    "ip_location",
+    "last_modify_ts",
+    "aweme_url",
+    "cover_url",
+    "video_download_url",
+    "music_download_url",
+    "note_download_url",
+    "source_keyword",
+    "source_file",
+]
+
+
+def ensure_douyin_raw_content_table(engine: Engine, table_name: str = DEFAULT_DOUYIN_CONTENT_TABLE) -> None:
+    table_name = _safe_table(table_name)
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                f"""
+                CREATE TABLE IF NOT EXISTS `{table_name}` (
+                  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+                  aweme_id VARCHAR(64) NOT NULL,
+                  aweme_type INT NULL,
+                  title TEXT NULL,
+                  content LONGTEXT NULL,
+                  create_time DATETIME NULL,
+                  user_id VARCHAR(64) NULL,
+                  sec_uid VARCHAR(128) NULL,
+                  short_user_id VARCHAR(64) NULL,
+                  user_unique_id VARCHAR(64) NULL,
+                  user_signature TEXT NULL,
+                  nickname VARCHAR(255) NULL,
+                  avatar TEXT NULL,
+                  liked_count INT NULL,
+                  collected_count INT NULL,
+                  comment_count INT NULL,
+                  share_count INT NULL,
+                  ip_location VARCHAR(128) NULL,
+                  last_modify_ts DATETIME NULL,
+                  aweme_url TEXT NULL,
+                  cover_url TEXT NULL,
+                  video_download_url TEXT NULL,
+                  music_download_url TEXT NULL,
+                  note_download_url TEXT NULL,
+                  source_keyword VARCHAR(255) NULL,
+                  source_file VARCHAR(255) NULL,
+                  ingest_ts DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                  UNIQUE KEY uq_aweme_id (aweme_id)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                """
+            )
+        )
+
+
+def _clean_cell(raw: Any) -> str:
+    if raw is None:
+        return ""
+    return " ".join(str(raw).replace("\r", " ").replace("\n", " ").split())
+
+
+def _to_int_or_none(raw: Any) -> Optional[int]:
+    try:
+        return int(str(raw).strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def _unix_to_dt(raw: Any) -> Optional[datetime]:
+    """毫秒/秒时间戳转 datetime（沿用历史脚本口径：UTC）"""
+    text_raw = str(raw or "").strip()
+    if not text_raw:
+        return None
+    try:
+        ts = float(text_raw)
+    except ValueError:
+        return None
+    if ts > 1e12:
+        ts = ts / 1000.0
+    try:
+        return datetime.utcfromtimestamp(ts)
+    except (OSError, OverflowError, ValueError):
+        return None
+
+
+def load_content_records(data_dir: Path) -> List[Dict[str, Any]]:
+    """解析 search_contents_*.csv（帖子基础信息），按 aweme_id 去重"""
+    records: List[Dict[str, Any]] = []
+    seen = set()
+    for csv_path in sorted(data_dir.glob("search_contents_*.csv")):
+        with csv_path.open(encoding="utf-8-sig", newline="") as handle:
+            for row in csv.DictReader(handle):
+                aweme_id = (row.get("aweme_id") or "").strip()
+                title = _clean_cell(row.get("title"))
+                desc = _clean_cell(row.get("desc"))
+                create_time = _unix_to_dt(row.get("create_time"))
+                if not aweme_id:
+                    key = f"{title}|{desc}|{create_time}"
+                    aweme_id = hashlib.md5(key.encode("utf-8")).hexdigest()
+                if aweme_id in seen:
+                    continue
+                seen.add(aweme_id)
+                records.append(
+                    {
+                        "aweme_id": aweme_id,
+                        "aweme_type": _to_int_or_none(row.get("aweme_type")),
+                        "title": title,
+                        "content": desc,
+                        "create_time": create_time,
+                        "user_id": _clean_cell(row.get("user_id")),
+                        "sec_uid": _clean_cell(row.get("sec_uid")),
+                        "short_user_id": _clean_cell(row.get("short_user_id")),
+                        "user_unique_id": _clean_cell(row.get("user_unique_id")),
+                        "user_signature": _clean_cell(row.get("user_signature")),
+                        "nickname": _clean_cell(row.get("nickname")),
+                        "avatar": _clean_cell(row.get("avatar")),
+                        "liked_count": _to_int_or_none(row.get("liked_count")),
+                        "collected_count": _to_int_or_none(row.get("collected_count")),
+                        "comment_count": _to_int_or_none(row.get("comment_count")),
+                        "share_count": _to_int_or_none(row.get("share_count")),
+                        "ip_location": _clean_cell(row.get("ip_location")),
+                        "last_modify_ts": _unix_to_dt(row.get("last_modify_ts")),
+                        "aweme_url": _clean_cell(row.get("aweme_url")),
+                        "cover_url": _clean_cell(row.get("cover_url")),
+                        "video_download_url": _clean_cell(row.get("video_download_url")),
+                        "music_download_url": _clean_cell(row.get("music_download_url")),
+                        "note_download_url": _clean_cell(row.get("note_download_url")),
+                        "source_keyword": _clean_cell(row.get("source_keyword")),
+                        "source_file": csv_path.name,
+                    }
+                )
+    return records
+
+
+def ingest_douyin_contents(
+    *,
+    engine: Engine,
+    data_dir: Path,
+    table_name: str = DEFAULT_DOUYIN_CONTENT_TABLE,
+    batch_size: int = 1000,
+    archive_dir: Path = DEFAULT_DOUYIN_ARCHIVE_DIR,
+    move_success_files: bool = True,
+) -> Dict[str, Any]:
+    """把 search_contents_*.csv 的帖子基础信息写入 douyin_raw_content（按 aweme_id 幂等）"""
+    table_name = _safe_table(table_name)
+    if not data_dir.exists():
+        raise FileNotFoundError(f"抖音数据目录不存在: {data_dir}")
+    if not data_dir.is_dir():
+        raise NotADirectoryError(f"抖音数据路径不是目录: {data_dir}")
+
+    ensure_douyin_raw_content_table(engine, table_name=table_name)
+    csv_files = sorted(data_dir.glob("search_contents_*.csv"))
+    records = load_content_records(data_dir) if csv_files else []
+    if not records:
+        return {
+            "table_name": table_name,
+            "data_dir": str(data_dir),
+            "prepared_rows": 0,
+            "inserted_rows": 0,
+            "archived_files": 0,
+        }
+
+    columns_sql = ", ".join(CONTENT_COLUMNS)
+    values_sql = ", ".join(f":{col}" for col in CONTENT_COLUMNS)
+    insert_sql = text(
+        f"""
+        INSERT IGNORE INTO `{table_name}` ({columns_sql}, ingest_ts)
+        VALUES ({values_sql}, NOW())
+        """
+    )
+
+    inserted_rows = 0
+    with engine.begin() as conn:
+        for start in range(0, len(records), batch_size):
+            chunk = records[start : start + batch_size]
+            result = conn.execute(insert_sql, chunk)
+            inserted_rows += int(result.rowcount or 0)
+
+    archived = archive_files(csv_files, archive_dir) if move_success_files else []
+    return {
+        "table_name": table_name,
+        "data_dir": str(data_dir),
+        "prepared_rows": len(records),
+        "inserted_rows": inserted_rows,
+        "archived_files": len(archived),
+        "archive_samples": archived[:20],
+    }
+
+
 def _iter_xhs_csv_files(data_dir: Path, pattern: str) -> List[Path]:
     if not data_dir.exists():
         raise FileNotFoundError(f"小红书数据目录不存在: {data_dir}")
@@ -361,6 +569,7 @@ def collect_comment_data(
     douyin_dir: Path = DEFAULT_DOUYIN_DIR,
     xhs_dir: Path = DEFAULT_XHS_DIR,
     douyin_table: str = DEFAULT_DOUYIN_TABLE,
+    douyin_content_table: str = DEFAULT_DOUYIN_CONTENT_TABLE,
     xhs_table: str = DEFAULT_XHS_TABLE,
     target_table: str = DEFAULT_TARGET_TABLE,
     state_table: str = DEFAULT_STATE_TABLE,
@@ -377,8 +586,12 @@ def collect_comment_data(
     db_config["port"] = int(db_config.get("port") or 3306)
     db_config["charset"] = str(db_config.get("charset") or "utf8mb4")
 
-    selected_steps = [str(step).strip() for step in (steps or ["douyin", "xhs", "dedupe", "extract"]) if str(step).strip()]
-    allowed = {"douyin", "xhs", "dedupe", "extract"}
+    selected_steps = [
+        str(step).strip()
+        for step in (steps or ["douyin_contents", "douyin", "xhs", "dedupe", "extract"])
+        if str(step).strip()
+    ]
+    allowed = {"douyin", "douyin_contents", "xhs", "dedupe", "extract"}
     unknown = [step for step in selected_steps if step not in allowed]
     if unknown:
         raise ValueError(f"unsupported steps: {', '.join(unknown)}")
@@ -386,6 +599,16 @@ def collect_comment_data(
     engine = make_engine(db_config)
     results: Dict[str, Any] = {}
     try:
+        if "douyin_contents" in selected_steps:
+            results["douyin_contents"] = ingest_douyin_contents(
+                engine=engine,
+                data_dir=douyin_dir,
+                table_name=douyin_content_table,
+                batch_size=batch_size,
+                archive_dir=douyin_archive_dir,
+                move_success_files=move_douyin_success_files,
+            )
+
         if "douyin" in selected_steps:
             results["douyin"] = ingest_douyin_comments(
                 engine=engine,
@@ -428,7 +651,11 @@ def collect_comment_data(
             "steps": selected_steps,
             "db": {k: v for k, v in db_config.items() if k != "password"},
             "source_dirs": {"douyin": str(douyin_dir), "xiaohongshu": str(xhs_dir)},
-            "raw_tables": {"douyin": douyin_table, "xiaohongshu": xhs_table},
+            "raw_tables": {
+                "douyin": douyin_table,
+                "douyin_contents": douyin_content_table,
+                "xiaohongshu": xhs_table,
+            },
             "target_table": target_table,
             "state_table": state_table,
             "results": results,
