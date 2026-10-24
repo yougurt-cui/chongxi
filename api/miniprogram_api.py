@@ -1078,3 +1078,42 @@ def upload_idea_cover_endpoint(idea_id: str):
         return jsonify({"ok": False, "error": str(exc)}), 400
     except Exception as exc:
         return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+# User PETKIT endpoints are separate from the existing administrator collector.
+@miniprogram_api.route('/device-capabilities', methods=['GET'])
+@miniprogram_api.route('/device-policy', methods=['GET'])
+@miniprogram_api.route('/device-connections', methods=['GET'])
+@miniprogram_api.route('/device-connections/petkit', methods=['POST'])
+@miniprogram_api.route('/device-connections/<ident>', methods=['DELETE'])
+@miniprogram_api.route('/device-connections/<ident>/devices', methods=['GET'])
+@miniprogram_api.route('/device-connections/<ident>/devices/refresh', methods=['POST'])
+@miniprogram_api.route('/device-bindings', methods=['GET', 'POST'])
+@miniprogram_api.route('/device-bindings/<ident>', methods=['GET', 'DELETE'])
+@miniprogram_api.route('/device-bindings/<ident>/events', methods=['GET'])
+@miniprogram_api.route('/device-bindings/<ident>/sync', methods=['POST'])
+@miniprogram_api.route('/device-sync-jobs/<ident>', methods=['GET'])
+def user_device_endpoint(ident=None):
+    from services.miniprogram_device_service import handle, DeviceError
+    import sqlite3
+    try:
+        path = request.path.split('/api/miniprogram/', 1)[-1]
+        public = path in ('device-policy', 'device-capabilities')
+        owner = '' if public else _current_user_id(required=True)
+        data = request.get_json(silent=True) or {}
+        if not isinstance(data, dict): raise DeviceError('INVALID_INPUT', '请求格式错误')
+        result = handle(owner, path, request.method, data, request.args)
+        response = jsonify(result)
+        response.headers['Cache-Control'] = 'no-store'
+        return response
+    except PermissionError:
+        return jsonify(ok=False, code='LOGIN_REQUIRED', error='请先登录'), 401
+    except DeviceError as exc:
+        return jsonify(ok=False, code=exc.code, error=exc.message), exc.status
+    except LookupError:
+        return jsonify(ok=False, code='NOT_FOUND', error='宠物或设备不存在'), 404
+    except sqlite3.OperationalError:
+        return jsonify(ok=False, code='BUSY', error='设备服务繁忙，请稍后重试'), 503
+    except Exception:
+        # Never interpolate exceptions: upstream payloads may contain credentials.
+        return jsonify(ok=False, code='UNAVAILABLE', error='设备服务暂不可用'), 503
