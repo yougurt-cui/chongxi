@@ -35,6 +35,7 @@ from services import guardian_health_flow_service as health_flow
 from services import guardian_daily_status_service as daily_status
 from services.miniprogram_daily_record_service import normalize_client_records
 from services.guardian_recommendation_presentation import alternatives_requested
+from services import guardian_knowledge_service as knowledge_qa
 
 
 CONVERSATION_TABLE = "miniprogram_chat_conversation"
@@ -1309,9 +1310,22 @@ def handle_message(user_id: Any, conversation_id: Any, payload: dict[str, Any]) 
         strategy = select_strategy(message, routing_state, GUARDIAN_STRATEGIES)
         if strategy.name == "soft_stool" and not conversation.get("pet_id"):
             strategy = GENERAL_STRATEGY
-        reply = strategy.handle(user_id, conversation, message, state, user_message["id"],
-                                interaction=interaction, attachments=attachments,
-                                client_context=client_context, intent_result=intent_result)
+        decision = intent_result[0] if intent_result else {}
+        analysis_followup = (state.get('primary_intent') == 'food_analysis'
+                             and state['slots'].get(health_flow.STATE_KEY)
+                             and re.search(r'这款粮|这个配方|蛋白|脂肪|纤维|益生元|碳水|肌肉|关注点|画像', message))
+        if (strategy is GENERAL_STRATEGY and decision.get('primary_intent') == 'general_pet_qa'
+                and not decision.get('_daily_status') and decision.get('dialogue_action') != 'pause'
+                and message and not interaction and not attachments and not analysis_followup and conversation.get('pet_id')):
+            snapshot = state['slots'].get(health_flow.STATE_KEY) or {}
+            if snapshot.get('stage') == 'pending':
+                snapshot['stage'] = 'superseded'
+            _pause_soft_stool(state)
+            reply = knowledge_qa.handle_question(user_id, conversation, message, state)
+        else:
+            reply = strategy.handle(user_id, conversation, message, state, user_message["id"],
+                                    interaction=interaction, attachments=attachments,
+                                    client_context=client_context, intent_result=intent_result)
     _save_state(state)
     with _connect() as conn:
         with conn.cursor() as cursor:
