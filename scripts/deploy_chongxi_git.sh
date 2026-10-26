@@ -60,6 +60,7 @@ git pull --ff-only origin "$REMOTE_BRANCH"
   services/guardian_presentation.py \
   services/miniprogram_food_submission_service.py \
   scripts/check_submission_config.py \
+  scripts/run_knowledge_second_stage.py \
   services/pipeline_service.py \
   adapters/catfood_ingredient_adapter.py \
   scripts/rebuild_fiber_features_from_science.py \
