@@ -294,6 +294,69 @@ def latest_attention(pet_id: str):
         }
 
 
+def display_attention(pet_id: str):
+    """Return five display cards, with a neutral placeholder before analysis exists."""
+    with get_session() as db:
+        seed_rules(db)
+        latest_day = db.scalar(
+            select(HealthAttention.target_date)
+            .where(HealthAttention.pet_id == pet_id)
+            .order_by(HealthAttention.target_date.desc())
+            .limit(1)
+        )
+        if latest_day is not None:
+            rows = db.scalars(
+                select(HealthAttention)
+                .where(
+                    HealthAttention.pet_id == pet_id,
+                    HealthAttention.target_date == latest_day,
+                )
+                .order_by(HealthAttention.id)
+            ).all()
+            return {
+                "pet_id": pet_id,
+                "target_date": latest_day.isoformat(),
+                "data_status": "analyzed",
+                "directions": [
+                    {
+                        "direction_code": row.direction_code,
+                        "direction_name": next(
+                            (
+                                cfg["name"]
+                                for code, cfg in DIRECTIONS.items()
+                                if code == row.direction_code
+                            ),
+                            row.direction_code,
+                        ),
+                        "result_status": row.result_status,
+                        "evidence": row.evidence,
+                        "missing_metrics": row.missing_metrics,
+                        "data_sources": row.data_sources,
+                        "display_message": row.display_message,
+                    }
+                    for row in rows
+                ],
+            }
+        return {
+            "pet_id": pet_id,
+            "target_date": None,
+            "data_status": "awaiting_data",
+            "directions": [
+                {
+                    "direction_code": code,
+                    "direction_name": cfg["name"],
+                    "result_status": "no_alert",
+                    "evidence": [],
+                    "missing_metrics": REQUIRED[code],
+                    "data_sources": [],
+                    "display_message": "暂未发现异常提示，健康数据正在积累。",
+                }
+                for code, cfg in DIRECTIONS.items()
+            ],
+            "notice": "当前仅作状态占位展示，不代表已完成健康评估或排除疾病。",
+        }
+
+
 def analyze_pet(pet_id: str, target_date=None):
     """API 入口：开 session 跑 analyze。target_date 缺省为今天（Asia/Shanghai）。"""
     target_date = target_date or datetime.now(CN_TZ).date()

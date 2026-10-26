@@ -108,6 +108,18 @@ def save_daily_record_endpoint(pet_id, day):
     return _daily_record_response(lambda user: daily_records.save_daily_record(user, pet_id, {**_json_payload(), 'day': day}))
 
 
+@miniprogram_api.get('/cat-profiles/<pet_id>/health-attention')
+def health_attention_endpoint(pet_id):
+    def load(user):
+        from services.miniprogram_cat_profile_service import get_cat_profile
+        from services.pet_health_engine_service import display_attention
+
+        get_cat_profile(user, pet_id)
+        return {'ok': True, **display_attention(str(pet_id))}
+
+    return _daily_record_response(load)
+
+
 def _reminder_response(action, status=200):
     try:
         return jsonify(action(_current_user_id(required=True))), status

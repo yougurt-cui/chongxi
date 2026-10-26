@@ -3,7 +3,7 @@
 from datetime import date, datetime, timedelta
 
 from sqlalchemy import create_engine, func, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, sessionmaker
 
 import pytest
 
@@ -23,6 +23,7 @@ from services.pet_health_models import (
     PetDevice,
 )
 from services.pet_health_rules import METRICS
+from services import pet_health_engine_service as health_service
 
 
 def _put(db, pet, metric, value, day, quality="valid"):
@@ -66,6 +67,22 @@ def test_no_data_is_not_normal():
     with Session(engine) as db:
         out = analyze(db, "missing", date(2026, 10, 23))
         assert all(x["result_status"] == "insufficient_data" for x in out["directions"])
+
+
+def test_display_attention_has_five_neutral_placeholders(monkeypatch):
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    monkeypatch.setattr(health_service, "_engine", engine)
+    monkeypatch.setattr(health_service, "_SessionLocal", sessionmaker(bind=engine))
+
+    out = health_service.display_attention("pet-a")
+
+    assert out["data_status"] == "awaiting_data"
+    assert len(out["directions"]) == 5
+    assert all(x["result_status"] == "no_alert" for x in out["directions"])
+    assert "不代表" in out["notice"]
+    with Session(engine) as db:
+        assert db.scalar(select(func.count()).select_from(HealthDirectionRule)) == 5
 
 
 def test_cross_source_conflict_is_excluded_from_analysis():
