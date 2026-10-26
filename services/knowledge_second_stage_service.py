@@ -35,10 +35,10 @@ Base = declarative_base()
 VALID_ROLES = {"symptom", "cause", "action", "risk", "experience", "dispute"}
 VALID_CLAIM_STATUS = {"待验证", "社区经验", "专业已验证", "有争议"}
 VALID_EVIDENCE = ("待验证", "社区经验", "专业已验证", "有争议")
-ELIGIBLE_SOURCE_STATUSES = ("已审核", "已通过", "已发布", "active", "approved", "published")
-PIPELINE_VERSION = "2026-10-26.1"
-MAX_SOURCE_ROWS = 200
-MAX_GUIDE_GROUPS = 50
+ELIGIBLE_SOURCE_STATUSES = ("待审核", "已审核", "已通过", "已发布", "active", "approved", "published")
+PIPELINE_VERSION = "2026-10-26.2"
+MAX_SOURCE_ROWS = 2000
+MAX_GUIDE_GROUPS = 200
 
 
 def utcnow():

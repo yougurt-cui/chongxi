@@ -34,13 +34,13 @@ class KnowledgeSecondStageServiceTest(unittest.TestCase):
                 VALUES (:id, '幼猫拒食干粮', '日常喂养', '幼龄喂食', '待验证', :status)
             """), {"id": source_id, "status": status})
 
-    def test_existing_rows_only_returns_reviewed_sources(self):
+    def test_existing_rows_accepts_drafts_but_rejects_invalid_sources(self):
         self._insert_source(1, "待审核")
         self._insert_source(2, "无有效来源")
         self._insert_source(3, "已审核")
         with Session(self.engine) as db:
             rows = svc._existing_rows(db, "日常喂养", "幼龄喂食")
-        self.assertEqual([3], [row["id"] for row in rows])
+        self.assertEqual([1, 3], [row["id"] for row in rows])
 
     def test_empty_extraction_preserves_existing_guide(self):
         self._insert_source()
