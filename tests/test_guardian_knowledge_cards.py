@@ -98,3 +98,15 @@ class CardsTest(unittest.TestCase):
             self.assertEqual(expected, mode)
             self.assertNotIn('虚构', reply)
             self.assertEqual('conclusion', data[0]['type'])
+
+    def test_existing_production_source_guards_and_scrub_are_kept(self):
+        pet = {'animal_type': 'cat', 'age_months': 24}
+        for content in ('网红粮缺乏自有工厂，不建议购买。', '多位用户表示某款粮不适应。'):
+            self.assertFalse(qa.eligible({**self.row, 'content': content, 'conditions_json': '{}'}, pet))
+        self.assertEqual('某品牌引起软便。皇家适口性不错。', qa.scrub_brand_negatives('皇家引起软便。皇家适口性不错。'))
+        row = {**self.row, 'content': '问题：吃粮体验\n皇家引起软便。', 'conditions_json': '{}'}
+        with patch.object(qa, 'get_chat_model_config', return_value={'api_key': ''}):
+            reply, mode, ids, data, _ = qa.structured_answer('问题', {}, {}, {'status': 'matched', 'items': [row]})
+        self.assertNotIn('皇家', reply)
+        self.assertNotIn('皇家', str(data))
+        self.assertIn('某品牌', reply)

@@ -42,6 +42,43 @@ UNVERIFIED_MEDICAL = re.compile(r'剂量|用药|处方|治疗|治愈|致癌|中�
                                  r'气球|橡皮筋|皮筋|塑料袋|线团|针线|精油|薰衣草|'
                                  r'(?:\d+(?:\.\d+)?|[一二三四五六七八九十两]+)\s*(?:次|片|粒|毫升|天|周|个月)')
 
+# Lawsuit-grade negative assertions about products/industry — must not be shown
+# as platform statements unless professionally verified.
+NEGATIVE_CLAIM = re.compile(
+    r'缺乏自有工厂|责任追溯|售后体系|品控背书|停产|断粮|断货风险|谨慎购买|不建议购买|不建议选|'
+    r'避雷|智商税|网红粮|IP粮|重营销轻研发|概念包装|渠道推广|造假|虚标|塌房|维权|投诉|致死|致命|群体性')
+# Group-user framing that single community posts cannot support.
+GROUP_CLAIM = re.compile(r'多位用户|许多用户|大量用户|很多用户|不少用户|众多用户|被用户们')
+# Mild negative experiences: brand names inside these sentences are generalised on output.
+MILD_NEGATIVE = re.compile(
+    r'软便|拉稀|腹泻|呕吐|便血|黑下巴|泪痕|眼屎|挑食|拒食|不爱吃|不适应|不适|翻车|出油|发酸|肥胖|过敏')
+BRAND_TERMS = (
+    '阿飞和巴弟', '坦克小希', '诚实一口', '金装素力高', '金素力高', '素力高', '伯纳天纯', '麦富迪',
+    '弗列加特', '网易严选', '纽翠斯', '爱肯拿', '荒野盛宴', '帕缇朵', '法米娜', '归真', '纯皓',
+    '恩萃', '蓝氏', '皇家', '伟嘉', '渴望', '百利', '福摩', '绿福摩', '巅峰', '冠能', '顽皮',
+    '卫仕', '鲜朗', '江小傲', '高爷家', '小毛豆', '纯福', '醇粹', '比瑞吉', '比乐', '好主人',
+    '力狼', '领先', '不二怪兽', '猫大圣', '猫友爱', '宽福', '有鱼', '玫斯', '宠率', '久生',
+    '奶思', '希喂', '天赐力', '珍鱼堡', '诺乐', '钻石', '帕特', '星速', '简创', '泡芙', '蓝挚',
+    '喵梵思', '星宴', '小嗷', '乐顿', '奇境', '本源', '希尔斯', '卡比', '天衡宝', '欧帝亿',
+    '纽顿', 'GO', 'now', 'wowo', 'WOWO', 'E76', 'e76', 'whycat')
+BRAND_PATTERN = re.compile(
+    '|'.join(re.escape(term) for term in sorted(BRAND_TERMS, key=len, reverse=True)))
+
+
+def scrub_brand_negatives(text):
+    """Generalise brand names to '某品牌' inside sentences carrying negative claims.
+
+    Positive recommendations keep brand names; only sentences whose content
+    matches MILD_NEGATIVE get scrubbed, so useful recommendations survive.
+    """
+    parts = re.split(r'([。；;！？!?\n])', text)
+    out = []
+    for part in parts:
+        if part and MILD_NEGATIVE.search(part):
+            part = BRAND_PATTERN.sub('某品牌', part)
+        out.append(part)
+    return ''.join(out)
+
 
 def _connect():
     return pymysql.connect(**get_mysql_config(), cursorclass=pymysql.cursors.DictCursor, autocommit=True)
@@ -195,6 +232,8 @@ def eligible(row, pet):
         return False
     if not professional and UNVERIFIED_MEDICAL.search(content):
         return False
+    if not professional and (NEGATIVE_CLAIM.search(content) or GROUP_CLAIM.search(content)):
+        return False
     return conditions_match(row.get('conditions_json'), pet)
 
 
@@ -331,6 +370,12 @@ def structured_answer(message, context, plan, retrieval):
         except Exception as exc:
             logger.warning('Knowledge answer fallback: %s', str(exc) if type(exc) is ValueError else type(exc).__name__)
             data, used_ids = cards.fallback(rows)
+    # Retain the existing production wording guard in both card and legacy text output.
+    for block in data:
+        block['content'] = scrub_brand_negatives(block['content'])
+        if block.get('questions'):
+            block['questions'] = [scrub_brand_negatives(q) for q in block['questions']]
+            block['content'] = '\n'.join('- ' + q for q in block['questions'])
     used = [row for row in rows if row['id'] in used_ids]
     note = cards.REVIEW_NOTE if any(row['evidence_status'] != '专业已验证' or row['status'] == '待审核' for row in used) else ''
     return cards.plain_text(data, note), mode, used_ids, data, note
