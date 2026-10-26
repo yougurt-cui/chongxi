@@ -234,6 +234,33 @@ def binding_view(db, owner, b):
     return dict(public(b), auth_status=c["auth_status"])
 
 
+def sync_binding(db, owner, b, c):
+    """Synchronize one persisted binding and return its persisted job."""
+    j = new(owner, "job", connection_id=c["id"], status="succeeded")
+    try:
+        r = upstream(
+            dict(action="sync", session=session(c), device_id=b["device_id"])
+        )
+        for key in ("metrics", "events", "events_supported", "source_time"):
+            b[key] = r[key]
+        b.update(
+            last_success_at=datetime.now(timezone.utc).isoformat(),
+            sync_status="succeeded",
+        )
+    except DeviceError as exc:
+        b["sync_status"] = "failed"
+        j.update(status="failed", error=exc.message, code=exc.code)
+        if exc.code == "AUTH_EXPIRED":
+            c.update(auth_status="expired", session=None)
+            save(db, c)
+    for old in find(db, owner, "job"):
+        if old["connection_id"] == c["id"]:
+            db.execute("DELETE FROM objects WHERE id=?", (old["id"],))
+    save(db, b)
+    save(db, j)
+    return j
+
+
 def handle(owner, path, method, data, args):
     owner = str(owner)
     if path == "device-capabilities":
@@ -417,7 +444,12 @@ def handle(owner, path, method, data, args):
                 c.pop("temporary_until", None)
                 save(db, c)
                 save(db, b)
-                return dict(ok=True, item=binding_view(db, owner, b))
+                job = sync_binding(db, owner, b, c)
+                return dict(
+                    ok=True,
+                    item=binding_view(db, owner, b),
+                    job=public(job),
+                )
             b = get(db, owner, parts[1], "binding")
             if method == "DELETE":
                 db.execute("DELETE FROM objects WHERE id=?", (b["id"],))
@@ -435,30 +467,7 @@ def handle(owner, path, method, data, args):
                 if not capabilities()["enabled"]:
                     raise DeviceError("UNAVAILABLE", "设备服务暂不可用", 503)
                 c = get(db, owner, b["connection_id"], "connection")
-                j = new(owner, "job", connection_id=c["id"], status="succeeded")
-                try:
-                    r = upstream(
-                        dict(
-                            action="sync", session=session(c), device_id=b["device_id"]
-                        )
-                    )
-                    for key in ("metrics", "events", "events_supported", "source_time"):
-                        b[key] = r[key]
-                    b.update(
-                        last_success_at=datetime.now(timezone.utc).isoformat(),
-                        sync_status="succeeded",
-                    )
-                except DeviceError as exc:
-                    b["sync_status"] = "failed"
-                    j.update(status="failed", error=exc.message, code=exc.code)
-                    if exc.code == "AUTH_EXPIRED":
-                        c.update(auth_status="expired", session=None)
-                        save(db, c)
-                for old in find(db, owner, "job"):
-                    if old["connection_id"] == c["id"]:
-                        db.execute("DELETE FROM objects WHERE id=?", (old["id"],))
-                save(db, b)
-                save(db, j)
+                j = sync_binding(db, owner, b, c)
                 return dict(ok=True, item=public(j))
             return dict(ok=True, item=binding_view(db, owner, b))
         if parts[0] == "device-sync-jobs":

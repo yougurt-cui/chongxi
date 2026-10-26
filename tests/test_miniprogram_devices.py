@@ -91,6 +91,8 @@ def test_consent_before_provider(setup):
 def test_encryption_and_owner_isolation(setup):
     c = connect()
     b = bind(c)
+    assert b["sync_status"] == "succeeded"
+    assert b["last_success_at"]
     raw = (setup[0] / "db.sqlite").read_bytes()
     for secret in (b"private-user", b"private-password", b"secret-session"):
         assert secret not in raw
@@ -141,6 +143,28 @@ def test_failure_preserves_snapshot(setup, monkeypatch):
     assert job["status"] == "failed"
     with svc.database() as db:
         assert svc.get(db, "a", c["id"], "connection")["session"] is None
+
+
+def test_binding_persists_when_initial_sync_fails(setup, monkeypatch):
+    c = connect()
+
+    def fail(_):
+        raise svc.DeviceError("UPSTREAM_ERROR", "temporary", 502)
+
+    monkeypatch.setattr(svc, "upstream", fail)
+    result = call(
+        "device-bindings",
+        "POST",
+        dict(
+            connection_id=c["id"],
+            vendor_device_id="42",
+            pet_id="pet",
+            attribution_status="unknown",
+        ),
+    )
+    assert result["item"]["sync_status"] == "failed"
+    assert result["job"]["status"] == "failed"
+    assert call("device-bindings")["items"][0]["id"] == result["item"]["id"]
 
 
 def test_unbound_connection_expires(setup):
