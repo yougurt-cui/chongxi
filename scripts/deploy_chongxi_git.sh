@@ -63,6 +63,10 @@ git pull --ff-only origin "$REMOTE_BRANCH"
   services/petkit_user_transport.py \
   scripts/check_submission_config.py \
   scripts/run_knowledge_second_stage.py \
+  scripts/run_knowledge_schedule.py \
+  services/knowledge_schedule_service.py \
+  services/guardian_knowledge_service.py \
+  services/guardian_knowledge_cards.py \
   services/pipeline_service.py \
   adapters/catfood_ingredient_adapter.py \
   scripts/rebuild_fiber_features_from_science.py \

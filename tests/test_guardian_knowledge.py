@@ -143,15 +143,18 @@ class AnswerTest(unittest.TestCase):
         self.assertIn(record()['content'], answer); self.assertIn('尚未专业验证', answer)
 
     def test_model_citations_must_be_from_retrieved_ids(self):
-        for payload, expected in (({'sufficient': True, 'passages': [{'guide_id': 1, 'excerpt': record()['content']}]}, 'model_evidence_selection'),
-                                  ({'sufficient': True, 'passages': [{'guide_id': 999, 'excerpt': '虚构答案'}]}, 'evidence_fallback'),
-                                  ({'sufficient': True, 'passages': [{'guide_id': 1, 'excerpt': '虚构答案增加治疗保证'}]}, 'evidence_fallback')):
+        valid = {'sufficient': True, 'data': [{'type': 'conclusion', 'content': '可以提供猫抓板，引导在合适位置磨爪。',
+                 'evidence': [{'guide_id': 1, 'quote': record()['content'].splitlines()[-1]}]}]}
+        invalid_id = deepcopy(valid); invalid_id['data'][0]['evidence'][0]['guide_id'] = 999
+        invalid_quote = deepcopy(valid); invalid_quote['data'][0]['evidence'][0]['quote'] = '虚构答案增加治疗保证'
+        for payload, expected in ((valid, 'model_structured_answer'), (invalid_id, 'evidence_fallback'),
+                                  (invalid_quote, 'evidence_fallback')):
             model = MagicMock(); model.chat.completions.create.return_value.choices[0].message.content = json.dumps(payload)
             with patch.object(qa, 'get_chat_model_config', return_value={'api_key': 'test', 'base_url': 'https://example.com', 'model': 'test'}), \
                  patch.object(qa, 'OpenAI', return_value=model):
                 answer, mode, ids = qa.answer('问题', self.context, self.plan, self.retrieval)
             self.assertEqual(mode, expected); self.assertEqual(ids, [1])
-            if expected != 'model_evidence_selection':
+            if expected != 'model_structured_answer':
                 self.assertNotIn('虚构答案', answer)
 
     def test_play_question_cannot_match_only_picky_eating_and_selection_needs_criteria(self):

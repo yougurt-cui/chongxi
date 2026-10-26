@@ -367,7 +367,13 @@ def run_distill(topic: str, subtopic: str, mode: str = "llm", chunk: int = 20,
     with Session(engine) as db:
         rows = _existing_rows(db, topic, subtopic)
         if not rows:
-            return {"input": 0, "claims": 0, "guides": 0, "skipped": True,
+            # Withdrawn sources must not leave an old published card searchable forever.
+            invalidated = db.query(KdGuide).filter_by(topic=topic, subtopic=subtopic).filter(
+                KdGuide.review_status != "无有效来源").update({"review_status": "无有效来源"})
+            db.query(KdClaim).filter_by(topic=topic, subtopic=subtopic).delete()
+            db.query(KdTopicRun).filter_by(topic=topic, subtopic=subtopic).delete()
+            db.commit()
+            return {"input": 0, "claims": 0, "guides": 0, "invalidated": invalidated, "skipped": not bool(invalidated),
                     "message": f"knowledge_base 中无 topic={topic} subtopic={subtopic} 的数据"}
         if len(rows) > MAX_SOURCE_ROWS:
             raise ValueError(
@@ -420,7 +426,7 @@ def run_distill(topic: str, subtopic: str, mode: str = "llm", chunk: int = 20,
                 g = KdGuide(topic=topic, subtopic=subtopic, problem_key=k, problem=guide["problem"],
                             content_hash=ph)
                 db.add(g)
-            elif g.content_hash != ph:
+            elif g.content_hash != ph or g.review_status == "无有效来源":
                 g.review_status = "待审核"  # 新证据使旧审核失效
             g.problem = guide["problem"]
             g.symptoms_json = jd(guide["symptoms"])
