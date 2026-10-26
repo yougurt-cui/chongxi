@@ -181,9 +181,7 @@ def eligible(row, pet):
     professional = row.get('evidence_status') == '专业已验证' and row.get('status') != '待审核'
     if row.get('status') not in {'待审核', '已审核', '已通过', '已发布', 'active', 'approved', 'published'}:
         return False
-    if row.get('evidence_status') not in {'待验证', '社区经验', '专业已验证'} or int(row.get('oppose_posts') or 0):
-        return False
-    if row.get('risk') not in {'低', '中'} and not professional:
+    if row.get('evidence_status') not in {'待验证', '社区经验', '专业已验证'}:
         return False
     content = row.get('content') or ''
     if not content or len(content) > 2000 or UNSAFE_SOURCE.search(content):
@@ -195,34 +193,72 @@ def eligible(row, pet):
     return conditions_match(row.get('conditions_json'), pet)
 
 
+def _guide_content(row):
+    """Render one second-stage guide into stable, human-readable evidence text."""
+    sections = [f"问题：{row.get('problem')}"]
+    mappings = (
+        ('表现', _json(row.get('symptoms_json'), []), 'text'),
+        ('风险提醒', _json(row.get('risks_json'), []), 'text'),
+        ('争议与经验', _json(row.get('disputes_json'), []), 'text'),
+    )
+    for label, items, key in mappings:
+        values = [str(item.get(key)).strip() for item in items if isinstance(item, dict) and item.get(key)]
+        if values:
+            sections.append(f"{label}：" + '；'.join(dict.fromkeys(values)))
+    pairs = _json(row.get('pairs_json'), [])
+    values = []
+    for item in pairs:
+        if not isinstance(item, dict):
+            continue
+        cause, action = item.get('cause'), item.get('action')
+        if cause and action:
+            values.append(f"{cause}；对应办法：{action}")
+        elif cause:
+            values.append(f"可能原因：{cause}")
+        elif action:
+            values.append(f"可参考办法：{action}")
+    if values:
+        sections.insert(2 if len(sections) > 1 else 1, '原因与办法：' + '；'.join(dict.fromkeys(values)))
+    return '\n'.join(str(value) for value in sections if value and value != '问题：None')
+
+
 def retrieve(plan):
     if not plan['terms']:
         return {'status': 'no_match', 'items': []}
-    # Parameterised LIKE is compatible with the cleaned four-table pipeline;
-    # do not import its writer/ensure_tables or change knowledge review statuses.
+    # Read only the second-stage guide table; never fall back to atomic knowledge_base rows.
     terms = [term.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_') for term in plan['terms']]
-    clauses = ['(k.content LIKE %s OR k.subtopic LIKE %s)'] * len(terms)
-    score = ' + '.join(['(CASE WHEN k.content LIKE %s THEN 1 ELSE 0 END)'] * len(terms))
-    params = [pattern for term in terms for pattern in ('%' + term + '%', '%' + term + '%')]
-    params.extend('%' + term + '%' for term in terms)
+    fields = ('k.problem', 'k.subtopic', 'k.symptoms_json', 'k.pairs_json', 'k.risks_json', 'k.disputes_json')
+    clauses = ['(' + ' OR '.join(f'{field} LIKE %s' for field in fields) + ')'] * len(terms)
+    score = ' + '.join([
+        '(CASE WHEN k.problem LIKE %s THEN 2 ELSE 0 END) + '
+        '(CASE WHEN k.symptoms_json LIKE %s OR k.pairs_json LIKE %s OR k.risks_json LIKE %s '
+        'OR k.disputes_json LIKE %s THEN 1 ELSE 0 END)'
+    ] * len(terms))
+    params = [pattern for term in terms for pattern in ['%' + term + '%'] * len(fields)]
+    params.extend(pattern for term in terms for pattern in ['%' + term + '%'] * 5)
     try:
         with _connect() as conn:
             with conn.cursor() as cursor:
-                cursor.execute(f'''SELECT k.id,k.content,k.topic,k.subtopic,k.conditions_json,k.knowledge_type,
-                    k.risk,k.evidence_status,k.status,k.source_count,k.support_posts,k.oppose_posts
-                    FROM knowledge_base k WHERE k.status IN ('待审核','已审核','已通过','已发布','active','approved','published')
-                    AND k.evidence_status IN ('待验证','社区经验','专业已验证') AND k.oppose_posts=0
-                    AND (k.risk IN ('低','中') OR k.evidence_status='专业已验证')
-                    AND EXISTS (SELECT 1 FROM knowledge_sources s WHERE s.knowledge_id=k.id)
-                    AND ({' OR '.join(clauses)}) ORDER BY ({score}) DESC,k.source_count DESC,k.id DESC LIMIT 300''', params)
+                cursor.execute(f'''SELECT k.id,k.problem,k.topic,k.subtopic,k.symptoms_json,k.pairs_json,
+                    k.risks_json,k.disputes_json,k.conditions_json,k.source_ids_json,
+                    k.evidence_status,k.review_status AS status
+                    FROM kd_problem_guides k
+                    WHERE k.review_status IN ('待审核','已审核','已通过','已发布','active','approved','published')
+                    AND k.evidence_status IN ('待验证','社区经验','专业已验证')
+                    AND k.source_ids_json <> '[]'
+                    AND ({' OR '.join(clauses)}) ORDER BY ({score}) DESC,
+                    JSON_LENGTH(k.source_ids_json) DESC,k.id DESC LIMIT 300''', params)
                 rows = cursor.fetchall()
         scored = []
         for row in rows:
+            row['content'] = _guide_content(row)
+            row['source_knowledge_ids'] = _json(row.get('source_ids_json'), [])
+            row['source_count'] = len(row['source_knowledge_ids'])
             if not eligible(row, plan['pet_scope']):
                 continue
             if plan.get('anchors') and not any(term in row['content'] for term in plan['anchors']):
                 continue
-            if plan.get('selection') and row.get('knowledge_type') != '选择标准':
+            if plan.get('selection') and row.get('topic') != '用品选择标准':
                 continue
             hits = [term for term in plan['terms'] if term in row['content']]
             if not hits:
@@ -268,7 +304,7 @@ def answer(message, context, plan, retrieval):
                     '待验证知识只能表述为社区资料参考，不可说专业已证实；不能将个人经验推广为保证有效的做法。'
                     '不能凭资料擅自推断疾病因果或改变已有选粮/就医流程；资料不足明确说明，不编造专业结论。'
                     '不要给资料之外的通用建议。若资料不能直接回答问题，必须返回{"sufficient":false,"passages":[]}。'
-                    '只输出JSON：{"sufficient":true,"passages":[{"knowledge_id":实际知识id,"excerpt":"该原子知识content全文"}]}。'
+                    '只输出JSON：{"sufficient":true,"passages":[{"guide_id":实际知识卡id,"excerpt":"该知识卡content全文"}]}。'
                     'excerpt必须逐字等于对应content全文，不能删掉否定词或适用条件，不能改写、追加建议或输出私人记录。')},
                           {'role': 'user', 'content': json.dumps(payload, ensure_ascii=False, default=str)}], **options)
             parsed = json.loads(response.choices[0].message.content)
@@ -280,7 +316,7 @@ def answer(message, context, plan, retrieval):
             by_id = {row['id']: row for row in rows}
             snippets, selected = [], []
             for passage in passages:
-                kid, excerpt = passage.get('knowledge_id'), passage.get('excerpt')
+                kid, excerpt = passage.get('guide_id'), passage.get('excerpt')
                 if (type(kid) is not int or kid not in ids or not isinstance(excerpt, str)
                         or len(excerpt.strip()) < 8 or excerpt != by_id[kid]['content']):
                     raise ValueError('Ungrounded answer reference or invented claim')
@@ -308,12 +344,13 @@ def handle_question(user_id, conversation, message, state):
     state.update(primary_intent='general_pet_qa', secondary_intent=None, current_step=None,
                  missing_slots=[], followup_count=0, turn_count=state['turn_count'] + 1)
     state['slots'][STATE_KEY] = {'query': plan['query'], 'topics': plan['topics'], 'pet_id': conversation['pet_id'],
-                               'turn_no': state['turn_count'], 'knowledge_ids': used_ids}
+                               'turn_no': state['turn_count'], 'knowledge_ids': used_ids, 'guide_ids': used_ids}
     return {'response_type': 'text', 'reply': reply, 'result': {
         'intent': 'general_pet_qa', 'pipeline': 'knowledge_qa', 'turn_no': state['turn_count'], 'sequence_no': 1,
         'knowledge_qa': {'version': 1, 'status': 'insufficient_evidence' if mode == 'insufficient_evidence' else retrieval['status'], 'generation_source': mode,
                          'query': plan['query'], 'topics': plan['topics'], 'knowledge_ids': used_ids,
-                         'sources': [{key: row.get(key) for key in ('id', 'topic', 'subtopic', 'evidence_status', 'status', 'risk')}
+                         'guide_ids': used_ids, 'source_table': 'kd_problem_guides',
+                         'sources': [{key: row.get(key) for key in ('id', 'topic', 'subtopic', 'evidence_status', 'status', 'source_knowledge_ids')}
                                      for row in retrieval['items'] if row['id'] in used_ids],
                          'context_status': {'diet': context['diet_history_status'], 'health': context['health_anomalies']['status']}}},
         'disclaimer': 'AI内容仅供参考，不能替代兽医诊断'}
