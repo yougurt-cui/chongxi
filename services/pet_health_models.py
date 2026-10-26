@@ -2,10 +2,11 @@
 
 移植自 pet_health_engine_v2.zip 的 models.py，改动：
   - 默认数据库改为工程内 SQLite：var/pet_health/pet_health.db（与 cat_food_tasks.sqlite3 同惯例）；
-  - 可用环境变量 PET_HEALTH_DATABASE_URL 切换 MySQL（格式 mysql+pymysql://user:pwd@host/pet_health?charset=utf8mb4）；
+  - 默认复用工程 MySQL 主库；可用 PET_HEALTH_DATABASE_URL 显式指定其他数据库（含 SQLite）；
   - 模块改名 pet_health_models，避免通用名 models 与工程其他模块冲突。
 """
 
+import os
 from pathlib import Path
 
 from sqlalchemy import (
@@ -139,7 +140,23 @@ class HealthAttention(Base):
 
 
 def get_db_url():
-    return __import__("os").getenv("PET_HEALTH_DATABASE_URL", DEFAULT_SQLITE_URL)
+    explicit = os.getenv("PET_HEALTH_DATABASE_URL")
+    if explicit:
+        return explicit
+    from sqlalchemy.engine import URL
+
+    from app_config import get_mysql_config
+
+    cfg = get_mysql_config()
+    return URL.create(
+        "mysql+pymysql",
+        username=cfg["user"],
+        password=cfg["password"],
+        host=cfg["host"],
+        port=int(cfg["port"]),
+        database=cfg["database"],
+        query={"charset": cfg["charset"]},
+    ).render_as_string(hide_password=False)
 
 
 def make_engine(url=None):

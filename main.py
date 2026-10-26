@@ -50,6 +50,7 @@ try:
     from .api.petkit_api import petkit_api
     from .api.pet_health_api import pet_health_api
     from .api.pet_knowledge_api import pet_knowledge_api
+    from .api.knowledge_second_stage_api import knowledge_second_stage_api
 except ImportError:
     from api.consumer_api import consumer_api
     from api.business_api import business_api
@@ -76,6 +77,7 @@ except ImportError:
     from api.petkit_api import petkit_api
     from api.pet_health_api import pet_health_api
     from api.pet_knowledge_api import pet_knowledge_api
+    from api.knowledge_second_stage_api import knowledge_second_stage_api
 
 from services import cat_food_task_service as task_store
 
@@ -1966,6 +1968,7 @@ def create_app() -> Flask:
     flask_app.register_blueprint(petkit_api)
     flask_app.register_blueprint(pet_health_api)
     flask_app.register_blueprint(pet_knowledge_api)
+    flask_app.register_blueprint(knowledge_second_stage_api)
 
     @flask_app.get("/health")
     def health() -> tuple[dict, int]:

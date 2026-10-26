@@ -1,9 +1,10 @@
-"""宠物知识蒸馏管线 API。
+"""宠物知识蒸馏管线 API（4 表结构：tasks / base / sources / comment_items）。
 
-- POST /run      对 douyin_raw_content 按条件抽取知识（增量，指纹跳过未变化帖子）
+- POST /run      对 douyin_raw_content 按条件抽取知识（增量，指纹跳过未变化帖子，带同主题语义对齐 same_as_id）
 - POST /verify   评论互证 + 反证校验，流转 evidence_status
-- POST /comment-tasks/prepare  清洗一篇帖子评论并创建批次任务
-- POST /comment-tasks/run      创建并运行一篇帖子的评论批次
+- POST /dedup    离线语义去重：embedding 召回 + LLM 裁决 + 合并（支持 dry_run）
+- POST /comment-tasks/prepare  清洗一篇帖子评论写入 knowledge_comment_items（幂等，不调模型）
+- POST /comment-tasks/run      按 pending 条目动态切批蒸馏
 - GET  /stats    四表计数 + 分布
 - GET  /list     知识列表（可按 topic/subtopic/risk/evidence_status 过滤）
 """
@@ -64,7 +65,7 @@ def verify():
 @pet_knowledge_api.post("/comment-tasks/prepare")
 @admin_required
 def prepare_comment_tasks():
-    """清洗评论、分流提问并建立25条左右的持久批次，不调用模型。"""
+    """清洗评论写入 comment_items、分流提问，不调用模型；幂等可重复执行。"""
     payload = request.get_json(silent=True) or {}
     post_id = str(payload.get("post_id") or "").strip()
     if not post_id:
@@ -78,7 +79,7 @@ def prepare_comment_tasks():
 @pet_knowledge_api.post("/comment-tasks/run")
 @admin_required
 def run_comment_tasks():
-    """按持久批次调用千问；已完成批次自动跳过。"""
+    """按 pending 评论动态切批调用千问；已 done 的评论自动跳过，失败批次可重跑。"""
     payload = request.get_json(silent=True) or {}
     post_id = str(payload.get("post_id") or "").strip()
     if not post_id:
@@ -89,10 +90,27 @@ def run_comment_tasks():
     )})
 
 
+@pet_knowledge_api.post("/dedup")
+@admin_required
+def dedup():
+    """离线语义去重：同桶知识点 embedding 召回 + LLM 裁决 + 合并。
+
+    body: {"min_sim"?: 0.85, "max_pairs"?: 200, "dry_run"?: false, "topics"?: ["日常喂养"], "model"?}
+    建议 先 dry_run=true 看合并计划，确认后再执行。
+    """
+    payload = request.get_json(silent=True) or {}
+    return _run(lambda: {"ok": True, **pipeline.dedup_knowledge(
+        min_sim=float(payload.get("min_sim") or 0.85),
+        max_pairs=int(payload.get("max_pairs") or 200),
+        dry_run=payload.get("dry_run") is True,
+        topics=payload.get("topics"), model=payload.get("model"),
+    )})
+
+
 @pet_knowledge_api.get("/stats")
 @admin_required
 def stats():
-    """四表计数与分布（无需鉴权，方便监控）。"""
+    """四表计数与分布。"""
     return _run(lambda: {"ok": True, **pipeline.stats()})
 
 

@@ -1,10 +1,16 @@
 """宠物知识蒸馏管线（服务层）。
 
-源自 workspace/pet_knowledge_pipeline 的 MVP，适配 csv_labeling MySQL：
-- 来源帖子：douyin_raw_content（支持 ingest_ts / source_keyword 过滤，id 游标分页）
-- 来源评论：douyin_raw_comments（无 post_id 外键，按 post_title 精确桥接）
-- 知识四表：knowledge_tasks / knowledge_candidates / knowledge_base / knowledge_sources
-- 证据校验：评论互证 + 反证 -> evidence_status 流转（专业已验证保持人工专属）
+源自 workspace/pet_knowledge_pipeline 的 MVP，适配 csv_labeling MySQL。
+2026-10-24 精简为 4 表结构：
+
+- knowledge_tasks          每帖一行：内容指纹增量 + 失败账本 + LLM 原始输出审计（raw_json）
+- knowledge_base           跨帖去重合并后的知识点主表（post 粒度独立证据存 evidence_json）
+- knowledge_sources        知识点 ↔ 来源帖（支撑 source_count / 来源追溯）
+- knowledge_comment_items  每条评论一行：清洗 / 分流提问 / 蒸馏消费状态 / 证据立场（votes_json）
+
+来源帖子：douyin_raw_content（支持 ingest_ts / source_keyword 过滤，id 游标分页）
+来源评论：douyin_raw_comments（无 post_id 外键，按 post_title 精确桥接）
+证据校验：评论互证 + 反证 -> evidence_status 流转（专业已验证保持人工专属）
 
 知识表与来源表同库（csv_labeling），便于 join；如需隔离可改 KNOWLEDGE_DB。
 """
@@ -50,9 +56,9 @@ RISK = ["低", "中", "高"]
 
 SOURCE_POST_TABLE = "douyin_raw_content"
 SOURCE_COMMENT_TABLE = "douyin_raw_comments"
-PIPELINE_VERSION = "knowledge-taxonomy-v2"
-CLEANING_VERSION = "comment-clean-v1"
-COMMENT_PIPELINE_VERSION = "comment-distill-v1"
+PIPELINE_VERSION = "knowledge-taxonomy-v3"
+EMBED_MODEL = "text-embedding-v3"
+CLEANING_VERSION = "comment-clean-v2"
 
 
 def utcnow():
@@ -87,31 +93,16 @@ def _qwen() -> dict:
 
 
 class Task(Base):
+    """抽取任务台账：一篇来源帖一行，指纹增量 + 失败账本 + 原始输出审计。"""
     __tablename__ = "knowledge_tasks"
     id = Column(Integer, primary_key=True)
     post_id = Column(String(128), unique=True, nullable=False, index=True)
     content_hash = Column(String(64), nullable=False)
     status = Column(String(24), nullable=False, default="pending")
     attempts = Column(Integer, default=0, nullable=False)
+    raw_json = Column(Text)  # LLM 原始输出（审计用，替代原 knowledge_candidates 表）
     error = Column(Text)
     updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)
-
-
-class Candidate(Base):
-    __tablename__ = "knowledge_candidates"
-    id = Column(Integer, primary_key=True)
-    post_id = Column(String(128), nullable=False, index=True)
-    content = Column(Text, nullable=False)
-    topic = Column(String(40), nullable=False)
-    subtopic = Column(String(100), nullable=False, default="其他")
-    intent = Column(String(30), nullable=False)
-    conditions_json = Column(Text, nullable=False)
-    knowledge_type = Column(String(30), nullable=False)
-    risk = Column(String(4), nullable=False)
-    evidence_status = Column(String(20), nullable=False, default="待验证")
-    knowledge_id = Column(Integer, nullable=True, index=True)
-    comment_task_id = Column(Integer, nullable=True, index=True)
-    created_at = Column(DateTime, default=utcnow)
 
 
 class Knowledge(Base):
@@ -129,6 +120,7 @@ class Knowledge(Base):
     source_count = Column(Integer, nullable=False, default=0)
     support_posts = Column(Integer, nullable=False, default=0)
     oppose_posts = Column(Integer, nullable=False, default=0)
+    evidence_json = Column(Text)  # 帖子粒度独立证据：[{post_id, evidence_id, stance, excerpt}]
     created_at = Column(DateTime, default=utcnow)
     updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)
 
@@ -142,33 +134,12 @@ class Source(Base):
     __table_args__ = (UniqueConstraint("knowledge_id", "post_id", name="uq_knowledge_post"),)
 
 
-class EvidenceVote(Base):
-    """模型从具体评论中识别出的社区赞同/反对票据，可追溯而非只存计数。"""
-    __tablename__ = "knowledge_evidence_votes"
+class CommentItem(Base):
+    """评论条目：清洗 / 提问分流 / 蒸馏消费状态 / 证据立场，一张表承载原三张表职责。"""
+    __tablename__ = "knowledge_comment_items"
     id = Column(Integer, primary_key=True)
-    knowledge_id = Column(Integer, nullable=False, index=True)
     post_id = Column(String(128), nullable=False, index=True)
-    evidence_scope = Column(String(8), nullable=False)  # 帖子 / 评论
-    evidence_ref = Column(String(160), nullable=False)  # post:<id> / comment:<id>
-    evidence_role = Column(String(16), nullable=False, default="independent")  # origin / independent
-    stance = Column(String(8), nullable=False)  # 赞同 / 反对
-    comment_ids_json = Column(Text, nullable=False)
-    excerpts_json = Column(Text, nullable=False)
-    model = Column(String(100))
-    created_at = Column(DateTime, default=utcnow)
-    __table_args__ = (
-        UniqueConstraint("knowledge_id", "evidence_scope", "evidence_ref", "stance",
-                         name="uq_knowledge_evidence_stance"),
-    )
-
-
-class CleanComment(Base):
-    __tablename__ = "knowledge_clean_comments"
-    id = Column(Integer, primary_key=True)
-    source_channel = Column(String(24), nullable=False)
-    source_comment_key = Column(String(160), nullable=False)
-    source_post_key = Column(String(160), nullable=False, index=True)
-    raw_comment_id = Column(String(128), nullable=False)
+    comment_key = Column(String(160), nullable=False)
     cleaned_text = Column(Text, nullable=False)
     content_hash = Column(String(64), nullable=False)
     content_role = Column(String(24), nullable=False)  # statement/question/experience/noise/advertisement
@@ -176,68 +147,13 @@ class CleanComment(Base):
     noise_reason = Column(String(100))
     is_question = Column(Integer, nullable=False, default=0)
     duplicate_of = Column(Integer)
+    status = Column(String(24), nullable=False, default="pending", index=True)  # pending/done/failed
+    attempts = Column(Integer, nullable=False, default=0)
+    votes_json = Column(Text)  # [{knowledge_id, stance, role: origin|independent, excerpt}]
     cleaning_version = Column(String(40), nullable=False)
     created_at = Column(DateTime, default=utcnow)
-    __table_args__ = (
-        UniqueConstraint("source_channel", "source_comment_key", "cleaning_version",
-                         name="uq_clean_comment_version"),
-    )
-
-
-class KnowledgeQuestion(Base):
-    __tablename__ = "knowledge_questions"
-    id = Column(Integer, primary_key=True)
-    source_channel = Column(String(24), nullable=False)
-    source_post_key = Column(String(160), nullable=False, index=True)
-    source_comment_key = Column(String(160), nullable=False)
-    question_text = Column(Text, nullable=False)
-    topic = Column(String(40))
-    subtopic = Column(String(100))
-    intent = Column(String(30), default="寻求建议")
-    status = Column(String(24), nullable=False, default="待归类")
-    created_at = Column(DateTime, default=utcnow)
-    __table_args__ = (
-        UniqueConstraint("source_channel", "source_comment_key", name="uq_knowledge_question_source"),
-    )
-
-
-class CommentTask(Base):
-    __tablename__ = "knowledge_comment_tasks"
-    id = Column(Integer, primary_key=True)
-    source_channel = Column(String(24), nullable=False)
-    source_post_key = Column(String(160), nullable=False, index=True)
-    batch_index = Column(Integer, nullable=False)
-    comment_ids_json = Column(Text, nullable=False)
-    input_hash = Column(String(64), nullable=False)
-    pipeline_version = Column(String(40), nullable=False)
-    status = Column(String(24), nullable=False, default="pending", index=True)
-    attempts = Column(Integer, nullable=False, default=0)
-    model = Column(String(100))
-    error = Column(Text)
-    started_at = Column(DateTime)
-    completed_at = Column(DateTime)
-    created_at = Column(DateTime, default=utcnow)
     updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)
-    __table_args__ = (
-        UniqueConstraint("source_channel", "source_post_key", "batch_index", "input_hash",
-                         "pipeline_version", name="uq_comment_distill_task"),
-    )
-
-
-class CandidateSource(Base):
-    __tablename__ = "knowledge_candidate_sources"
-    id = Column(Integer, primary_key=True)
-    candidate_id = Column(Integer, nullable=False, index=True)
-    source_channel = Column(String(24), nullable=False)
-    source_post_key = Column(String(160), nullable=False, index=True)
-    evidence_scope = Column(String(8), nullable=False, default="评论")
-    source_comment_key = Column(String(160), nullable=False)
-    source_role = Column(String(24), nullable=False)  # origin_statement / origin_experience
-    source_excerpt = Column(Text, nullable=False)
-    __table_args__ = (
-        UniqueConstraint("candidate_id", "source_channel", "source_comment_key",
-                         name="uq_candidate_comment_source"),
-    )
+    __table_args__ = (UniqueConstraint("post_id", "comment_key", name="uq_comment_item"),)
 
 
 def ensure_tables(engine) -> None:
@@ -245,40 +161,14 @@ def ensure_tables(engine) -> None:
     Base.metadata.create_all(engine)
     if engine.dialect.name != "mysql":
         return
-    inspector = inspect(engine)
-    columns = {c["name"] for c in inspector.get_columns("knowledge_evidence_votes")}
-    uniques = {u["name"] for u in inspector.get_unique_constraints("knowledge_evidence_votes")}
+    insp = inspect(engine)
+    task_cols = {c["name"] for c in insp.get_columns("knowledge_tasks")}
+    kb_cols = {c["name"] for c in insp.get_columns("knowledge_base")}
     with engine.begin() as db:
-        if "evidence_scope" not in columns:
-            db.execute(text(
-                "ALTER TABLE knowledge_evidence_votes ADD COLUMN evidence_scope VARCHAR(8) NOT NULL DEFAULT '评论'"
-            ))
-        if "evidence_ref" not in columns:
-            db.execute(text(
-                "ALTER TABLE knowledge_evidence_votes ADD COLUMN evidence_ref VARCHAR(160) NOT NULL DEFAULT ''"
-            ))
-        if "evidence_role" not in columns:
-            db.execute(text(
-                "ALTER TABLE knowledge_evidence_votes ADD COLUMN evidence_role VARCHAR(16) "
-                "NOT NULL DEFAULT 'independent'"
-            ))
-        if "uq_knowledge_post_stance" in uniques:
-            db.execute(text("ALTER TABLE knowledge_evidence_votes DROP INDEX uq_knowledge_post_stance"))
-        if "uq_knowledge_evidence_stance" not in uniques:
-            db.execute(text(
-                "ALTER TABLE knowledge_evidence_votes ADD CONSTRAINT uq_knowledge_evidence_stance "
-                "UNIQUE (knowledge_id, evidence_scope, evidence_ref, stance)"
-            ))
-    candidate_columns = {c["name"] for c in inspect(engine).get_columns("knowledge_candidates")}
-    if "comment_task_id" not in candidate_columns:
-        with engine.begin() as db:
-            db.execute(text(
-                "ALTER TABLE knowledge_candidates ADD COLUMN comment_task_id INTEGER NULL"
-            ))
-            db.execute(text(
-                "CREATE INDEX ix_knowledge_candidates_comment_task_id "
-                "ON knowledge_candidates (comment_task_id)"
-            ))
+        if "raw_json" not in task_cols:
+            db.execute(text("ALTER TABLE knowledge_tasks ADD COLUMN raw_json LONGTEXT NULL"))
+        if "evidence_json" not in kb_cols:
+            db.execute(text("ALTER TABLE knowledge_base ADD COLUMN evidence_json LONGTEXT NULL"))
 
 
 def clean(s: Any):
@@ -355,16 +245,22 @@ def read_posts(session: Session, after_id: int, size: int, ingest_after: str | N
     return session.execute(text(q), params).mappings().all()
 
 
-def read_comments(session: Session, pid: str):
+def read_comments(session: Session, pid: str, strict_bridge: bool = False):
     """仅允许唯一、非空标题桥接；歧义来源宁可隔离，也不把评论串到错误帖子。"""
     row = session.execute(text(f"SELECT title FROM {SOURCE_POST_TABLE} WHERE id = :pid"),
                           {"pid": pid}).first()
-    if not row or not str(row[0] or "").strip():
+    if not row:
+        return []
+    if not str(row[0] or "").strip():
+        if strict_bridge:
+            raise ValueError(f"帖子 {pid} 标题为空，无法安全关联评论")
         return []
     title = row[0]
     matches = session.scalar(text(
         f"SELECT COUNT(*) FROM {SOURCE_POST_TABLE} WHERE title = :title"), {"title": title})
     if matches != 1:
+        if strict_bridge:
+            raise ValueError(f"帖子 {pid} 标题不唯一，无法安全关联评论")
         return []
     return session.execute(
         text(f"SELECT id AS cid, comment_text AS body FROM {SOURCE_COMMENT_TABLE} "
@@ -390,7 +286,7 @@ def topic_router(title, body, comments):
     return max(scores, key=scores.get) if max(scores.values()) else "其他"
 
 
-def extract_llm(title, body, comments, model: str | None = None):
+def extract_llm(title, body, comments, model: str | None = None, existing: list[dict] | None = None):
     q = _qwen()
     key, used_model = q["api_key"], (model or q["model"])
     if not key:
@@ -409,6 +305,14 @@ def extract_llm(title, body, comments, model: str | None = None):
               "subtopic必须从所选topic对应的枚举中选一个，不要自造，枚举如下：\n" + subtopics_desc + "\n"
               "knowledge_type只能取：" + "、".join(TYPES) + "；intent只能取：" + "、".join(INTENTS) + "；"
               "risk只能取低、中、高。conditions为包含species和life_stage的对象。最多12条。")
+    if existing:
+        system += (
+            "\n下面是库中已有的知识点参考（含编号）。社区里同一个观点常有不同措辞："
+            "如果输入中的观点与某条已有知识表达的是同一观点（即使措辞完全不同），"
+            "在该条输出中加 same_as_id=对应编号，其余字段照常输出；"
+            "只有语义上确实是同一观点才标，拿不准就不标，宁缺毋滥。"
+            "\n已有知识点：\n" + "\n".join(f"- id={e['id']}：{e['content'][:120]}" for e in existing)
+        )
     user = jd({"title": title, "body": body, "comments": comments, "output_example": schema_hint})
     r = requests.post(endpoint, headers={"Authorization": f"Bearer {key}"},
                       json={"model": used_model, "temperature": 0,
@@ -465,10 +369,12 @@ def validate_items(items):
             conditions = {}
         conditions = {k: clean(v)[:60] for k, v in conditions.items() if k in ("species", "life_stage", "health_condition")}
         unique.add(content)
+        same_as = raw.get("same_as_id")
         out.append({"content": content, "topic": topic, "subtopic": subtopic,
                     "intent": raw["intent"], "conditions": conditions,
                     "knowledge_type": raw["knowledge_type"], "risk": raw["risk"],
-                    "evidence_status": "待验证"})
+                    "evidence_status": "待验证",
+                    "_same_as": int(same_as) if str(same_as).strip().isdigit() else None})
     return out
 
 
@@ -486,15 +392,21 @@ def similarity(a, b):
     return max(dot / norm if norm else 0, SequenceMatcher(None, a, b).ratio() * 0.9)
 
 
-def can_merge(candidate, knowledge):
-    if (candidate.topic != knowledge.topic or candidate.subtopic != knowledge.subtopic
-            or candidate.knowledge_type != knowledge.knowledge_type or candidate.risk != knowledge.risk):
-        return False
-    a, b = jl(candidate.conditions_json, {}), jl(knowledge.conditions_json, {})
+def _conditions_equal(a, b) -> bool:
+    a = a if isinstance(a, dict) else jl(a, {})
+    b = b if isinstance(b, dict) else jl(b, {})
     for k in ("species", "life_stage", "health_condition"):
         if a.get(k) != b.get(k):
             return False
-    return similarity(candidate.content, knowledge.content) >= 0.94
+    return True
+
+
+def can_merge(item: dict, knowledge: Knowledge) -> bool:
+    if (item["topic"] != knowledge.topic or item["subtopic"] != knowledge.subtopic
+            or item["knowledge_type"] != knowledge.knowledge_type or item["risk"] != knowledge.risk):
+        return False
+    return _conditions_equal(item.get("conditions", {}), knowledge.conditions_json) \
+        and similarity(item["content"], knowledge.content) >= 0.94
 
 
 def refresh_knowledge(session, knowledge_ids):
@@ -511,33 +423,54 @@ def refresh_knowledge(session, knowledge_ids):
 
 
 def unlink_post(session, pid):
-    old_sources = session.scalars(select(Source).where(Source.post_id == pid)).all()
-    ids = {s.knowledge_id for s in old_sources}
-    session.execute(delete(Source).where(Source.post_id == pid))
-    session.execute(delete(Candidate).where(Candidate.post_id == pid))
-    refresh_knowledge(session, ids)
+    """重抽前清理：删除该帖的全部来源关联，孤立知识点标记为无有效来源。"""
+    old_ids = [kid for kid, in session.execute(
+        select(Source.knowledge_id).where(Source.post_id == str(pid))).all()]
+    session.execute(delete(Source).where(Source.post_id == str(pid)))
+    refresh_knowledge(session, set(old_ids))
 
 
-def merge_candidates(session, candidates):
-    touched = set()
-    for c in candidates:
-        pool = session.scalars(select(Knowledge).where(Knowledge.topic == c.topic,
-                Knowledge.subtopic == c.subtopic, Knowledge.knowledge_type == c.knowledge_type)).all()
-        match = next((k for k in pool if can_merge(c, k)), None)
+def merge_items(session, post_id: str, items: list[dict]) -> list[int]:
+    """把校验后的知识条目合并进 knowledge_base，返回与 items 对齐的 knowledge_id 列表。
+
+    合并优先级：item 带 `_same_as`（抽取时模型语义对齐，方案A，须通过分类/风险/条件
+    防幻觉校验）> 同桶表层相似度（topic/subtopic/knowledge_type/risk 全等 + 条件全等
+    + 内容相似度≥0.94）。
+    """
+    merged = []
+    for item in items:
+        match = None
+        forced = item.get("_same_as")
+        if forced:
+            candidate = session.get(Knowledge, int(forced))
+            # 防幻觉：模型给的 same_as_id 必须通过分类、风险、适用条件校验才允许合并
+            if candidate is not None and (
+                candidate.topic == item["topic"]
+                and candidate.subtopic == item["subtopic"]
+                and candidate.knowledge_type == item["knowledge_type"]
+                and candidate.risk == item["risk"]
+                and _conditions_equal(item.get("conditions", {}), candidate.conditions_json)
+            ):
+                match = candidate
         if match is None:
-            match = Knowledge(content=c.content, topic=c.topic, subtopic=c.subtopic,
-                              intent=c.intent, conditions_json=c.conditions_json,
-                              knowledge_type=c.knowledge_type, risk=c.risk,
+            pool = session.scalars(select(Knowledge).where(Knowledge.topic == item["topic"],
+                    Knowledge.subtopic == item["subtopic"], Knowledge.knowledge_type == item["knowledge_type"])).all()
+            match = next((k for k in pool if can_merge(item, k)), None)
+        if match is None:
+            match = Knowledge(content=item["content"], topic=item["topic"], subtopic=item["subtopic"],
+                              intent=item["intent"], conditions_json=jd(item.get("conditions", {})),
+                              knowledge_type=item["knowledge_type"], risk=item["risk"],
                               evidence_status="待验证", status="待审核")
             session.add(match)
             session.flush()
-        c.knowledge_id = match.id
-        exists = session.scalar(select(Source.id).where(Source.knowledge_id == match.id, Source.post_id == c.post_id))
+        exists = session.scalar(select(Source.id).where(
+            Source.knowledge_id == match.id, Source.post_id == str(post_id)))
         if exists is None:
-            session.add(Source(knowledge_id=match.id, post_id=c.post_id))
-        touched.add(match.id)
+            session.add(Source(knowledge_id=match.id, post_id=str(post_id)))
+        merged.append(match.id)
     session.flush()
-    refresh_knowledge(session, touched)
+    refresh_knowledge(session, set(merged))
+    return merged
 
 
 def process_one(engine, post, extractor: str, model: str | None = None):
@@ -550,10 +483,18 @@ def process_one(engine, post, extractor: str, model: str | None = None):
         if task and task.content_hash == signature and task.status == "completed":
             return "skipped", 0
         representative = pick_comments(comments)
-        if extractor == "llm":
-            raw_items = extract_llm(title, body, representative, model)
-        else:
-            raw_items = extract_demo(title, body, representative)
+        # 方案A：把同主题已有知识点喂给模型做语义对齐（措辞不同但同一观点 → same_as_id）
+        predicted_topic = topic_router(title, body, representative)
+        existing = []
+        if predicted_topic != "其他":
+            existing = [
+                {"id": int(i), "content": str(c)}
+                for i, c in db.execute(text(
+                    "SELECT id, content FROM knowledge_base WHERE topic = :t ORDER BY id DESC LIMIT 40"),
+                    {"t": predicted_topic}).all()
+            ]
+        raw_items = (extract_llm(title, body, representative, model, existing=existing)
+                     if extractor == "llm" else extract_demo(title, body, representative))
         items = validate_items(raw_items)
         try:
             if task is None:
@@ -571,17 +512,8 @@ def process_one(engine, post, extractor: str, model: str | None = None):
             task.attempts += 1
             task.content_hash = signature
             task.error = None
-            additions = []
-            for item in items:
-                row = Candidate(post_id=pid, content=item["content"], topic=item["topic"],
-                                subtopic=item["subtopic"], intent=item["intent"],
-                                conditions_json=jd(item["conditions"]),
-                                knowledge_type=item["knowledge_type"], risk=item["risk"],
-                                evidence_status="待验证")
-                db.add(row)
-                additions.append(row)
-            db.flush()
-            merge_candidates(db, additions)
+            task.raw_json = jd(raw_items)[:60000]
+            merge_items(db, pid, items)
             task.status = "completed"
             db.commit()
             return "updated", len(items)
@@ -634,7 +566,7 @@ def run_extraction(ingest_after: str | None = None, keyword_pattern: str | None 
             "posts": per_post}
 
 
-# ---------- 评论批次蒸馏 ----------
+# ---------- 评论清洗与蒸馏 ----------
 
 COMMENT_EXTRACT_SYSTEM = (
     "你是宠物社区评论知识提取器。只提取评论明确表达的、可复用的独立知识或经验，"
@@ -647,90 +579,86 @@ COMMENT_EXTRACT_SYSTEM = (
 
 
 def prepare_comment_tasks(post_id: str, batch_size: int = 25, source_channel: str = "douyin") -> dict:
-    """清洗一篇帖子的评论、分流提问，并创建可断点续跑的评论批次任务。"""
+    """清洗一篇帖子的评论并写入 knowledge_comment_items（幂等，不调模型）。
+
+    批次不再持久化：run 时按 status=pending 动态切片。
+    """
     if source_channel != "douyin":
         raise ValueError("第一版评论任务目前仅支持 douyin；小红书需先补稳定 source_post_key")
     engine = _engine()
     ensure_tables(engine)
-    batch_size = max(5, min(int(batch_size), 50))
     with Session(engine) as db:
         post = db.execute(text(
             f"SELECT id, title, content FROM {SOURCE_POST_TABLE} WHERE id=:pid"
         ), {"pid": post_id}).mappings().first()
         if not post:
             raise LookupError(f"帖子不存在: {post_id}")
-        comments = read_comments(db, str(post_id))
-        seen: dict[str, CleanComment] = {}
-        usable: list[CleanComment] = []
-        counters = Counter()
+        # 严格桥接：标题为空或不唯一时中止同步，避免把“无法查询”误判成“评论全被删除”。
+        comments = read_comments(db, str(post_id), strict_bridge=True)
+        first_by_hash: dict[str, int] = {}  # content_hash -> 首条 item id（页面内去重）
+        rows = []
         for raw in comments:
-            source_key = str(raw["cid"])
+            key = str(raw["cid"])
             classified = classify_comment(raw["body"])
             content_hash = hashlib.sha256(classified["cleaned_text"].encode("utf-8")).hexdigest()
-            row = db.scalar(select(CleanComment).where(
-                CleanComment.source_channel == source_channel,
-                CleanComment.source_comment_key == source_key,
-                CleanComment.cleaning_version == CLEANING_VERSION,
-            ))
-            if row is None:
-                duplicate = seen.get(content_hash)
-                row = CleanComment(
-                    source_channel=source_channel, source_comment_key=source_key,
-                    source_post_key=str(post_id), raw_comment_id=source_key,
+            rows.append((key, classified, content_hash))
+        for key, classified, content_hash in rows:
+            item = db.scalar(select(CommentItem).where(
+                CommentItem.post_id == str(post_id), CommentItem.comment_key == key))
+            duplicate_of = first_by_hash.get(content_hash)
+            if item is None:
+                item = CommentItem(
+                    post_id=str(post_id), comment_key=key,
                     cleaned_text=classified["cleaned_text"], content_hash=content_hash,
                     content_role=classified["content_role"],
-                    is_noise=int(classified["is_noise"] or duplicate is not None),
-                    noise_reason=("重复" if duplicate else classified["noise_reason"]),
+                    is_noise=int(classified["is_noise"] or duplicate_of is not None),
+                    noise_reason=("重复" if duplicate_of else classified["noise_reason"]),
                     is_question=int(classified["is_question"]),
-                    duplicate_of=(duplicate.id if duplicate else None),
-                    cleaning_version=CLEANING_VERSION,
+                    duplicate_of=duplicate_of, cleaning_version=CLEANING_VERSION,
                 )
-                db.add(row)
+                db.add(item)
                 db.flush()
-            seen.setdefault(content_hash, row)
-            counters[row.content_role] += 1
-            if row.is_question:
-                question = db.scalar(select(KnowledgeQuestion).where(
-                    KnowledgeQuestion.source_channel == source_channel,
-                    KnowledgeQuestion.source_comment_key == source_key,
-                ))
-                if question is None:
-                    db.add(KnowledgeQuestion(
-                        source_channel=source_channel, source_post_key=str(post_id),
-                        source_comment_key=source_key, question_text=row.cleaned_text,
-                    ))
-            if not row.is_noise and not row.is_question:
-                usable.append(row)
-
-        task_ids, created = [], 0
-        for batch_index, group in enumerate(_chunks(usable, batch_size), 1):
-            comment_ids = [row.source_comment_key for row in group]
-            input_hash = hashlib.sha256(jd([
-                COMMENT_PIPELINE_VERSION, str(post_id),
-                [(row.source_comment_key, row.content_hash) for row in group],
-            ]).encode("utf-8")).hexdigest()
-            task = db.scalar(select(CommentTask).where(
-                CommentTask.source_channel == source_channel,
-                CommentTask.source_post_key == str(post_id),
-                CommentTask.batch_index == batch_index,
-                CommentTask.input_hash == input_hash,
-                CommentTask.pipeline_version == COMMENT_PIPELINE_VERSION,
-            ))
-            if task is None:
-                task = CommentTask(
-                    source_channel=source_channel, source_post_key=str(post_id),
-                    batch_index=batch_index, comment_ids_json=jd(comment_ids),
-                    input_hash=input_hash, pipeline_version=COMMENT_PIPELINE_VERSION,
-                )
-                db.add(task)
-                db.flush()
-                created += 1
-            task_ids.append(task.id)
+            else:
+                content_changed = (item.cleaned_text != classified["cleaned_text"]
+                                   or item.content_hash != content_hash)
+                item.cleaned_text = classified["cleaned_text"]
+                item.content_hash = content_hash
+                item.content_role = classified["content_role"]
+                item.is_noise = int(classified["is_noise"] or duplicate_of is not None)
+                item.noise_reason = "重复" if duplicate_of else classified["noise_reason"]
+                item.is_question = int(classified["is_question"])
+                item.duplicate_of = duplicate_of
+                item.cleaning_version = CLEANING_VERSION
+                if content_changed:
+                    # 评论被编辑：旧蒸馏结果作废——清掉 origin 票，done 重置回 pending 重新蒸馏
+                    # （independent 票是 /verify 的互证证据，随本轮 verify 重算，这里不动）
+                    votes = [v for v in jl(item.votes_json, []) if v.get("role") != "origin"]
+                    item.votes_json = jd(votes) if votes else None
+                    if item.status == "done":
+                        item.status = "pending"
+                        item.error = None
+            if duplicate_of is None:
+                first_by_hash[content_hash] = item.id
+        # 来源中已删除的评论：任务表同步清除（其 votes 也随之消失）
+        current_keys = {key for key, _c, _h in rows}
+        stale = db.scalars(select(CommentItem).where(
+            CommentItem.post_id == str(post_id))).all() if not rows else db.scalars(
+            select(CommentItem).where(
+                CommentItem.post_id == str(post_id),
+                CommentItem.comment_key.not_in(current_keys))).all()
+        for item in stale:
+            db.delete(item)
         db.commit()
+        usable = db.scalar(select(func.count()).select_from(CommentItem).where(
+            CommentItem.post_id == str(post_id), CommentItem.is_noise == 0,
+            CommentItem.is_question == 0)) or 0
+        questions = db.scalar(select(func.count()).select_from(CommentItem).where(
+            CommentItem.post_id == str(post_id), CommentItem.is_question == 1)) or 0
+        noise = db.scalar(select(func.count()).select_from(CommentItem).where(
+            CommentItem.post_id == str(post_id), CommentItem.is_noise == 1)) or 0
         return {"post_id": str(post_id), "raw_comments": len(comments),
-                "usable_comments": len(usable), "questions": counters["question"],
-                "noise": counters["noise"], "tasks": len(task_ids),
-                "tasks_created": created, "task_ids": task_ids}
+                "usable_comments": usable, "questions": questions,
+                "noise": noise, "items": len(rows)}
 
 
 def _validate_comment_points(points, comments_by_id):
@@ -776,43 +704,33 @@ def _validate_comment_points(points, comments_by_id):
     return valid, rejected
 
 
-def process_comment_task(task_id: int, model: str | None = None) -> dict:
-    """处理一个评论批次；已完成任务幂等跳过，失败任务可单独重试。"""
-    engine = _engine()
-    ensure_tables(engine)
+def _add_vote(item: CommentItem, knowledge_id: int, stance: str, role: str, excerpt: str):
+    """往评论条目的 votes_json 里登记一条证据立场，先清掉同 role 旧记录再追加。"""
+    votes = [v for v in jl(item.votes_json, []) if not (v.get("role") == role and v.get("knowledge_id") == knowledge_id)]
+    votes.append({"knowledge_id": int(knowledge_id), "stance": stance, "role": role,
+                  "excerpt": excerpt[:300]})
+    item.votes_json = jd(votes)
+
+
+def _process_comment_chunk(engine, post_id: str, chunk: list[CommentItem],
+                           model: str | None = None) -> dict:
+    """处理一个动态批次（≤batch_size 条 pending 评论）：蒸馏 → 合并 → origin 立场登记。"""
     q = _qwen()
     used_model = model or q["model"]
-    if not q["api_key"]:
-        raise RuntimeError("缺少 LLM API key（config.yaml openai.qwen_api_key）")
     with Session(engine) as db:
-        task = db.get(CommentTask, int(task_id))
-        if not task:
-            raise LookupError(f"评论任务不存在: {task_id}")
-        if task.status == "completed":
-            return {"task_id": task.id, "status": "skipped", "reason": "already_completed"}
-        task.status = "processing"
-        task.attempts += 1
-        task.started_at = utcnow()
-        task.error = None
-        db.commit()
+        ids = [row.comment_key for row in chunk]
+        rows = {row.comment_key: row for row in db.scalars(select(CommentItem).where(
+            CommentItem.post_id == str(post_id), CommentItem.comment_key.in_(ids))).all()}
+        post = db.execute(text(
+            f"SELECT title, content FROM {SOURCE_POST_TABLE} WHERE id=:pid"
+        ), {"pid": str(post_id)}).mappings().first()
+        payload = {
+            "post": {"id": str(post_id), "title": clean(post["title"] if post else ""),
+                     "content": clean(post["content"] if post else "")},
+            "comments": [{"id": row.comment_key, "text": row.cleaned_text} for row in chunk],
+            "allowed_topics": TOPICS, "allowed_subtopics": SUBTOPICS,
+        }
         try:
-            ids = [str(x) for x in jl(task.comment_ids_json, [])]
-            comments = db.scalars(select(CleanComment).where(
-                CleanComment.source_channel == task.source_channel,
-                CleanComment.source_comment_key.in_(ids),
-                CleanComment.is_noise == 0, CleanComment.is_question == 0,
-            )).all()
-            comments_by_id = {row.source_comment_key: row for row in comments}
-            post = db.execute(text(
-                f"SELECT title, content FROM {SOURCE_POST_TABLE} WHERE id=:pid"
-            ), {"pid": task.source_post_key}).mappings().first()
-            payload = {
-                "post": {"id": task.source_post_key, "title": clean(post["title"] if post else ""),
-                         "content": clean(post["content"] if post else "")},
-                "comments": [{"id": row.source_comment_key, "text": row.cleaned_text}
-                             for row in comments],
-                "allowed_topics": TOPICS, "allowed_subtopics": SUBTOPICS,
-            }
             response = requests.post(
                 q["base_url"] + "/chat/completions",
                 headers={"Authorization": f"Bearer {q['api_key']}"},
@@ -823,78 +741,57 @@ def process_comment_task(task_id: int, model: str | None = None) -> dict:
             )
             response.raise_for_status()
             points = json.loads(response.json()["choices"][0]["message"]["content"]).get("knowledge_points", [])
-            valid, rejected = _validate_comment_points(points, comments_by_id)
-
-            old_candidates = db.scalars(select(Candidate).where(Candidate.comment_task_id == task.id)).all()
-            old_ids = [row.id for row in old_candidates]
-            if old_ids:
-                db.execute(delete(CandidateSource).where(CandidateSource.candidate_id.in_(old_ids)))
-                db.execute(delete(Candidate).where(Candidate.id.in_(old_ids)))
-            additions = []
-            for item in valid:
-                candidate = Candidate(
-                    post_id=task.source_post_key, content=item["content"], topic=item["topic"],
-                    subtopic=item["subtopic"], intent=item["intent"],
-                    conditions_json=jd(item["conditions"]), knowledge_type=item["knowledge_type"],
-                    risk=item["risk"], evidence_status="待验证", comment_task_id=task.id,
-                )
-                db.add(candidate)
-                db.flush()
-                additions.append(candidate)
+            valid, rejected = _validate_comment_points(points, rows)
+            merged_ids = merge_items(db, str(post_id), valid)
+            for raw_item in chunk:
+                item = db.merge(raw_item)
+                item.status = "done"
+                item.attempts += 1
+            for kid, item in zip(merged_ids, valid):
                 for source_row in item["source_rows"]:
-                    db.add(CandidateSource(
-                        candidate_id=candidate.id, source_channel=task.source_channel,
-                        source_post_key=task.source_post_key, evidence_scope="评论",
-                        source_comment_key=source_row.source_comment_key,
-                        source_role=("origin_experience" if source_row.content_role == "experience"
-                                     else "origin_statement"),
-                        source_excerpt=source_row.cleaned_text,
-                    ))
-            merge_candidates(db, additions)
-            db.flush()
-            for candidate, item in zip(additions, valid):
-                for source_row in item["source_rows"]:
-                    evidence_ref = f"comment:{source_row.source_comment_key}"
-                    exists = db.scalar(select(EvidenceVote.id).where(
-                        EvidenceVote.knowledge_id == candidate.knowledge_id,
-                        EvidenceVote.evidence_scope == "评论",
-                        EvidenceVote.evidence_ref == evidence_ref,
-                        EvidenceVote.stance == item["stance"],
-                    ))
-                    if exists is None:
-                        db.add(EvidenceVote(
-                            knowledge_id=candidate.knowledge_id, post_id=task.source_post_key,
-                            evidence_scope="评论", evidence_ref=evidence_ref,
-                            evidence_role="origin", stance=item["stance"],
-                            comment_ids_json=jd([source_row.source_comment_key]),
-                            excerpts_json=jd([source_row.cleaned_text]), model=used_model,
-                        ))
-            task.status = "completed"
-            task.model = used_model
-            task.completed_at = utcnow()
+                    target = rows.get(source_row.comment_key)
+                    if target is not None:
+                        target = db.merge(target)
+                        _add_vote(target, kid, item["stance"], "origin", source_row.cleaned_text)
             db.commit()
-            return {"task_id": task.id, "status": "completed", "candidates": len(additions),
-                    "rejected": rejected}
+            return {"post_id": str(post_id), "comments": len(chunk), "status": "completed",
+                    "candidates": len(valid), "rejected": rejected}
         except Exception as exc:
             db.rollback()
-            task = db.get(CommentTask, int(task_id))
-            task.status = "retry" if task.attempts < 3 else "failed"
-            task.error = str(exc)[:1500]
-            db.commit()
-            raise
+            with Session(engine) as db2:
+                for row in db2.scalars(select(CommentItem).where(
+                        CommentItem.post_id == str(post_id), CommentItem.comment_key.in_(ids))).all():
+                    row.attempts += 1
+                    if row.attempts >= 3:
+                        row.status = "failed"
+                db2.commit()
+            return {"post_id": str(post_id), "comments": len(chunk), "status": "failed",
+                    "error": str(exc)[:300]}
 
 
 def run_comment_tasks(post_id: str, batch_size: int = 25, max_tasks: int = 0,
                       model: str | None = None) -> dict:
-    prepared = prepare_comment_tasks(post_id=post_id, batch_size=batch_size)
-    ids = prepared["task_ids"][:max_tasks or None]
-    results = []
-    for task_id in ids:
-        try:
-            results.append(process_comment_task(task_id, model=model))
-        except Exception as exc:
-            results.append({"task_id": task_id, "status": "failed", "error": str(exc)[:300]})
-    return {"prepared": prepared, "processed": len(results), "results": results}
+    """清洗评论后按 pending 条目动态切批蒸馏；已 done 的评论自动跳过。"""
+    engine = _engine()
+    ensure_tables(engine)
+    q = _qwen()
+    if not q["api_key"]:
+        raise RuntimeError("缺少 LLM API key（config.yaml openai.qwen_api_key）")
+    batch_size = max(5, min(int(batch_size), 50))
+    prepared = prepare_comment_tasks(post_id=post_id)
+    with Session(engine) as db:
+        pending = db.scalars(select(CommentItem).where(
+            CommentItem.post_id == str(post_id),
+            CommentItem.is_noise == 0, CommentItem.is_question == 0,
+            CommentItem.status.in_(["pending", "failed"]),
+        ).order_by(CommentItem.id)).all()
+    chunks = list(_chunks(pending, batch_size))
+    if max_tasks:
+        chunks = chunks[:max(0, int(max_tasks))]
+    results = [_process_comment_chunk(engine, post_id, chunk, model) for chunk in chunks]
+    done = sum(1 for r in results if r["status"] == "completed")
+    return {"prepared": prepared, "batches": len(chunks), "batches_done": done,
+            "results": results}
 
 
 # ---------- 证据校验 ----------
@@ -966,10 +863,30 @@ def _comments_for_posts(db: Session, post_ids: set[int], per_post: int) -> dict[
     return _evidence_for_posts(db, post_ids, per_post)[1]
 
 
+def _get_or_create_item(db: Session, post_id: str, comment_key: str, text_value: str) -> CommentItem:
+    item = db.scalar(select(CommentItem).where(
+        CommentItem.post_id == str(post_id), CommentItem.comment_key == str(comment_key)))
+    if item is None:
+        classified = classify_comment(text_value)
+        item = CommentItem(
+            post_id=str(post_id), comment_key=str(comment_key),
+            cleaned_text=classified["cleaned_text"],
+            content_hash=hashlib.sha256(classified["cleaned_text"].encode("utf-8")).hexdigest(),
+            content_role=classified["content_role"],
+            is_noise=int(classified["is_noise"]), noise_reason=classified["noise_reason"],
+            is_question=int(classified["is_question"]), cleaning_version=CLEANING_VERSION,
+        )
+        db.add(item)
+        db.flush()
+    return item
+
+
 def verify_evidence(model: str | None = None, claim_batch: int = 8,
                     comment_batch: int = 80, comments_per_post: int = 20,
                     topic: str | None = None, subtopic: str | None = None,
                     bucket_offset: int = 0, max_buckets: int = 0) -> dict:
+    """社区互证：帖子粒度证据写 knowledge_base.evidence_json，
+    评论粒度证据写对应 knowledge_comment_items.votes_json（role=independent）。"""
     engine = _engine()
     ensure_tables(engine)
     q = _qwen()
@@ -1008,6 +925,7 @@ def verify_evidence(model: str | None = None, claim_batch: int = 8,
             if not evidence:
                 continue
             allowed_evidence = {item["evidence_id"]: item for item in evidence}
+            bucket_ids = {kid for kid, _ in items}
             bucket_votes: dict[tuple[int, int, str, str, str], dict] = {}
             bucket_failed = False
             for claim_part in _chunks(items, claim_batch):
@@ -1062,18 +980,36 @@ def verify_evidence(model: str | None = None, claim_batch: int = 8,
                 failed_buckets.append({"topic": topic_name, "subtopic": subtopic_name})
                 continue
 
-            bucket_ids = [kid for kid, _ in items]
-            db.execute(delete(EvidenceVote).where(
-                EvidenceVote.knowledge_id.in_(bucket_ids),
-                EvidenceVote.evidence_role == "independent",
-            ))
+            # 帖子粒度：写 knowledge_base.evidence_json（覆盖本桶知识点的旧独立证据）
+            for kid in bucket_ids:
+                item = db.get(Knowledge, kid)
+                post_votes = [
+                    {"post_id": str(pid), "evidence_id": evidence_ref, "stance": stance,
+                     "excerpt": detail["excerpts"][0] if detail["excerpts"] else ""}
+                    for (k, pid, scope, evidence_ref, stance), detail in bucket_votes.items()
+                    if k == kid and scope == "帖子"
+                ]
+                item.evidence_json = jd(post_votes) if post_votes else None
+            # 评论粒度：先清本桶知识点在本表里的全部旧 independent 票（无论本轮是否再次命中），
+            # 避免上轮命中、本轮未命中的独立证据残留导致与新算的 support/oppose 不一致
+            bucket_kid_set = set(bucket_ids)
+            for prev in db.scalars(select(CommentItem).where(
+                    CommentItem.votes_json.isnot(None))).all():
+                old_votes = jl(prev.votes_json, [])
+                kept = [v for v in old_votes if not (
+                    v.get("role") == "independent" and v.get("knowledge_id") in bucket_kid_set)]
+                if len(kept) != len(old_votes):
+                    prev.votes_json = jd(kept) if kept else None
             for (kid, pid, scope, evidence_ref, stance), detail in bucket_votes.items():
-                db.add(EvidenceVote(
-                    knowledge_id=kid, post_id=str(pid), evidence_scope=scope,
-                    evidence_ref=evidence_ref, evidence_role="independent", stance=stance,
-                    comment_ids_json=jd(detail["comment_ids"]),
-                    excerpts_json=jd(detail["excerpts"]), model=used_model,
-                ))
+                if scope != "评论":
+                    continue
+                comment_key = str(evidence_ref).split(":", 1)[-1]
+                item = _get_or_create_item(db, str(pid), comment_key, detail["excerpts"][0])
+                votes = [v for v in jl(item.votes_json, [])
+                         if not (v.get("role") == "independent" and v.get("knowledge_id") == kid)]
+                votes.append({"knowledge_id": kid, "stance": stance, "role": "independent",
+                              "excerpt": detail["excerpts"][0] if detail["excerpts"] else ""})
+                item.votes_json = jd(votes)
             db.flush()
             for kid in bucket_ids:
                 item = db.get(Knowledge, kid)
@@ -1102,6 +1038,248 @@ def verify_evidence(model: str | None = None, claim_batch: int = 8,
             "failed_buckets": failed_buckets, "evidence_status": dict(status_rows)}
 
 
+# ---------- 离线语义去重（方案B） ----------
+
+DEDUP_SYSTEM = (
+    "你是宠物知识库的合并裁决员。给定若干对知识表述，判断每对是否表达同一个观点"
+    "（措辞不同、详略不同都算同一观点；但条件不同、结论不同、只部分重叠的不算）。"
+    "风险等级不同、或适用条件不同（物种不同、生命周期不同、针对的健康状况不同）的知识"
+    "绝对不算同一观点，即使文字非常接近。"
+    '只返回JSON：{"pairs":[{"index":1,"same":true},{"index":2,"same":false}]}。'
+)
+
+
+def _conditions_conflict(a: dict, b: dict) -> bool:
+    """两个适用条件是否硬冲突：同类目（物种/生命周期）都非空且完全不相交。"""
+    for key in ("species", "life_stage"):
+        set_a = {str(v) for v in (a.get(key) or [])}
+        set_b = {str(v) for v in (b.get(key) or [])}
+        if set_a and set_b and not (set_a & set_b):
+            return True
+    return False
+
+
+def _embed(texts: list[str]) -> list[list[float]]:
+    q = _qwen()
+    if not q["api_key"]:
+        raise RuntimeError("缺少 LLM API key（config.yaml openai.qwen_api_key）")
+    vectors = []
+    for chunk in _chunks(texts, 10):
+        r = requests.post(q["base_url"] + "/embeddings",
+                          headers={"Authorization": f"Bearer {q['api_key']}"},
+                          json={"model": EMBED_MODEL, "input": chunk}, timeout=60)
+        r.raise_for_status()
+        data = sorted(r.json()["data"], key=lambda d: d["index"])
+        vectors.extend(d["embedding"] for d in data)
+    return vectors
+
+
+def _cosine(a: list[float], b: list[float]) -> float:
+    dot = sum(x * y for x, y in zip(a, b))
+    na = math.sqrt(sum(x * x for x in a))
+    nb = math.sqrt(sum(y * y for y in b))
+    return dot / (na * nb) if na and nb else 0.0
+
+
+def _cluster(ids: list[int], same_pairs: list[tuple[int, int]]) -> list[list[int]]:
+    """union-find：把语义等价对聚成簇。"""
+    parent = {i: i for i in ids}
+
+    def find(x):
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    for a, b in same_pairs:
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[rb] = ra
+    clusters: dict[int, list[int]] = {}
+    for i in ids:
+        clusters.setdefault(find(i), []).append(i)
+    return [sorted(v) for v in clusters.values() if len(v) > 1]
+
+
+def dedup_knowledge(min_sim: float = 0.85, max_pairs: int = 200, dry_run: bool = False,
+                    topics: list[str] | None = None, model: str | None = None) -> dict:
+    """离线语义去重：同桶（topic+subtopic+knowledge_type）知识点做 embedding 召回，
+    相似度≥min_sim 的对交 LLM 裁决是否同一观点，确认后合并为一行。
+
+    合并规则：content 取更长的表述；sources 取并集（重定向+去重）；
+    comment_items.votes_json 与 base.evidence_json 里的旧 id 重写到主行；
+    evidence_status/status 取簇内最优；support/oppose_posts 取最大值。
+    dry_run=True 只返回计划不写库。
+    """
+    engine = _engine()
+    ensure_tables(engine)
+    q = _qwen()
+    used_model = model or q["model"]
+    min_sim = max(0.5, min(float(min_sim), 0.99))
+    max_pairs = max(1, min(int(max_pairs), 2000))
+    with Session(engine) as db:
+        where, params = "1=1", {}
+        if topics:
+            where = "topic IN :ts"
+            params["ts"] = list(topics)
+        stmt = text(
+            f"SELECT id, content, topic, subtopic, knowledge_type, risk, conditions_json, "
+            f"evidence_status, status, source_count, support_posts, oppose_posts, evidence_json "
+            f"FROM knowledge_base WHERE {where}")
+        if topics:
+            stmt = stmt.bindparams(bindparam("ts", expanding=True))
+        rows = db.execute(stmt, params).mappings().all()
+        buckets: dict[tuple, list[dict]] = {}
+        for row in rows:
+            # risk 进桶 key：不同风险等级的知识永不参与合并
+            buckets.setdefault((row["topic"], row["subtopic"], row["knowledge_type"], row["risk"]),
+                               []).append(dict(row))
+        buckets = {k: v for k, v in buckets.items() if len(v) >= 2}
+
+        # 1) embedding 召回候选对
+        to_embed: dict[int, str] = {}
+        for bucket in buckets.values():
+            for row in bucket:
+                to_embed[row["id"]] = row["content"]
+        vectors = {kid: vec for kid, vec in zip(to_embed.keys(), _embed(list(to_embed.values())))}
+        candidates = []
+        for bucket in buckets.values():
+            for i in range(len(bucket)):
+                for j in range(i + 1, len(bucket)):
+                    a, b = bucket[i], bucket[j]
+                    # 硬冲突预过滤：物种/生命周期完全不相交的知识不送模型裁决
+                    cond_a, cond_b = jl(a["conditions_json"], {}), jl(b["conditions_json"], {})
+                    if _conditions_conflict(cond_a, cond_b):
+                        continue
+                    sim = _cosine(vectors[a["id"]], vectors[b["id"]])
+                    if sim >= min_sim:
+                        candidates.append((round(sim, 4), a, b))
+        candidates.sort(key=lambda x: -x[0])
+        candidates = candidates[:max_pairs]
+
+        # 2) LLM 裁决（payload 带上风险与适用条件，供模型判断）
+        same_pairs: list[tuple[int, int]] = []
+        adjudicated = []
+        for part in _chunks(candidates, 10):
+            payload = {"pairs": [{"index": idx,
+                                  "a": {"content": a["content"], "risk": a["risk"],
+                                        "conditions": jl(a["conditions_json"], {})},
+                                  "b": {"content": b["content"], "risk": b["risk"],
+                                        "conditions": jl(b["conditions_json"], {})}}
+                                 for idx, (_s, a, b) in enumerate(part, 1)]}
+            r = requests.post(q["base_url"] + "/chat/completions",
+                              headers={"Authorization": f"Bearer {q['api_key']}"},
+                              json={"model": used_model, "temperature": 0,
+                                    "response_format": {"type": "json_object"},
+                                    "messages": [{"role": "system", "content": DEDUP_SYSTEM},
+                                                 {"role": "user", "content": jd(payload)}]}, timeout=120)
+            r.raise_for_status()
+            out = json.loads(r.json()["choices"][0]["message"]["content"]).get("pairs", [])
+            for item in out if isinstance(out, list) else []:
+                try:
+                    idx, same = int(item.get("index")), item.get("same") is True
+                except (TypeError, ValueError):
+                    continue
+                if 1 <= idx <= len(part) and same:
+                    same_pairs.append((part[idx - 1][1]["id"], part[idx - 1][2]["id"]))
+                    adjudicated.append({"sim": part[idx - 1][0],
+                                        "a": part[idx - 1][1]["content"][:60],
+                                        "b": part[idx - 1][2]["content"][:60]})
+        clusters = _cluster([row["id"] for row in rows], same_pairs)
+
+        # 3) dry_run 只出计划
+        if dry_run:
+            return {"mode": "dry_run", "candidates": len(candidates), "same_pairs": len(same_pairs),
+                    "pairs": adjudicated, "merge_plan": clusters}
+
+        # 4) 执行合并
+        by_id = {row["id"]: row for row in rows}
+        ST_PRIORITY = {"已审核": 3, "待审核": 2, "无有效来源": 1}
+        merged_count = 0
+        canonical_ids: list[int] = []
+        for cluster in clusters:
+            members = [by_id[i] for i in cluster if i in by_id]
+            if len(members) < 2:
+                continue
+            canonical = max(members, key=lambda m: (len(m["content"]), m["source_count"]))
+            others = [m for m in members if m["id"] != canonical["id"]]
+            other_ids = [m["id"] for m in others]
+            has_professional = any(m["evidence_status"] == "专业已验证" for m in members)
+            # 来源并集：先删被并入行中与主行重复的 post，再重定向（MySQL 子查询不能引用同表）
+            canon_posts = [pid for (pid,) in db.execute(text(
+                "SELECT post_id FROM knowledge_sources WHERE knowledge_id = :cid"),
+                {"cid": canonical["id"]}).all()]
+            if canon_posts:
+                db.execute(text(
+                    "DELETE FROM knowledge_sources WHERE knowledge_id IN :oids AND post_id IN :cposts"
+                ).bindparams(bindparam("oids", expanding=True), bindparam("cposts", expanding=True)),
+                    {"oids": other_ids, "cposts": canon_posts})
+            db.execute(text("UPDATE knowledge_sources SET knowledge_id = :cid WHERE knowledge_id IN :oids")
+                       .bindparams(bindparam("oids", expanding=True)), {"oids": other_ids, "cid": canonical["id"]})
+            # 评论证据重写
+            items = db.scalars(select(CommentItem).where(
+                CommentItem.votes_json.isnot(None))).all()
+            for it in items:
+                votes = jl(it.votes_json, [])
+                changed = False
+                for v in votes:
+                    if v.get("knowledge_id") in other_ids:
+                        v["knowledge_id"] = canonical["id"]
+                        changed = True
+                if changed:
+                    seen = set()
+                    dedup = []
+                    for v in votes:
+                        key = (v.get("knowledge_id"), v.get("role"), v.get("excerpt"))
+                        if key not in seen:
+                            seen.add(key)
+                            dedup.append(v)
+                    it.votes_json = jd(dedup)
+            # 帖子粒度证据并集
+            post_votes = jl(canonical["evidence_json"], [])
+            seen_posts = {(v.get("post_id"), v.get("stance")) for v in post_votes}
+            for m in others:
+                for v in jl(m["evidence_json"], []):
+                    key = (v.get("post_id"), v.get("stance"))
+                    if key not in seen_posts:
+                        seen_posts.add(key)
+                        post_votes.append(v)
+            # 证据状态按帖子证据 + 评论 independent 证据的并集重算，口径与 verify_evidence 一致。
+            agree_posts = {str(v.get("post_id")) for v in post_votes if v.get("stance") == "赞同"}
+            oppose_posts = {str(v.get("post_id")) for v in post_votes if v.get("stance") == "反对"}
+            for evidence_item in items:
+                for vote in jl(evidence_item.votes_json, []):
+                    if vote.get("knowledge_id") != canonical["id"] or vote.get("role") != "independent":
+                        continue
+                    if vote.get("stance") == "赞同":
+                        agree_posts.add(str(evidence_item.post_id))
+                    elif vote.get("stance") == "反对":
+                        oppose_posts.add(str(evidence_item.post_id))
+            agree, oppose = len(agree_posts), len(oppose_posts)
+            best_st = max(members, key=lambda m: ST_PRIORITY.get(m["status"], 0))["status"]
+            kb = db.get(Knowledge, canonical["id"])
+            kb.evidence_json = jd(post_votes) if post_votes else None
+            if has_professional:
+                kb.evidence_status = "专业已验证"
+            else:
+                if agree >= 2 and oppose == 0:
+                    kb.evidence_status = "社区经验"
+                elif oppose >= 1 and kb.risk != "高":
+                    kb.evidence_status = "有争议"
+                else:
+                    kb.evidence_status = "待验证"
+            kb.status = best_st
+            kb.support_posts = agree
+            kb.oppose_posts = oppose
+            db.execute(delete(Knowledge).where(Knowledge.id.in_(other_ids)))
+            canonical_ids.append(canonical["id"])
+            merged_count += len(others)
+        refresh_knowledge(db, canonical_ids)
+        db.commit()
+        return {"mode": "merged", "candidates": len(candidates), "same_pairs": len(same_pairs),
+                "clusters": len(clusters), "rows_merged": merged_count}
+
+
 # ---------- 查询 ----------
 
 def stats() -> dict:
@@ -1120,8 +1298,10 @@ def stats() -> dict:
         evidence_dist = dict(db.execute(text(
             "SELECT evidence_status, COUNT(*) FROM knowledge_base GROUP BY evidence_status")).all())
         return {
-            "tasks": count("knowledge_tasks"), "candidates": count("knowledge_candidates"),
-            "knowledge": count("knowledge_base"), "sources": count("knowledge_sources"),
+            "tasks": count("knowledge_tasks"), "knowledge": count("knowledge_base"),
+            "sources": count("knowledge_sources"), "comment_items": count("knowledge_comment_items"),
+            "pending_comment_items": db.scalar(text(
+                "SELECT COUNT(*) FROM knowledge_comment_items WHERE status='pending'")) or 0,
             "multi_source_knowledge": db.scalar(text(
                 "SELECT COUNT(*) FROM knowledge_base WHERE source_count > 1")) or 0,
             "topic_dist": topic_dist, "subtopic_top10": subtopic_dist,
