@@ -16,3 +16,4 @@ rich
 streamlit
 tenacity
 oss2
+cryptography>=43.0.0
