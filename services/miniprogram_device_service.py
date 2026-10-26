@@ -40,11 +40,12 @@ def capabilities():
         key = True
     except DeviceError:
         key = False
+    enabled = legal and key and os.environ.get("PETKIT_USER_ENABLED") == "1"
     return dict(
         ok=True,
-        enabled=legal and key and os.environ.get("PETKIT_USER_ENABLED") == "1",
+        enabled=enabled,
         policy_available=legal,
-        message="设备服务尚未开放，请稍后再试",
+        message="设备服务已开放" if enabled else "设备服务尚未开放，请稍后再试",
     )
 
 

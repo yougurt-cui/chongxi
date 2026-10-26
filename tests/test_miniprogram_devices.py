@@ -82,6 +82,7 @@ def bind(c, owner="a"):
 
 
 def test_consent_before_provider(setup):
+    assert svc.capabilities()["message"] == "设备服务已开放"
     with pytest.raises(svc.DeviceError, match="知情"):
         call("device-connections/petkit", "POST", {"username": "x", "password": "y"})
     assert setup[1] == []
