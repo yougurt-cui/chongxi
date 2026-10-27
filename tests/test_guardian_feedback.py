@@ -311,6 +311,41 @@ class GuardianFeedbackTest(unittest.TestCase):
         state["slots"]["recent_diet_change"] = True
         self.assertEqual(workflow.next_step(state, steps, policy.unanswered)[0], "only_when_changed")
 
+    def test_care_question_does_not_start_food_selection(self):
+        self.assertIsNone(workflow.requested_flow('换粮时如何观察猫咪的适应情况'))
+        self.assertIsNone(workflow.requested_flow('幼猫选粮要注意什么'))
+        self.assertEqual(workflow.requested_flow('帮我推荐一款幼猫粮'), 'food_switch')
+
+    def test_finished_recommendation_only_accepts_explicit_continuations(self):
+        state = chat._default_state('c1')
+        state['primary_intent'] = 'food_switch'
+        state['slots']['_food_dialogue_status'] = 'awaiting_candidate_action'
+        state['slots'][chat.FOOD_FLOW_STATE_KEY] = {
+            'stage': 'selection', 'candidates': [{'catalog_key': 'formula:1'}],
+        }
+        with patch.object(chat, '_extract_intent', return_value=(
+                {'primary_intent': 'general_pet_qa', 'secondary_intent': None, 'slots': {}}, None)):
+            decision, _ = chat._recognize_guardian_turn('幼猫喂养', state)
+        self.assertEqual(decision['_target_flow'], 'general')
+        self.assertEqual(decision['primary_intent'], 'general_pet_qa')
+        decision, _ = chat._recognize_guardian_turn('选第一款', state)
+        self.assertEqual(decision['_target_flow'], 'food_switch')
+        decision, _ = chat._recognize_guardian_turn('换一组', state)
+        self.assertEqual(decision['_target_flow'], 'food_switch')
+
+    def test_clear_question_interrupts_an_open_food_questionnaire(self):
+        state = chat._default_state('c1')
+        state.update(primary_intent='food_switch', current_step='food_goal')
+        with patch.object(chat, '_extract_intent', return_value=(
+                {'primary_intent': 'general_pet_qa', 'secondary_intent': None, 'slots': {}}, None)):
+            decision, _ = chat._recognize_guardian_turn('换粮时如何观察猫咪是否适应', state)
+        self.assertEqual(decision['_target_flow'], 'general')
+
+    def test_life_stage_conflict_is_only_for_an_adult_profile(self):
+        self.assertTrue(chat._life_stage_conflict('幼猫喂养攻略', {'age_months': 36}))
+        self.assertFalse(chat._life_stage_conflict('幼猫喂养攻略', {'age_months': 5}))
+        self.assertFalse(chat._life_stage_conflict('成年猫喂养攻略', {'age_months': 36}))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -45,6 +45,7 @@ PROMPT_VERSION = "pet-manager-chat-v2"
 MAX_MESSAGE_LENGTH = 4000
 SOFT_STOOL_STATE_SLOT = "_soft_stool_pipeline_state"
 GUARDIAN_CONTEXT_SLOT = "_guardian_context"
+SUBJECT_SCOPE_SLOT = "_subject_scope"
 SOFT_STOOL_TRIGGER_RE = re.compile(r"软便|便软|稀便|拉稀|腹泻")
 
 VALID_INTENTS = {
@@ -126,6 +127,44 @@ def _connect(autocommit: bool = False):
 def _clean(value: Any, max_length: int | None = None) -> str:
     text = str(value or "").strip()
     return text[:max_length] if max_length else text
+
+
+def _food_dialogue_status(state: dict[str, Any]) -> str | None:
+    return (state.get("slots") or {}).get("_food_dialogue_status")
+
+
+def _explicit_food_continuation(message: str, state: dict[str, Any]) -> bool:
+    """Only keep a finished selection flow alive for unambiguous follow-ups."""
+    text = _clean(message)
+    flow = ((state.get("slots") or {}).get(FOOD_FLOW_STATE_KEY) or {})
+    if alternatives_requested(text):
+        return True
+    if flow.get("candidates") and re.search(
+            r"^(?:就)?(?:选|选择|看看|分析)?第?[一二三123](?:款|个)?(?:吧|。|！|!)?$|"
+            r"^(?:选|选择|换成|看看|分析)(?:这款|那个|上面第?[一二三123]款)", text):
+        return True
+    if flow.get("stage") in {"planned", "started"} and re.search(
+            r"已经开始吃|开始喂|已经换好|换好了|换完了|取消换粮|重新选粮|继续推荐", text):
+        return True
+    return False
+
+
+def _life_stage_conflict(message: str, pet: dict[str, Any] | None) -> bool:
+    """Return true when a kitten request conflicts with the selected adult pet."""
+    if "幼猫" not in _clean(message) or not pet:
+        return False
+    try:
+        return int(pet.get("age_months") or 0) >= 12
+    except (TypeError, ValueError):
+        return False
+
+
+def _looks_like_new_topic_question(message: str) -> bool:
+    return bool(re.search(
+        r"什么是|为什么|有哪些|攻略|注意什么|注意事项|"
+        r"如何(?:观察|判断|喂养|护理)|怎么(?:观察|判断|喂养|护理)",
+        _clean(message),
+    ))
 
 
 def _json_dumps(value: Any) -> str:
@@ -1102,6 +1141,7 @@ def _handle_context_message(user_id, conversation, message, state, source_messag
         if food_reply:
             reply = food_reply
         elif flow["status"] == "need_more_info":
+            state['slots'].pop('_food_dialogue_status', None)
             state["current_step"] = flow["next_slot"]
             state["followup_count"] += 1
             question = flow.get("question") or {}
@@ -1161,6 +1201,7 @@ def _handle_context_message(user_id, conversation, message, state, source_messag
                 text, answer_model = _generate_answer(message,state,context,flow["status"]=="answer_with_limited_info")
             if state.get("primary_intent") == "food_switch" and context.get("food_candidates"):
                 text += "\n可以回复“选第一款”查看完整依据，或说“换一组”查看其他合格候选。选中时不会更新口粮档案。"
+                state['slots']['_food_dialogue_status'] = 'awaiting_candidate_action'
             model_name = answer_model or model_name
             reply = {"response_type":"result_card","reply":text,
                      "result":{"intent":state.get("primary_intent"),"slots":state.get("slots"),
@@ -1237,15 +1278,21 @@ def _recognize_guardian_turn(message, state):
         return {"primary_intent": target, "slots": {}, "_target_flow": target,
                 '_food_mode': 'switch' if re.search(r'换粮|换一|换款|换猫粮|换狗粮|换主粮', message) else 'selection',
                 "_soft_extraction": {**literal, "_field_evidence": {key: message for key in literal}} if nested else None}, None
-    if state.get('primary_intent') == 'food_switch' and state.get('current_step') in {
+    if (_food_dialogue_status(state) == 'awaiting_candidate_action'
+            and _explicit_food_continuation(message, state)):
+        return {"primary_intent": "food_switch", "slots": {}, "_target_flow": "food_switch",
+                "_food_mode": state.get('slots', {}).get('_food_mode') or 'selection'}, None
+    new_topic_question = _looks_like_new_topic_question(message)
+    if state.get('primary_intent') == 'food_switch' and not new_topic_question and state.get('current_step') in {
             'food_health_state', 'food_health_stage', 'food_tolerance'} and not SOFT_STOOL_OTHER_TOPIC_RE.search(message) and not SOFT_STOOL_PAUSE_RE.search(message):
         return {'primary_intent': 'food_switch', 'slots': {}, '_target_flow': 'food_switch'}, None
-    if state.get('primary_intent') == 'food_switch' and extract_health(message, state.get('slots') or {}) and not SOFT_STOOL_OTHER_TOPIC_RE.search(message) and not SOFT_STOOL_PAUSE_RE.search(message):
+    if state.get('primary_intent') == 'food_switch' and not new_topic_question and extract_health(message, state.get('slots') or {}) and not SOFT_STOOL_OTHER_TOPIC_RE.search(message) and not SOFT_STOOL_PAUSE_RE.search(message):
         return {'primary_intent': 'food_switch', 'slots': {}, '_target_flow': 'food_switch'}, None
-    if state.get('primary_intent') == 'food_switch' and re.search(r'(以前|之前|过去|曾经).{0,8}(吃|喂|用)', message):
+    if state.get('primary_intent') == 'food_switch' and not new_topic_question and re.search(r'(以前|之前|过去|曾经).{0,8}(吃|喂|用)', message):
         return {'primary_intent': 'food_switch', 'slots': {}, '_target_flow': 'food_switch'}, None
-    food_progress = state.get("current_step") or ((state.get("slots") or {}).get(FOOD_FLOW_STATE_KEY) or {}).get("stage") == "choose_target" or re.search(r"选|换|目标|开始|吃|喂|食欲|精神|便便|排便|呕吐|预算|每斤|国产|进口|肠胃|皮肤|泪痕|体重|过敏|推荐|还没|暂时|继续|方案|比较|对比", message)
-    food_preference = (state.get('current_step') in {'food_goal', 'target_requirement'} or re.search(r'希望|想改善|偏好|友好', message)) and not re.search(r'今天|刚刚|突然|最近|出现|开始拉|又拉', message)
+    flow_is_open = _food_dialogue_status(state) != 'awaiting_candidate_action' and not new_topic_question
+    food_progress = flow_is_open and (state.get("current_step") or ((state.get("slots") or {}).get(FOOD_FLOW_STATE_KEY) or {}).get("stage") == "choose_target" or re.search(r"选|换|目标|开始|吃|喂|食欲|精神|便便|排便|呕吐|预算|每斤|国产|进口|肠胃|皮肤|泪痕|体重|过敏|推荐|还没|暂时|继续|方案|比较|对比", message))
+    food_preference = not new_topic_question and (state.get('current_step') in {'food_goal', 'target_requirement'} or re.search(r'希望|想改善|偏好|友好', message)) and not re.search(r'今天|刚刚|突然|最近|出现|开始拉|又拉', message)
     if state.get("primary_intent") == "food_switch" and (food_progress or food_preference) and (not SOFT_STOOL_TRIGGER_RE.search(message) or food_preference) and not SOFT_STOOL_PAUSE_RE.search(message) and not SOFT_STOOL_OTHER_TOPIC_RE.search(message):
         return {"primary_intent": "food_switch", "slots": {'target_requirement': message} if food_preference else {}, "_target_flow": "food_switch"}, None
     if SOFT_STOOL_OTHER_TOPIC_RE.search(message):
@@ -1253,7 +1300,7 @@ def _recognize_guardian_turn(message, state):
         return {**extraction, "_target_flow": "general"}, None
     if SOFT_STOOL_PAUSE_RE.search(message):
         return {"primary_intent": "general_pet_qa", "slots": {}, "_target_flow": "general", "dialogue_action": "pause"}, None
-    if (state.get("primary_intent") == "food_switch" and state.get("current_step") == "target_requirement"
+    if (state.get("primary_intent") == "food_switch" and not new_topic_question and state.get("current_step") == "target_requirement"
             and not re.search(r"(?:继续|恢复|再聊).{0,5}软便", message)):
         # '希望改善软便' answers the food-selection question; it must not
         # restart a consultation just because it contains a symptom word.
@@ -1272,6 +1319,11 @@ def _recognize_guardian_turn(message, state):
         intent_state.update(primary_intent=None, current_step=None)
     if nested and nested.get("status") == "answered":
         intent_state.update(primary_intent=None, current_step=None)
+    if (_food_dialogue_status(state) == 'awaiting_candidate_action'
+            or (state.get('primary_intent') == 'food_switch' and new_topic_question)):
+        # A recommendation result is a terminal turn.  A later free-text
+        # question starts fresh unless it explicitly selects/refreshes a card.
+        intent_state.update(primary_intent=None, secondary_intent=None, current_step=None)
     extraction, model = _extract_intent(message, intent_state)
     return {**extraction, "_target_flow": "food_switch" if extraction["primary_intent"] == "food_switch" else "general"}, model
 
@@ -1293,17 +1345,52 @@ def handle_message(user_id: Any, conversation_id: Any, payload: dict[str, Any]) 
     interaction = payload.get("interaction") if isinstance(payload.get("interaction"),dict) else None
     attachments = payload.get("attachments") if isinstance(payload.get("attachments"),list) else []
     client_context = payload.get("client_context") if isinstance(payload.get("client_context"),dict) else {}
+    recorded_message, recorded_interaction = message, interaction
     if not message and not interaction and not attachments:
         raise ValueError("message、interaction、attachments 至少提供一项")
     state = _load_state(conversation_id)
+    subject_choice = interaction and interaction.get('slot') == SUBJECT_SCOPE_SLOT
+    if subject_choice:
+        pending = state.get('slots', {}).pop('_subject_scope_question', '')
+        value = interaction.get('value')
+        if value == 'general_kitten' and pending:
+            message, interaction = pending, None
+        elif value == 'profile_pet':
+            message, interaction = '请针对我档案里的成年猫给出日常喂养建议。', None
+        else:
+            raise ValueError('请选择要咨询的宠物')
+        state['current_step'] = None
+    scope_conflict = False
+    if message and not interaction and not attachments and not subject_choice and '幼猫' in message:
+        try:
+            pet = get_cat_profile(user_id, conversation['pet_id']) if conversation.get('pet_id') else None
+        except (pymysql.MySQLError, LookupError):
+            pet = None
+        scope_conflict = _life_stage_conflict(message, pet)
     diet_entry = (client_context.get('entry_point') == 'diet_advice'
                   and not interaction and not attachments and bool(message))
     if not diet_entry and not interaction and not attachments:
         interaction = health_flow.confirmation_interaction(message, state)
-    user_message = _save_message(conversation_id=conversation_id,user_id=user_id,role="user",content=message,
-                  interaction=interaction,attachments=attachments,
+    user_message = _save_message(conversation_id=conversation_id,user_id=user_id,role="user",content=recorded_message,
+                  interaction=recorded_interaction,attachments=attachments,
                   result={"turn_no": state["turn_count"] + 1, "sequence_no": 0})
-    reply = _handle_diet_advice_entry(user_id, conversation, state, user_message['id'], client_context) if diet_entry else None
+    if scope_conflict:
+        state['slots']['_subject_scope_question'] = message
+        state.update(primary_intent='general_pet_qa', secondary_intent=None,
+                     current_step=SUBJECT_SCOPE_SLOT, missing_slots=[], followup_count=0)
+        state['turn_count'] += 1
+        reply = {
+            'response_type': 'single_select',
+            'reply': '档案里的猫已经是成年猫。你是想了解其他幼猫，还是想咨询当前这只成年猫？',
+            'interaction': {'slot': SUBJECT_SCOPE_SLOT, 'options': [
+                {'label': '了解其他幼猫', 'value': 'general_kitten'},
+                {'label': '咨询当前猫咪', 'value': 'profile_pet'},
+            ]},
+            'result': {'intent': 'general_pet_qa', 'status': 'subject_scope_needed',
+                       'turn_no': state['turn_count'], 'sequence_no': 1},
+        }
+    else:
+        reply = _handle_diet_advice_entry(user_id, conversation, state, user_message['id'], client_context) if diet_entry else None
     if reply is None:
         intent_result = _recognize_guardian_turn(message, state) if message and not interaction and not attachments else None
         routing_state = {**state, "_turn_decision": intent_result[0] if intent_result else ({'_target_flow': 'reminder'} if interaction and state.get('primary_intent') == 'reminder' else {})}

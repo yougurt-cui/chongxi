@@ -53,6 +53,11 @@ def requested_flow(message):
     text = message or ""
     if re.search(r"(?:不|别|不用|不要|暂不|先不)(?:用|再|需要)?(?:推荐|选|挑|换)", text):
         return None
+    # Questions about principles or care are knowledge requests, not an
+    # instruction to start the personalized food-selection questionnaire.
+    if (re.search(r"(?:选粮|换粮|挑粮).{0,12}(?:注意什么|注意事项|怎么观察|如何观察|攻略|原则|知识)", text)
+            and not re.search(r"帮我|给我|替我|推荐一款|想换|准备换|打算换", text)):
+        return None
     for name, pattern in FLOW_REQUESTS:
         if pattern.search(text):
             # Reporting a past change is a feeding fact, not a navigation request.
