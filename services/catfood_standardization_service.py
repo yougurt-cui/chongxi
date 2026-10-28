@@ -204,6 +204,7 @@ def init_standardization_db() -> None:
                   effective_to DATE NULL,
                   is_current TINYINT NOT NULL DEFAULT 1,
                   status VARCHAR(32) NOT NULL DEFAULT 'active',
+                  confirmation_status VARCHAR(32) NOT NULL DEFAULT 'confirmed',
                   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
                   updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
                   PRIMARY KEY (formula_id),
@@ -224,6 +225,14 @@ def init_standardization_db() -> None:
                       GENERATED ALWAYS AS (
                         CASE WHEN status = 'active' THEN ingredient_fingerprint ELSE NULL END
                       ) STORED AFTER ingredient_fingerprint
+                    """
+                )
+            if "confirmation_status" not in formula_columns:
+                cursor.execute(
+                    f"""
+                    ALTER TABLE `{FORMULA_TABLE}`
+                    ADD COLUMN confirmation_status VARCHAR(32)
+                      NOT NULL DEFAULT 'confirmed' AFTER status
                     """
                 )
             cursor.execute(f"SHOW INDEX FROM `{FORMULA_TABLE}`")
@@ -271,6 +280,8 @@ def init_standardization_db() -> None:
                   input_hash CHAR(64) NOT NULL,
                   input_version VARCHAR(32) NOT NULL DEFAULT 'v1',
                   build_status VARCHAR(32) NOT NULL,
+                  result_stage VARCHAR(32) NOT NULL DEFAULT 'official',
+                  quality_flags_json JSON NULL,
                   parse_batch_id VARCHAR(32) NOT NULL DEFAULT 'formula_input',
                   parse_ts DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
                   updated_ts DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -283,6 +294,18 @@ def init_standardization_db() -> None:
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
                 """
             )
+            cursor.execute(f"SHOW COLUMNS FROM `{FORMULA_INPUT_TABLE}`")
+            formula_input_columns = {row["Field"] for row in cursor.fetchall()}
+            if "result_stage" not in formula_input_columns:
+                cursor.execute(
+                    f"ALTER TABLE `{FORMULA_INPUT_TABLE}` "
+                    "ADD COLUMN result_stage VARCHAR(32) NOT NULL DEFAULT 'official' AFTER build_status"
+                )
+            if "quality_flags_json" not in formula_input_columns:
+                cursor.execute(
+                    f"ALTER TABLE `{FORMULA_INPUT_TABLE}` "
+                    "ADD COLUMN quality_flags_json JSON NULL AFTER result_stage"
+                )
             cursor.execute(
                 f"""
                 CREATE TABLE IF NOT EXISTS `{BRAND_CANDIDATE_TABLE}` (
@@ -508,6 +531,16 @@ def build_formula_feature_input(
                 if completeness >= 0.7
                 else "nutrition_missing"
             )
+            result_stage = (
+                "provisional"
+                if formula.get("confirmation_status") == "provisional"
+                else "official"
+            )
+            quality_flags: list[str] = []
+            if result_stage == "provisional":
+                quality_flags.append("formula_unconfirmed")
+            if build_status == "nutrition_missing":
+                quality_flags.append("nutrition_incomplete")
             input_payload = {
                 "formula_id": int(formula["formula_id"]),
                 "product_id": int(formula["product_id"]),
@@ -564,6 +597,7 @@ def build_formula_feature_input(
                       ingredient_composition, normalized_ingredient_composition,
                       normalized_ingredients_json, ingredient_fingerprint,
                       nutrition_json, nutrition_completeness, input_hash, build_status,
+                      result_stage, quality_flags_json,
                       parse_batch_id, parse_ts, updated_ts
                     ) VALUES(
                       %s, %s, %s, %s, %s,
@@ -573,6 +607,7 @@ def build_formula_feature_input(
                       %s, %s,
                       %s, %s,
                       %s, %s, %s, %s,
+                      %s, %s,
                       'formula_input', NOW(), NOW()
                     )
                     ON DUPLICATE KEY UPDATE
@@ -597,6 +632,8 @@ def build_formula_feature_input(
                       nutrition_json = VALUES(nutrition_json),
                       nutrition_completeness = VALUES(nutrition_completeness),
                       build_status = VALUES(build_status),
+                      result_stage = VALUES(result_stage),
+                      quality_flags_json = VALUES(quality_flags_json),
                       updated_ts = IF(input_hash <> VALUES(input_hash), NOW(), updated_ts),
                       input_hash = VALUES(input_hash)
                     """,
@@ -625,6 +662,8 @@ def build_formula_feature_input(
                         completeness,
                         input_hash,
                         build_status,
+                        result_stage,
+                        json.dumps(quality_flags, ensure_ascii=False),
                     ),
                 )
             if apply:
@@ -643,8 +682,11 @@ def build_formula_feature_input(
         ),
         "source_ids": source_ids,
         "input_hash": input_hash,
+        "input_fingerprint": input_hash,
         "changed": existing_hash != input_hash,
         "build_status": build_status,
+        "result_stage": result_stage,
+        "quality_flags": quality_flags,
         "nutrition_completeness": completeness,
     }
     return result
@@ -2714,6 +2756,7 @@ def standardize_formula(payload: dict[str, Any]) -> dict[str, Any]:
             nutrition = _load_nutrition_signature(cursor, source_id)
             confidence: float | None = None
             conflict_candidates: list[dict[str, Any]] = []
+            created_provisional = False
             if not ingredients:
                 status = "pending"
                 match = None
@@ -2827,8 +2870,10 @@ def standardize_formula(payload: dict[str, Any]) -> dict[str, Any]:
                         INSERT INTO `{FORMULA_TABLE}`(
                           product_id, formula_version, raw_ingredient_example,
                           normalized_ingredient_composition, normalized_ingredients_json,
-                          ingredient_fingerprint, nutrition_json, is_current, status
-                        ) VALUES(%s, %s, %s, %s, %s, %s, %s, 1, 'active')
+                          ingredient_fingerprint, nutrition_json, is_current, status,
+                          confirmation_status
+                        ) VALUES(%s, %s, %s, %s, %s, %s, %s, 1, 'active',
+                          'provisional')
                         """,
                         (
                             mapping["product_id"],
@@ -2847,7 +2892,8 @@ def standardize_formula(payload: dict[str, Any]) -> dict[str, Any]:
                     )
                     match = cursor.fetchone()
                     confidence = 1.0
-                status = "matched" if match else "conflict"
+                    created_provisional = True
+                status = "provisional" if created_provisional else "matched" if match else "conflict"
             overall = "matched" if status == "matched" else status
             cursor.execute(
                 f"""
@@ -2967,6 +3013,11 @@ def resolve_formula_mapping(payload: dict[str, Any]) -> dict[str, Any]:
                 )
                 formula = cursor.fetchone()
             cursor.execute(
+                f"UPDATE `{FORMULA_TABLE}` SET confirmation_status = 'confirmed' "
+                "WHERE formula_id = %s",
+                (formula["formula_id"],),
+            )
+            cursor.execute(
                 f"""
                 UPDATE `{MAPPING_TABLE}`
                 SET formula_id = %s,
@@ -3004,6 +3055,13 @@ def resolve_formula_mapping(payload: dict[str, Any]) -> dict[str, Any]:
         formula_id=int(formula["formula_id"]),
         apply=True,
     )
+    result["calculation_action"] = (
+        "recalculate" if result["formula_input"]["changed"] else "promote"
+    )
+    if result["calculation_action"] == "promote":
+        from services.calculation_result_stage_service import sync_formula_result_metadata
+
+        result["result_promotion"] = sync_formula_result_metadata(int(formula["formula_id"]))
     return result
 
 
@@ -3026,6 +3084,10 @@ def resolve_duplicate_formula_mapping(payload: dict[str, Any]) -> dict[str, Any]
             if not formula or not ingredients or formula.get("ingredient_fingerprint") != fingerprint:
                 raise ValueError("所选 formula 与当前原料指纹不一致")
             cursor.execute(
+                f"UPDATE `{FORMULA_TABLE}` SET confirmation_status='confirmed' WHERE formula_id=%s",
+                (formula_id,),
+            )
+            cursor.execute(
                 f"""UPDATE `{MAPPING_TABLE}` SET formula_id=%s,formula_status='matched',
                     formula_confidence=1,overall_status='matched',reviewer=%s,review_note=%s,
                     reviewed_at=NOW(),match_evidence_json=JSON_SET(COALESCE(match_evidence_json,JSON_OBJECT()),
@@ -3036,9 +3098,17 @@ def resolve_duplicate_formula_mapping(payload: dict[str, Any]) -> dict[str, Any]
             )
             _link_guarantees_to_formula(cursor, source_id=source_id, formula_id=formula_id)
         conn.commit()
+    formula_input = build_formula_feature_input(formula_id=formula_id, apply=True)
+    result_promotion = None
+    if not formula_input["changed"]:
+        from services.calculation_result_stage_service import sync_formula_result_metadata
+
+        result_promotion = sync_formula_result_metadata(formula_id)
     return {"ok": True, "source_id": source_id, "formula_id": formula_id,
             "formula_status": "matched", "duplicate_formula": True,
-            "pipeline_complete": True}
+            "pipeline_complete": True, "formula_input": formula_input,
+            "calculation_action": "recalculate" if formula_input["changed"] else "promote",
+            "result_promotion": result_promotion}
 
 
 def list_formula_conflict_items(*, limit: int = 200) -> dict[str, Any]:
@@ -3053,6 +3123,9 @@ def list_formula_conflict_items(*, limit: int = 200) -> dict[str, Any]:
                   m.parsed_row_id,
                   m.brand_id,
                   m.product_id,
+                  m.formula_id,
+                  m.formula_status,
+                  m.formula_confidence,
                   m.raw_brand_name,
                   m.raw_product_name,
                   m.raw_ingredient_composition,
@@ -3064,7 +3137,7 @@ def list_formula_conflict_items(*, limit: int = 200) -> dict[str, Any]:
                 FROM `{MAPPING_TABLE}` m
                 LEFT JOIN `{BRAND_TABLE}` b ON b.brand_id = m.brand_id
                 LEFT JOIN `{PRODUCT_TABLE}` p ON p.product_id = m.product_id
-                WHERE m.formula_status = 'conflict'
+                WHERE m.formula_status IN ('conflict', 'provisional')
                 ORDER BY m.updated_at DESC
                 LIMIT %s
                 """,

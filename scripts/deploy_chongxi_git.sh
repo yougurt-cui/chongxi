@@ -48,6 +48,7 @@ git pull --ff-only origin "$REMOTE_BRANCH"
   api/product_function_api.py \
   api/taobao_sku_api.py \
   services/catfood_standardization_service.py \
+  services/calculation_result_stage_service.py \
   services/business_analysis_service.py \
   services/formula_feature_link_service.py \
   services/fiber_science_materialization_service.py \

@@ -1205,8 +1205,13 @@ def output_check(node_code: str, output: dict[str, Any], task_payload: dict[str,
     if node_code in {"brand_standardize", "product_standardize", "formula_standardize"}:
         status_field = STANDARDIZATION_STATUS_FIELDS[node_code]
         status = str(output.get(status_field) or "").strip()
-        if status == "matched":
-            return CheckResult(True, NODE_SUCCESS, f"{node_code} 匹配成功")
+        if status in {"matched", "provisional"}:
+            return CheckResult(
+                True,
+                NODE_SUCCESS,
+                f"{node_code} {'暂定匹配，可继续初算' if status == 'provisional' else '匹配成功'}",
+                {"standardization_status": status},
+            )
         if status in {"pending", "conflict", "blocked"}:
             return CheckResult(
                 False,

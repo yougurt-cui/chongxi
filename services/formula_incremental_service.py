@@ -11,6 +11,7 @@ from typing import Any
 import pymysql
 
 from app_config import get_feature_mysql_config, get_mysql_config
+from services.calculation_result_stage_service import sync_formula_result_metadata
 from scripts.backfill_formula_ingredient_features import (
     backfill_formula,
     materialize_formula_science_source_tables,
@@ -226,4 +227,6 @@ def materialize_formula_risks(*, formula_id: int, batch_id: str | None = None) -
         "black_chin": _run([sys.executable, str(FEATURE_DIR / "black_risk_done.py"), "--batch_id", batch_id, "--feature_version", "v1", "--no_reference_monitor"], env=env, cwd=FEATURE_DIR),
         "soft_stool": _run([sys.executable, str(FEATURE_DIR / "soft_risk_done.py"), "--batch_id", batch_id, "--feature_version", "soft_v1", "--no_reference_monitor"], env=env, cwd=FEATURE_DIR),
     }
-    return {"ok": True, "formula_id": formula_id, "batch_id": batch_id, "steps": steps}
+    result_metadata = sync_formula_result_metadata(formula_id, batch_id=batch_id)
+    return {"ok": True, "formula_id": formula_id, "batch_id": batch_id,
+            "steps": steps, **result_metadata}

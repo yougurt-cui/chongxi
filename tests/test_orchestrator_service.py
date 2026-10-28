@@ -66,6 +66,31 @@ def test_ocr_formula_accepts_columnar_nutrition_table():
     assert result.details["nutrition_pattern_count"] == 4
 
 
+def test_provisional_standardization_continues_to_initial_calculation():
+    result = service.output_check(
+        "formula_standardize",
+        {
+            "formula_id": 42,
+            "formula_status": "provisional",
+            "quality_flags": ["formula_unconfirmed"],
+        },
+    )
+
+    assert result.passed is True
+    assert result.status == service.NODE_SUCCESS
+    assert result.details["standardization_status"] == "provisional"
+
+
+def test_ambiguous_standardization_still_requires_review():
+    result = service.output_check(
+        "formula_standardize",
+        {"formula_status": "conflict", "reason": "存在多个候选配方"},
+    )
+
+    assert result.passed is False
+    assert result.status == service.NODE_NEED_REVIEW
+
+
 def test_manual_ocr_edit_preserves_original_structured_output(monkeypatch):
     original_output = {
         "source_id": 462,
