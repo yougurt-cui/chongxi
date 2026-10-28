@@ -93,7 +93,23 @@ def _upsert_pending_brand_candidate(cursor, raw_brand_name: str) -> None:
     )
 
 
+import threading
+_schema_lock = threading.Lock()
+_schema_initialized = False
+
+
 def init_standardization_db() -> None:
+    from services.formula_calculation_service import enabled
+    global _schema_initialized
+    if not enabled():
+        return _initialize_standardization_db()
+    with _schema_lock:
+        if not _schema_initialized:
+            _initialize_standardization_db()
+            _schema_initialized = True
+
+
+def _initialize_standardization_db() -> None:
     with _connect() as conn:
         with conn.cursor() as cursor:
             cursor.execute(
@@ -471,6 +487,13 @@ def _canonical_formula_source(
         (formula_id,),
     )
     rows = list(cursor.fetchall())
+    from services.formula_calculation_service import enabled
+    if not rows and enabled():
+        cursor.execute("""SELECT d.source_id,p.id AS parsed_row_id,p.image_name,p.image_path,
+            p.file_sha256,p.parse_ts,p.updated_ts FROM formula_calculation_draft d
+            LEFT JOIN catfood_ingredient_ocr_parsed p ON p.source_id=d.source_id
+            WHERE d.formula_id=%s ORDER BY p.id DESC""", (formula_id,))
+        rows = list(cursor.fetchall())
     source_ids = list(
         dict.fromkeys(int(row["source_id"]) for row in rows if row.get("source_id") is not None)
     )
@@ -499,7 +522,7 @@ def build_formula_feature_input(
                 JOIN `{PRODUCT_TABLE}` p ON p.product_id = f.product_id
                 JOIN `{BRAND_TABLE}` b ON b.brand_id = p.brand_id
                 WHERE f.formula_id = %s
-                  AND f.status = 'active'
+                  AND f.status IN ('active','draft')
                 """,
                 (int(formula_id),),
             )
@@ -541,26 +564,13 @@ def build_formula_feature_input(
                 quality_flags.append("formula_unconfirmed")
             if build_status == "nutrition_missing":
                 quality_flags.append("nutrition_incomplete")
-            input_payload = {
-                "formula_id": int(formula["formula_id"]),
-                "product_id": int(formula["product_id"]),
-                "brand_id": int(formula["brand_id"]),
-                "formula_version": int(formula["formula_version"]),
-                "brand": formula["standard_brand_name"],
-                "product_name": formula["standard_product_name"],
-                "raw_ingredient_composition": raw_ingredients,
-                "normalized_ingredients": normalized_items,
-                "nutrition": nutrition,
-                "source_ids": source_ids,
-            }
-            input_hash = hashlib.sha256(
-                json.dumps(
-                    input_payload,
-                    ensure_ascii=False,
-                    sort_keys=True,
-                    separators=(",", ":"),
-                ).encode("utf-8")
-            ).hexdigest()
+            from services.formula_calculation_service import input_fingerprint
+            input_hash = input_fingerprint({
+                'normalized_ingredient_composition': normalized,
+                'normalized_ingredients_json': normalized_items,
+                'nutrition_json': nutrition,
+                'standard_brand_name': formula.get('standard_brand_name'),
+            })
             existing_hash = None
             cursor.execute(
                 f"SELECT input_hash FROM `{FORMULA_INPUT_TABLE}` WHERE formula_id = %s",
@@ -3058,9 +3068,13 @@ def resolve_formula_mapping(payload: dict[str, Any]) -> dict[str, Any]:
     result["calculation_action"] = (
         "recalculate" if result["formula_input"]["changed"] else "promote"
     )
-    if result["calculation_action"] == "promote":
+    from services import formula_calculation_service as calculations
+    if calculations.enabled():
+        promoted = calculations.promote(int(formula['formula_id']))
+        result['calculation_action'] = 'promote' if promoted else 'recalculate'
+        result['result_promotion'] = {'promoted': promoted}
+    elif result["calculation_action"] == "promote":
         from services.calculation_result_stage_service import sync_formula_result_metadata
-
         result["result_promotion"] = sync_formula_result_metadata(int(formula["formula_id"]))
     return result
 
@@ -3100,14 +3114,19 @@ def resolve_duplicate_formula_mapping(payload: dict[str, Any]) -> dict[str, Any]
         conn.commit()
     formula_input = build_formula_feature_input(formula_id=formula_id, apply=True)
     result_promotion = None
-    if not formula_input["changed"]:
+    from services import formula_calculation_service as calculations
+    promoted = False
+    if calculations.enabled():
+        promoted = calculations.promote(formula_id)
+        result_promotion = {'promoted': promoted}
+    elif not formula_input["changed"]:
         from services.calculation_result_stage_service import sync_formula_result_metadata
 
         result_promotion = sync_formula_result_metadata(formula_id)
     return {"ok": True, "source_id": source_id, "formula_id": formula_id,
             "formula_status": "matched", "duplicate_formula": True,
             "pipeline_complete": True, "formula_input": formula_input,
-            "calculation_action": "recalculate" if formula_input["changed"] else "promote",
+            "calculation_action": ("promote" if promoted else "recalculate") if calculations.enabled() else ("recalculate" if formula_input["changed"] else "promote"),
             "result_promotion": result_promotion}
 
 

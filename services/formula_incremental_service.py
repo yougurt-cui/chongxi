@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import os
+import json
+import tempfile
 import subprocess
 import sys
 from pathlib import Path
@@ -96,6 +98,29 @@ def _run(command: list[str], *, env: dict[str, str], cwd: Path = BASE_DIR) -> di
     return result
 
 
+def _run_phase(phase: str, *, env: dict[str, str]) -> dict[str, Any]:
+    from scripts.run_formula_phase import PHASES
+    with tempfile.TemporaryDirectory(prefix="formula-phase-") as directory:
+        report_path = Path(directory) / "report.json"
+        try:
+            _run([sys.executable, str(BASE_DIR / "scripts/run_formula_phase.py"),
+                  phase, "--report", str(report_path)], env=env, cwd=FEATURE_DIR)
+        except RuntimeError as error:
+            if report_path.exists():
+                report = json.loads(report_path.read_text(encoding="utf-8"))
+                failed = next((name for name, result in report.get("steps", {}).items() if not result.get("ok")), None)
+                if failed:
+                    raise RuntimeError(f"计算步骤 {failed} 失败：\n" + "\n".join(report["steps"][failed]["log_tail"])) from error
+            raise
+        report = json.loads(report_path.read_text(encoding="utf-8"))
+        steps = report.get("steps", {})
+        if (report.get("phase") != phase or not report.get("ok")
+                or list(steps) != [name for name, _ in PHASES[phase]]
+                or not all(result.get("ok") for result in steps.values())):
+            raise RuntimeError("计算阶段未完整执行，不发布结果")
+        return steps
+
+
 def materialize_formula_scores(*, formula_id: int, batch_id: str | None = None) -> dict[str, Any]:
     formula_id = int(formula_id)
     batch_id = batch_id or f"formula-{formula_id}"
@@ -123,13 +148,7 @@ def materialize_formula_scores(*, formula_id: int, batch_id: str | None = None) 
         with conn.cursor() as cursor:
             cursor.execute("DELETE FROM catfood_fat_material_features_scored WHERE formula_id=%s", (formula_id,))
         conn.commit()
-    steps = {
-        "protein_score": _run([sys.executable, str(SCRIPT_DIR / "protein_score1.py")], env=env, cwd=FEATURE_DIR),
-        "fiber_score": _run([sys.executable, str(SCRIPT_DIR / "fiber_remark_score.py")], env=env, cwd=FEATURE_DIR),
-        "fat_score": _run([sys.executable, str(SCRIPT_DIR / "fat_score1.py")], env=env, cwd=FEATURE_DIR),
-        "wide": _run([sys.executable, str(SCRIPT_DIR / "build_catfood_score_wide_table.py")], env=env, cwd=FEATURE_DIR),
-        "sku_feature": _run([sys.executable, str(SCRIPT_DIR / "build_sku_feature_input.py")], env=env, cwd=FEATURE_DIR),
-    }
+    steps = _run_phase("scores", env=env)
     # The target table is keyed by formula/version, so an incremental upsert can
     # reuse an older row.  Persist this run's batch explicitly: the following
     # risk node selects its input by batch_id.
@@ -223,10 +242,7 @@ def materialize_formula_risks(*, formula_id: int, batch_id: str | None = None) -
                 (formula_id, batch_id, "BLACK_CHIN_M2_FAT_OMEGA_FAT_B", "SOFT_STOOL_M2_PQ_NO_G_FAT_B"),
             )
         conn.commit()
-    steps = {
-        "black_chin": _run([sys.executable, str(FEATURE_DIR / "black_risk_done.py"), "--batch_id", batch_id, "--feature_version", "v1", "--no_reference_monitor"], env=env, cwd=FEATURE_DIR),
-        "soft_stool": _run([sys.executable, str(FEATURE_DIR / "soft_risk_done.py"), "--batch_id", batch_id, "--feature_version", "soft_v1", "--no_reference_monitor"], env=env, cwd=FEATURE_DIR),
-    }
+    steps = _run_phase("risks", env=env)
     result_metadata = sync_formula_result_metadata(formula_id, batch_id=batch_id)
     return {"ok": True, "formula_id": formula_id, "batch_id": batch_id,
             "steps": steps, **result_metadata}

@@ -66,7 +66,10 @@ def standardization_init():
 @catfood_standardization_api.post("/brand")
 def standardization_brand():
     try:
-        return jsonify(standardize_brand(request.get_json(silent=True) or {})), 200
+        payload = request.get_json(silent=True) or {}
+        result = standardize_brand(payload)
+        from services.formula_calculation_service import allow_upload_preview
+        return jsonify(allow_upload_preview(result, payload, 'brand')), 200
     except Exception as exc:
         return jsonify({"ok": False, "error": str(exc)}), 400
 
@@ -74,7 +77,10 @@ def standardization_brand():
 @catfood_standardization_api.post("/product")
 def standardization_product():
     try:
-        return jsonify(standardize_product(request.get_json(silent=True) or {})), 200
+        payload = request.get_json(silent=True) or {}
+        result = standardize_product(payload)
+        from services.formula_calculation_service import allow_upload_preview
+        return jsonify(allow_upload_preview(result, payload, 'product')), 200
     except Exception as exc:
         return jsonify({"ok": False, "error": str(exc)}), 400
 
@@ -82,7 +88,11 @@ def standardization_product():
 @catfood_standardization_api.post("/brand/resolve")
 def standardization_brand_resolve():
     try:
-        return jsonify(resolve_brand_mapping(request.get_json(silent=True) or {})), 200
+        payload = request.get_json(silent=True) or {}
+        result = resolve_brand_mapping(payload)
+        from services.formula_calculation_service import requeue_sources
+        result['resumed_task_ids'] = requeue_sources([payload['source_id']])
+        return jsonify(result), 200
     except Exception as exc:
         return jsonify({"ok": False, "error": str(exc)}), 400
 
@@ -90,7 +100,10 @@ def standardization_brand_resolve():
 @catfood_standardization_api.post("/formula")
 def standardization_formula():
     try:
-        return jsonify(standardize_formula(request.get_json(silent=True) or {})), 200
+        payload = request.get_json(silent=True) or {}
+        result = standardize_formula(payload)
+        from services.formula_calculation_service import allow_upload_preview
+        return jsonify(allow_upload_preview(result, payload, 'formula')), 200
     except Exception as exc:
         return jsonify({"ok": False, "error": str(exc)}), 400
 
@@ -320,7 +333,11 @@ def standardization_formula_resolve():
 @catfood_standardization_api.post("/formula/duplicate/resolve")
 def standardization_duplicate_formula_resolve():
     try:
-        return jsonify(resolve_duplicate_formula_mapping(request.get_json(silent=True) or {})), 200
+        payload = request.get_json(silent=True) or {}
+        result = resolve_duplicate_formula_mapping(payload)
+        from services.formula_calculation_service import requeue_sources
+        result['resumed_task_ids'] = requeue_sources([result['source_id']])
+        return jsonify(result), 200
     except Exception as exc:
         return jsonify({"ok": False, "error": str(exc)}), 400
 
@@ -329,12 +346,11 @@ def standardization_duplicate_formula_resolve():
 def standardization_formula_input_build():
     try:
         payload = request.get_json(silent=True) or {}
-        return jsonify(
-            build_formula_feature_input(
-                formula_id=int(payload.get("formula_id")),
-                apply=True,
-            )
-        ), 200
+        result = build_formula_feature_input(formula_id=int(payload.get("formula_id")), apply=True)
+        from services import formula_calculation_service as calculations
+        if calculations.enabled() and payload.get('orchestrator_task_id'):
+            result.update(calculations.begin(payload['orchestrator_task_id'], int(payload['formula_id'])))
+        return jsonify(result), 200
     except KeyError as exc:
         return jsonify({"ok": False, "error": str(exc)}), 404
     except Exception as exc:
@@ -384,6 +400,16 @@ def standardization_formula_science_materialize():
 def standardization_formula_risk_materialize():
     try:
         payload = request.get_json(silent=True) or {}
-        return jsonify(materialize_formula_risks(formula_id=int(payload["formula_id"]), batch_id=payload.get("batch_id"))), 200
+        from services import formula_calculation_service as calculations
+        risk_version = {}
+        if calculations.enabled() and payload.get('orchestrator_task_id'):
+            risk_version = calculations.prepare_risks(payload['orchestrator_task_id'])
+        result = materialize_formula_risks(formula_id=int(payload["formula_id"]), batch_id=payload.get("batch_id"))
+        result.update(risk_version)
+        if calculations.enabled() and payload.get('orchestrator_task_id'):
+            result.update(calculations.publish(payload['orchestrator_task_id'], result['batch_id'], claim_token=payload.get('orchestrator_claim_token')))
+        return jsonify(result), 200
+    except calculations.CalculationSuperseded as exc:
+        return jsonify({'ok': False, 'code': 'calculation_superseded', 'error': str(exc)}), 409
     except Exception as exc:
         return jsonify({"ok": False, "error": str(exc)}), 400

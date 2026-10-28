@@ -2,10 +2,12 @@
 
 
 import os
+from functools import lru_cache
+from copy import deepcopy
 from pathlib import Path
 from typing import Any, Dict
 
-from vendor.csv_mysql_labeling.src.settings import load_settings
+from vendor.csv_mysql_labeling.src.settings import load_settings, DEFAULT_CONFIG_PATH, DEFAULT_COLMAP_PATH, DEFAULT_DICT_SEED_PATH
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -34,9 +36,23 @@ def _env_first(name: str, value: Any) -> Any:
     return env_value if env_value not in (None, "") else value
 
 
+@lru_cache(maxsize=4)
+def _cached_database_settings(signature):
+    return load_settings()
+
+
+def _database_settings():
+    # Observe file replacement/mtime/size; environment overlays are still read
+    # on every call. Cache configuration only, never live scoring knowledge.
+    signature = tuple((str(p), st.st_ino, st.st_mtime_ns, st.st_ctime_ns, st.st_size)
+                      for p in (DEFAULT_CONFIG_PATH, DEFAULT_COLMAP_PATH, DEFAULT_DICT_SEED_PATH)
+                      for st in (p.stat(),))
+    return _cached_database_settings(signature)
+
+
 def get_mysql_config(*, database: str | None = None, payload_db: Dict[str, Any] | None = None) -> Dict[str, Any]:
-    settings = load_settings()
-    cfg = dict(settings.mysql)
+    settings = _database_settings()
+    cfg = deepcopy(settings.mysql)
     cfg.update(payload_db or {})
     cfg["host"] = _env_first("MYSQL_HOST", cfg.get("host", "127.0.0.1"))
     cfg["port"] = int(_env_first("MYSQL_PORT", cfg.get("port", 3306)))
@@ -48,9 +64,9 @@ def get_mysql_config(*, database: str | None = None, payload_db: Dict[str, Any] 
 
 
 def get_feature_mysql_config(payload_db: Dict[str, Any] | None = None) -> Dict[str, Any]:
-    settings = load_settings()
-    cfg = dict(settings.mysql)
-    cfg.update(dict(getattr(settings, "feature_mysql", {}) or {}))
+    settings = _database_settings()
+    cfg = deepcopy(settings.mysql)
+    cfg.update(deepcopy(getattr(settings, "feature_mysql", {}) or {}))
     cfg.update(payload_db or {})
     database = str(cfg.get("database") or os.getenv("FEATURE_MYSQL_DATABASE") or "protein_feature_platform")
     return get_mysql_config(database=database, payload_db=cfg)

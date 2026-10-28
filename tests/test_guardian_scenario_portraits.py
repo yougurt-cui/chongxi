@@ -228,6 +228,7 @@ class ChatAcceptanceTest(unittest.TestCase):
                   patch.object(chat, '_prepare_food_handoff'),
                   patch.object(food, 'list_standardized_product_options', return_value={'items': [product(1), product(2)]}),
                   patch.object(food, 'load_nutrition', return_value={}), patch.object(food, 'load_risks', return_value={}),
+                  patch.object(food, 'load_factor_profiles', return_value={}),
                   patch.object(food, 'load_product_portraits', return_value={1: build_portrait(features()), 2: build_portrait(features(2, fat_score=.4))})):
             p.start(); self.addCleanup(p.stop)
 

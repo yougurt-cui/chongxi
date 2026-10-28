@@ -33,6 +33,7 @@ from services.miniprogram_food_submission_service import (
     cancel_food_submission,
     create_food_submission,
     get_food_submission,
+    get_food_submission_status,
     get_submission_image,
     list_food_submissions,
 )
@@ -885,6 +886,20 @@ def get_food_submission_endpoint(submission_id: str):
         return jsonify(get_food_submission(
             _user_id_from_request(required=True), submission_id,
         )), 200
+    except PermissionError as exc:
+        return _auth_error_response(exc)
+    except LookupError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 404
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@miniprogram_api.get("/food-submissions/<submission_id>/status")
+def get_food_submission_status_endpoint(submission_id: str):
+    try:
+        return jsonify(get_food_submission_status(
+            _user_id_from_request(required=True), submission_id,
+        )), 200, {"Cache-Control": "no-store"}
     except PermissionError as exc:
         return _auth_error_response(exc)
     except LookupError as exc:

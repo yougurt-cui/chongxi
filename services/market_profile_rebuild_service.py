@@ -128,6 +128,9 @@ def rebuild_market_profile_for_orchestrator(payload: dict[str, Any]) -> dict[str
     formula_id = int(payload.get("formula_id") or 0)
     if not formula_id:
         raise ValueError("缺少 formula_id")
+    from services.formula_calculation_service import enabled, mark_market_dirty
+    if enabled():
+        return mark_market_dirty(formula_id)
     if not _formula_exists(formula_id):
         raise ValueError(f"formula_id={formula_id} 尚未进入 score_wide，请先完成前置评分")
 

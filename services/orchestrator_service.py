@@ -1247,6 +1247,8 @@ def output_check(node_code: str, output: dict[str, Any], task_payload: dict[str,
     if node_code == "formula_profile":
         return _check_formula_profile(output)
     if node_code == "market_profile_build":
+        if output.get('scope') == 'deferred_market' and output.get('queued'):
+            return CheckResult(True, NODE_SUCCESS, "市场更新已独立排队，不阻塞当前结果")
         return _check_market_profile_build(output)
     if output:
         return CheckResult(True, NODE_SUCCESS, "默认输出检查通过")
@@ -1790,7 +1792,7 @@ def build_node_input(task: dict[str, Any], node_def: NodeDefinition) -> dict[str
                 "orchestrator_task_id": task["id"],
                 "orchestrator_node_code": node_def.node_code,
                 "formula_id": formula_input.get("formula_id"),
-                "batch_id": f"upload-{task['id']}",
+                "batch_id": f"calc-{formula_input['calculation_run_id']}" if formula_input.get("calculation_run_id") else f"upload-{task['id']}",
             }
         if node_def.node_code == "formula_profile":
             formula_input = _output_for(task, "formula_input_build")
@@ -1798,7 +1800,7 @@ def build_node_input(task: dict[str, Any], node_def: NodeDefinition) -> dict[str
                 "orchestrator_task_id": task["id"],
                 "orchestrator_node_code": node_def.node_code,
                 "formula_id": formula_input.get("formula_id"),
-                "batch_id": f"upload-{task['id']}",
+                "batch_id": f"calc-{formula_input['calculation_run_id']}" if formula_input.get("calculation_run_id") else f"upload-{task['id']}",
             }
         if node_def.node_code in {"product_portrait_summary", "market_profile_build"}:
             formula_input = _output_for(task, "formula_input_build")
@@ -1867,7 +1869,7 @@ def _refresh_ready_nodes(task: dict[str, Any]) -> bool:
             dependencies_ready = True
             for dep_code in node_def.depends_on:
                 dep_node = nodes_by_code.get(dep_code)
-                if not dep_node or dep_node["node_status"] != NODE_SUCCESS:
+                if not dep_node or dep_node["node_status"] not in {NODE_SUCCESS, NODE_SKIPPED}:
                     dependencies_ready = False
                     break
             if not dependencies_ready:
@@ -1948,6 +1950,9 @@ def _complete_exact_formula_reuse(task_id: str, output: dict[str, Any]) -> bool:
     match and no nutrition conflict.  We only bypass calculation when the current
     portrait loader also considers the stored result fresh and valid.
     """
+    from services.formula_calculation_service import enabled
+    if enabled():
+        return False  # Formula input includes all rule/knowledge versions; reuse there.
     if not output.get("exact_formula_reuse"):
         return False
     product_id = output.get("product_id")
@@ -2291,6 +2296,13 @@ def apply_node_result(
         wake_dispatcher()
         return get_task(task_id) or {"id": task_id}
 
+    if node_code == 'formula_input_build' and check.passed and output.get('reused_calculation'):
+        with _connect() as conn:
+            for code in ('ingredient_extract', 'science_feature_materialize', 'ingredient_standardize',
+                         'product_portrait_summary', 'formula_profile'):
+                _set_node_status(conn, task_id, code, NODE_SKIPPED, '复用相同输入与规则版本的已发布结果')
+            conn.commit()
+
     refreshed = get_task(task_id)
     if refreshed and refreshed["task_status"] not in {TASK_DONE, TASK_FAILED, TASK_CANCELLED, TASK_NEED_REVIEW}:
         _refresh_ready_nodes(refreshed)
@@ -2370,7 +2382,7 @@ def reset_node_for_reextract(task_id: str, node_code: str, reason: str | None = 
     ready = True
     for dep_code in target_def.depends_on:
         dep_node = nodes_by_code.get(dep_code)
-        if not dep_node or dep_node["node_status"] != NODE_SUCCESS:
+        if not dep_node or dep_node["node_status"] not in {NODE_SUCCESS, NODE_SKIPPED}:
             ready = False
             break
 
@@ -2395,6 +2407,9 @@ def reset_node_for_reextract(task_id: str, node_code: str, reason: str | None = 
 
 def complete_duplicate_formula_tasks(source_ids: list[int]) -> list[str]:
     """Resume confirmed duplicate identities; compute and validate results normally."""
+    from services.formula_calculation_service import enabled, requeue_sources
+    if enabled():
+        return requeue_sources(source_ids)
     normalized = sorted({int(value) for value in source_ids})
     if not normalized:
         return []
@@ -2427,6 +2442,9 @@ def complete_duplicate_formula_tasks(source_ids: list[int]) -> list[str]:
 
 def resume_brand_tasks_for_source_ids(source_ids: list[int]) -> list[str]:
     """Reset brand-review nodes linked to approved OCR source records."""
+    from services.formula_calculation_service import enabled, requeue_sources
+    if enabled():
+        return requeue_sources(source_ids)
     normalized_ids = sorted({int(item) for item in source_ids if item is not None})
     if not normalized_ids:
         return []
@@ -2454,6 +2472,9 @@ def resume_brand_tasks_for_source_ids(source_ids: list[int]) -> list[str]:
 
 def resume_product_tasks_for_source_ids(source_ids: list[int]) -> list[str]:
     """Reset product-review nodes linked to approved OCR source records."""
+    from services.formula_calculation_service import enabled, requeue_sources
+    if enabled():
+        return requeue_sources(source_ids)
     normalized_ids = sorted({int(item) for item in source_ids if item is not None})
     if not normalized_ids:
         return []
@@ -2484,6 +2505,9 @@ def resume_formula_tasks_for_source_ids(
     resolved_output: dict[str, Any] | None = None,
 ) -> list[str]:
     """Apply a manual formula-resolution result to waiting formula nodes."""
+    from services.formula_calculation_service import enabled, requeue_sources
+    if enabled():
+        return requeue_sources(source_ids)
     normalized_ids = sorted({int(item) for item in source_ids if item is not None})
     if not normalized_ids:
         return []
@@ -2497,11 +2521,11 @@ def resume_formula_tasks_for_source_ids(
                 JOIN pipeline_task_node n
                   ON n.task_id = o.task_id AND n.node_code = 'formula_standardize'
                 WHERE o.node_code = 'formula_standardize'
-                  AND n.node_status IN (%s, %s, %s)
+                  AND n.node_status IN (%s, %s, %s, %s, %s)
                   AND CAST(JSON_UNQUOTE(JSON_EXTRACT(o.output_json, '$.source_id')) AS UNSIGNED)
                       IN ({placeholders})
                 """,
-                (NODE_NEED_REVIEW, NODE_FAILED, NODE_RUNNING, *normalized_ids),
+                (NODE_NEED_REVIEW, NODE_FAILED, NODE_RUNNING, NODE_SUCCESS, NODE_SKIPPED, *normalized_ids),
             )
             task_ids = [str(row["task_id"]) for row in cursor.fetchall()]
 
@@ -2524,6 +2548,7 @@ def resume_formula_tasks_for_source_ids(
                 "ingredient_extract",
                 "science_feature_materialize",
                 "ingredient_standardize",
+                "product_portrait_summary",
                 "formula_profile",
                 "market_profile_build",
             ):
@@ -2536,6 +2561,9 @@ def resume_formula_tasks_for_source_ids(
 
 
 def resume_ingredient_tasks_for_formula_ids(formula_ids: list[int]) -> list[str]:
+    from services.formula_calculation_service import enabled, requeue_formulas
+    if enabled():
+        return requeue_formulas(formula_ids, invalidate=True)
     normalized_ids = sorted({int(item) for item in formula_ids if item is not None})
     if not normalized_ids:
         return []
@@ -2683,6 +2711,7 @@ def claim_ready_dispatch_jobs(
                     _set_task_status(conn, task["id"], TASK_PROCESSING)
                     conn.commit()
                 job["claim_token"] = token
+                job["input"]["orchestrator_claim_token"] = token
             job["dispatch_status"] = "claimed" if claim else "ready"
             jobs.append(job)
 

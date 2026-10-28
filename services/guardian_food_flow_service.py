@@ -6,6 +6,7 @@ from services.taobao_sku_import_service import list_standardized_product_options
 from services.miniprogram_cat_profile_service import update_cat_profile
 from services.guardian_food_analysis_service import load_nutrition, load_risks, analyse_food, nutrition_text, comparison_text
 from services.guardian_product_portrait_service import load_product_portraits, compare_portraits, portrait_comparison_text
+from services.guardian_factor_evidence_service import load_profiles as load_factor_profiles, compare_profiles as compare_factor_profiles, factor_comparison_text
 from services.guardian_food_scenario import build_scenario
 from services.guardian_recommendation_presentation import alternatives_requested
 
@@ -248,18 +249,38 @@ def handle_food_flow(user_id, conversation, message, state, context, interaction
     full_cautions = list(dict.fromkeys((detail.get('cautions') or []) + (candidate.get('cautions') or [])))
     comparison_id = flow.get('original_formula_id') or flow.get('comparison_formula_id') or ((candidate.get('analysis') or {}).get('comparison_current_formula_id') if flow.get('reference_food_text') == slots.get('current_food') else None)
     nutrients = load_nutrition([comparison_id, selected['formula_id']])
-    risks = load_risks([selected['formula_id']])
+    # Both formulas, not only the target: a comparison needs the original's
+    # risk tags to say anything about what actually differs.
+    risks = load_risks([comparison_id, selected['formula_id']])
     analysis = analyse_food(selected, nutrients, cautions=full_cautions, current=comparison_id, risks=risks)
     comparison['nutrition'] = analysis['comparison']
     portraits = load_product_portraits([comparison_id, selected['formula_id']])
     comparison['portrait'] = compare_portraits(portraits.get(comparison_id), portraits.get(selected['formula_id']))
+    factor_profiles = load_factor_profiles([comparison_id, selected['formula_id']])
+    comparison['factor_evidence'] = compare_factor_profiles(factor_profiles.get(comparison_id),
+                                                            factor_profiles.get(selected['formula_id']))
+    comparison['factor_current'] = factor_profiles.get(comparison_id)
+    comparison['factor_target'] = factor_profiles.get(selected['formula_id'])
     analysis['product_portrait'] = portraits.get(selected['formula_id'])
     analysis['portrait_comparison'] = comparison['portrait']
+    analysis['risk_models_current'] = (risks or {}).get(comparison_id) if comparison_id else None
     flow["comparison"] = comparison
+
+    def factor_ready():
+        factor = comparison['factor_evidence']
+        return (factor.get('status') in {'ready', 'partial'}
+                and bool(factor.get('only_current') or factor.get('only_target') or factor.get('shared')))
+
+    def comparison_body():
+        """Factor chain when risk tags exist, five-dimension fallback otherwise."""
+        if factor_ready():
+            return '\n' + factor_comparison_text(comparison['factor_evidence'],
+                                                 comparison.get('factor_current'), comparison.get('factor_target'))
+        return '\n' + portrait_comparison_text(comparison['portrait'])
     if flow['stage'] == 'selected':
         text = f"已选定：{selected.get('label') or selected['product_name']}。当前口粮没有改变。\n" + nutrition_text(analysis)
         text += '\n' + comparison_text(analysis)
-        text += '\n' + portrait_comparison_text(comparison['portrait'])
+        text += comparison_body()
         if candidate.get('strengths'):
             text += '\n适配理由：' + '；'.join(candidate['strengths'][:3])
         else:
@@ -273,8 +294,10 @@ def handle_food_flow(user_id, conversation, message, state, context, interaction
             text += '\n资料提示：' + '；'.join(flow['validation_warnings']) + '。'
         if pet.get('age_months') is None:
             text += '\n年龄未填写，本次未按年龄筛选；请核对包装适用阶段：' + str(selected.get('life_stage') or '暂无资料') + '。'
-        for risk in analysis.get('risk_models', []):
-            text += '\n' + ('软便' if risk['kind'] == 'soft_stool' else '黑下巴') + '结构风险参考：' + str(risk.get('relative_risk_level') or '等级暂无') + '（非患病概率）。'
+        # The factor chain already states both risk levels per symptom.
+        if not factor_ready():
+            for risk in analysis.get('risk_models', []):
+                text += '\n' + ('软便' if risk['kind'] == 'soft_stool' else '黑下巴') + '结构风险参考：' + str(risk.get('relative_risk_level') or '等级暂无') + '（非患病概率）。'
         text += '\n确定要换到这款时，可以继续查看换粮安排；已经实际开始吃，也可以直接告诉我。'
         return {**card(text, flow, food_analysis=analysis, food_comparison=comparison), 'response_type': 'text_or_select',
                 'interaction': {'slot': 'food_flow_action', 'options': [{'label': '看看怎么换粮', 'value': 'switch_plan'}, {'label': '重新选粮', 'value': 'restart'}]}}
@@ -290,7 +313,7 @@ def handle_food_flow(user_id, conversation, message, state, context, interaction
     text += comparison["note"] + "\n" + "\n".join(plan["steps"]) + "\n" + plan["confirmation"]
     text += '\n' + nutrition_text(analysis) + '\n' + analysis['risk_note']
     text += '\n' + comparison_text(analysis)
-    text += '\n' + portrait_comparison_text(comparison['portrait'])
+    text += comparison_body()
     if flow.get('validation_warnings'):
         text += '\n资料提示：' + '；'.join(flow['validation_warnings']) + '。'
     if pet.get("age_months") is None:

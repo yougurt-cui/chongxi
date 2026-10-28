@@ -77,6 +77,9 @@ def sync_formula_result_metadata(
             if batch_id:
                 where += " AND batch_id=%s"
                 params.append(batch_id)
+            else:
+                where += " AND input_fingerprint=%s"
+                params.append(metadata['input_fingerprint'])
             cursor.execute(
                 f"""
                 UPDATE sku_risk_score_result

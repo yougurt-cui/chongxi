@@ -9,6 +9,7 @@ import logging
 import os
 import threading
 import time
+from contextlib import ExitStack
 from concurrent.futures import ThreadPoolExecutor
 
 from services import orchestrator_service as jobs
@@ -99,7 +100,7 @@ def _defer(job, response):
 
 
 def _execute_task(app, task_id):
-    with app.app_context(), jobs._connect() as owner:
+    with app.app_context(), jobs._connect() as owner, ExitStack() as calculations_scope:
         with owner.cursor() as cur:
             cur.execute("SELECT GET_LOCK(%s,0) AS acquired", (lock_name(task_id),))
             if not cur.fetchone()["acquired"]:
@@ -119,12 +120,20 @@ def _execute_task(app, task_id):
             keeper.start()
             try:
                 from api.orchestrator_api import _call_api_sync
-                for _ in range(16):
+                locked_formula = None
+                stale_restarts = 0
+                for _ in range(24):
                     if _stop.is_set():
                         break
                     task = jobs.get_task(task_id)
                     if not task or task["task_status"] in {"done", "cancelled", "failed", "need_review"}:
                         break
+                    from services.formula_calculation_service import enabled, formula_lock
+                    formula_id = ((task.get('outputs') or {}).get('formula_standardize') or {}).get('formula_id')
+                    if enabled() and formula_id and locked_formula != int(formula_id):
+                        if not calculations_scope.enter_context(formula_lock(formula_id)):
+                            break  # Leave the durable ready node unclaimed for a later sweep.
+                        locked_formula = int(formula_id)
                     ready = jobs.claim_ready_dispatch_jobs(task_id=task_id, limit=1, claim_prefix="worker:")
                     if not ready["jobs"]:
                         break
@@ -137,6 +146,10 @@ def _execute_task(app, task_id):
                     response = _call_api_sync(job["api"], job["input"])
                     log.info("pipeline_node_finished task=%s node=%s seconds=%.3f ok=%s",
                              task_id, job["node_code"], time.monotonic() - started, response["ok"])
+                    if (response.get('data') or {}).get('code') == 'calculation_superseded' and stale_restarts < 1:
+                        stale_restarts += 1
+                        jobs.reset_node_for_reextract(task_id, 'formula_input_build', '输入或参考池更新，重新计算')
+                        continue
                     if not response["ok"] and retryable(response):
                         _defer(job, response)
                         break
@@ -176,6 +189,8 @@ def _loop(app, capacity, interval):
                 with app.app_context():
                     jobs.init_db()
                     recover_interrupted()
+                    from services.formula_calculation_service import reconcile_dependencies
+                    reconcile_dependencies()
                     pending = {k: v for k, v in pending.items() if not v.done()}
                     for task_id in _candidates(capacity * 4):
                         if len(pending) >= capacity:

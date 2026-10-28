@@ -31,9 +31,9 @@ engine = create_engine(
 # =========================
 # 2. 读取数据
 # =========================
-df = pd.read_sql(f"SELECT * FROM {TABLE_NAME}", engine)
-if os.getenv("FORMULA_ID"):
-    df = df[pd.to_numeric(df["formula_id"], errors="coerce") == int(os.environ["FORMULA_ID"])].copy()
+formula_id = os.getenv("FORMULA_ID")
+sql = f"SELECT * FROM {TABLE_NAME}" + (" WHERE formula_id = :formula_id" if formula_id else "")
+df = pd.read_sql(text(sql), engine, params={"formula_id": int(formula_id)} if formula_id else {})
 
 OPTIONAL_INPUT_DEFAULTS = {
     "ingredient_composition": "",

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from math import isfinite
 from datetime import datetime
 from typing import Any
 
@@ -108,6 +109,22 @@ def _number(value: Any) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def validated_feature_row(row: dict[str, Any]) -> dict[str, Any]:
+    """Sanitize publication inputs using the same scales as the public reader.
+
+    Do this before generating labels as well as scores. Working score tables
+    remain unchanged, so invalid upstream values can still be investigated.
+    """
+    result = dict(row)
+    for field, maximum in (
+        ("protein_quality_score", 1), ("protein_score", 1), ("fat_score", 1),
+        ("fiber_score", 5), ("carb_score", 5), ("prebiotic_score", 5),
+    ):
+        value = _number(row.get(field))
+        result[field] = value if value is not None and isfinite(value) and 0 <= value <= maximum else None
+    return result
 
 
 def _burden_level(value: float | None, scale_max: float) -> tuple[str, str]:
@@ -229,8 +246,11 @@ def build_portrait(row: dict[str, Any]) -> dict[str, Any]:
 
 
 def _load_feature_rows(
-    cursor, feature_version: str, formula_ids: list[int] | None = None,
+    cursor, feature_version: str, formula_ids: list[int] | None = None, *, include_drafts: bool = False,
 ) -> list[dict[str, Any]]:
+    identity_filter = "(f.status='active' AND f.is_current=1)"
+    if include_drafts and formula_ids:
+        identity_filter = "(f.status='draft' OR (f.status='active' AND f.is_current=1))"
     formula_filter = ""
     params: list[Any] = [feature_version]
     if formula_ids:
@@ -255,7 +275,7 @@ def _load_feature_rows(
             GROUP BY formula_id
         ) latest ON latest.latest_id=s.id
         JOIN csv_labeling.catfood_standard_formula f
-          ON f.formula_id=s.formula_id AND f.status='active' AND f.is_current=1
+          ON f.formula_id=s.formula_id AND {identity_filter}
         LEFT JOIN catfood_protein_fat_fiber_score_wide w
           ON w.formula_id=s.formula_id
         LEFT JOIN catfood_fiber_feature_score fs
@@ -374,7 +394,8 @@ def rebuild_product_portraits(
     with _connect() as conn:
         ensure_portrait_table(conn)
         with conn.cursor() as cursor:
-            rows = _load_feature_rows(cursor, feature_version, ids)
+            from services.formula_calculation_service import enabled
+            rows = _load_feature_rows(cursor, feature_version, ids, include_drafts=enabled())
             found = {int(row["formula_id"]) for row in rows}
             missing = [formula_id for formula_id in ids if formula_id not in found]
             if missing:
@@ -445,7 +466,14 @@ def materialize_product_portrait(payload: dict[str, Any]) -> dict[str, Any]:
     from services.guardian_product_portrait_service import load_product_portraits
     portrait = load_product_portraits([formula_id]).get(formula_id)
     if not portrait:
-        raise RuntimeError("画像写入后校验失败")
+        from services.formula_calculation_service import enabled
+        if enabled():
+            with _connect() as conn:
+                with conn.cursor() as cur:
+                    rows = _load_feature_rows(cur, DEFAULT_FEATURE_VERSION, [formula_id], include_drafts=True)
+                    portrait = build_portrait(rows[0]) if rows else None
+        if not portrait:
+            raise RuntimeError("画像写入后校验失败")
     return {"ok": True, "formula_id": formula_id,
             "feature_version": DEFAULT_FEATURE_VERSION,
             "portrait_version": PORTRAIT_VERSION,

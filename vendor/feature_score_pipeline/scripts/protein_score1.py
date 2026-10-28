@@ -1069,10 +1069,11 @@ def main():
     source_table = quote_identifier(SOURCE_TABLE)
     quote_identifier(OUTPUT_TABLE)
 
-    df = pd.read_sql("SELECT * FROM {}".format(source_table), engine)
     formula_id = os.getenv("FORMULA_ID")
+    sql = "SELECT * FROM {}".format(source_table)
     if formula_id:
-        df = df[pd.to_numeric(df["formula_id"], errors="coerce") == int(formula_id)].copy()
+        sql += " WHERE formula_id = :formula_id"
+    df = pd.read_sql(text(sql), engine, params={"formula_id": int(formula_id)} if formula_id else {})
     if (
         "protein_profile_status" in df.columns
         and os.getenv("PROTEIN_SCORE_INCLUDE_BLOCKED", "0").strip().lower()

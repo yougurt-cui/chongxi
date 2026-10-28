@@ -1098,7 +1098,10 @@ def _handle_context_message(user_id, conversation, message, state, source_messag
                 state['slots']['current_food'] = message
         state['slots']['_food_scenario'] = build_scenario(state['slots'])
     submission = context.get("food_submission")
-    if submission and submission.get("recognition_status") in {"pending","processing"}:
+    if submission and submission.get('result_available') and (submission.get('calculation_result') or {}).get('portrait'):
+        from services.formula_calculation_service import submission_reply
+        reply = submission_reply(submission, (context.get('current_food') or {}).get('formula_id'))
+    elif submission and submission.get("recognition_status") in {"pending","processing"}:
         reply = {"response_type":"processing","reply":submission.get("recognition_message") or "配料表正在识别，请稍后刷新投稿后再交给我分析。",
                  "result":{"resource":"food_submission","id":submission["id"],"interval_ms":2000}}
     elif submission and (submission.get("status") == "cancelled" or

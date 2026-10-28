@@ -25,7 +25,7 @@ FEATURE_LABELS = {"protein_quality": "蛋白质量", "protein_pressure": "蛋白
                   "fat_regulation_score": "脂肪调节支持"}
 
 
-def load_risks(formula_ids):
+def _load_legacy_risks(formula_ids):
     ids = sorted({int(value) for value in formula_ids if value})
     if not ids:
         return {}
@@ -100,7 +100,7 @@ def excluded_history_ids(pet, history, options, confirmed_text=""):
     return ids
 
 
-def load_nutrition(formula_ids):
+def _load_legacy_nutrition(formula_ids):
     """One bounded read, with no table initialisation or side effects."""
     ids = sorted({int(value) for value in formula_ids if value})
     if not ids:
@@ -271,3 +271,13 @@ def recommendation_text(recommendation):
     if len(recommendation.get('items') or []) < 3:
         lines.append('本次只展示已有的合格候选，不为凑数量放宽条件。')
     return '\n\n'.join(lines)
+
+
+def load_risks(formula_ids):
+    from services.guardian_product_portrait_service import _published_or_legacy
+    return _published_or_legacy(formula_ids, 'risks', _load_legacy_risks)
+
+
+def load_nutrition(formula_ids):
+    from services.guardian_product_portrait_service import _published_or_legacy
+    return _published_or_legacy(formula_ids, 'nutrition', _load_legacy_nutrition)

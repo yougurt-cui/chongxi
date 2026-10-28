@@ -201,7 +201,7 @@ def load_source_data(engine, available_columns: set) -> pd.DataFrame:
     sql = f"""
         SELECT {col_sql}
         FROM {quote_identifier(SOURCE_TABLE)}
-        WHERE formula_id IS NOT NULL
+        WHERE formula_id IN (SELECT formula_id FROM csv_labeling.catfood_standard_formula WHERE status='active' AND is_current=1)
           AND product_key IS NOT NULL
           AND TRIM(product_key) <> ''
     """

@@ -81,7 +81,22 @@ def _json_loads(value: Any, default: Any) -> Any:
         return default
 
 
+import threading
+_submission_schema_lock = threading.Lock()
+_submission_schema_ready = False
+
+
 def init_food_submission_tables() -> None:
+    global _submission_schema_ready
+    if _submission_schema_ready:
+        return
+    with _submission_schema_lock:
+        if not _submission_schema_ready:
+            _initialize_food_submission_tables()
+            _submission_schema_ready = True
+
+
+def _initialize_food_submission_tables() -> None:
     with _connect() as conn:
         with conn.cursor() as cursor:
             cursor.execute(
@@ -254,7 +269,20 @@ def _recognition_status(task: dict[str, Any], output: dict[str, Any]) -> str:
     return "processing"
 
 
-def _sync_recognition(row: dict[str, Any]) -> dict[str, Any]:
+def _customer_processing_stage(task_status, nodes):
+    remaining = [n for n in nodes if n['node_status'] not in {'success', 'skipped'}]
+    active = next((n for n in remaining if n['node_status'] == 'running'), None)
+    active = active or next((n for n in remaining if n['node_status'] == 'ready'), None) or next(iter(remaining), {})
+    code = active.get('node_code')
+    stage = ('正在接收照片' if code == 'upload_check' else '读取包装文字' if code == 'ocr_formula'
+             else '生成分析结果' if code in {'ingredient_standardize', 'product_portrait_summary', 'formula_profile', 'market_profile_build'}
+             else '整理配料与营养')
+    stage = {'done': '分析完成', 'cancelled': '已撤销', 'failed': '分析暂未完成',
+             'need_review': '等待资料核对', 'waiting_input': '等待补充资料'}.get(task_status, stage)
+    return stage
+
+
+def _sync_recognition(row: dict[str, Any], *, persist: bool = True) -> dict[str, Any]:
     if row.get("status") == "cancelled":
         return {**row, "processing_status": "cancelled", "processing_stage": "已撤销",
                 "processing_message": "已撤销此次投稿。", "result_available": False}
@@ -274,11 +302,17 @@ def _sync_recognition(row: dict[str, Any]) -> dict[str, Any]:
     product_id = product.get("product_id") or formula.get("product_id")
     formula_id = formula.get("formula_id") or formula_input.get("formula_id") or product.get("formula_id")
     recognition_status = _recognition_status(task, output)
-    portrait_ready = bool(formula_id) and (
+    from services.formula_calculation_service import enabled, published
+    versioned = enabled()
+    portrait_ready = not versioned and bool(formula_id) and (
         node_statuses.get("product_portrait_summary") == "success"
         or _formula_portrait_exists(formula_id)
     )
-    auto_completed = portrait_ready and row.get("review_status") != "rejected"
+    result_bundle = published([formula_id]).get(int(formula_id), {}) if versioned and formula_id else {}
+    if row.get('review_status') == 'rejected':
+        result_bundle = {}
+    result_ready = bool(result_bundle.get('portrait')) and not result_bundle.get('invalidated')
+    auto_completed = (result_ready and result_bundle.get('result_stage') == 'official' if versioned else portrait_ready) and row.get("review_status") != "rejected"
     values = {
         "recognition_status": recognition_status,
         "source_id": output.get("source_id"),
@@ -303,28 +337,30 @@ def _sync_recognition(row: dict[str, Any]) -> dict[str, Any]:
                                (product["product_id"],))
                 canonical = cursor.fetchone() or {}
                 values["recognized_product_name"] = canonical.get("standard_product_name") or values["recognized_product_name"]
-            cursor.execute(
-                f"""UPDATE {TABLE_NAME} SET recognition_status=%s,source_id=COALESCE(%s,source_id),
-                parsed_row_id=COALESCE(%s,parsed_row_id),recognized_brand=COALESCE(%s,recognized_brand),
-                recognized_product_name=COALESCE(%s,recognized_product_name),
-                ingredient_composition=COALESCE(%s,ingredient_composition),guarantee_json=%s,
-                recognition_result_json=%s,standard_product_id=COALESCE(%s,standard_product_id),
-                formula_id=COALESCE(%s,formula_id),catalog_key=COALESCE(%s,catalog_key),
-                review_status=CASE WHEN %s THEN 'approved' ELSE review_status END,
-                publish_status=CASE WHEN %s THEN 'published' ELSE publish_status END,
-                reviewed_at=CASE WHEN %s AND reviewed_at IS NULL THEN %s ELSE reviewed_at END,
-                reviewer=CASE WHEN %s AND reviewer IS NULL THEN 'pipeline:auto' ELSE reviewer END,
-                updated_at=%s WHERE id=%s""",
-                (
-                    values["recognition_status"], values["source_id"], values["parsed_row_id"],
-                    values["recognized_brand"], values["recognized_product_name"],
-                    values["ingredient_composition"], values["guarantee_json"],
-                    values["recognition_result_json"], values["standard_product_id"],
-                    values["formula_id"], values["catalog_key"], auto_completed,
-                    auto_completed, auto_completed, _now(), auto_completed, _now(), row["id"],
-                ),
-            )
-        conn.commit()
+            if persist:
+                cursor.execute(
+                    f"""UPDATE {TABLE_NAME} SET recognition_status=%s,source_id=COALESCE(%s,source_id),
+                    parsed_row_id=COALESCE(%s,parsed_row_id),recognized_brand=COALESCE(%s,recognized_brand),
+                    recognized_product_name=COALESCE(%s,recognized_product_name),
+                    ingredient_composition=COALESCE(%s,ingredient_composition),guarantee_json=%s,
+                    recognition_result_json=%s,standard_product_id=COALESCE(%s,standard_product_id),
+                    formula_id=COALESCE(%s,formula_id),catalog_key=COALESCE(%s,catalog_key),
+                    review_status=CASE WHEN %s THEN 'approved' ELSE review_status END,
+                    publish_status=CASE WHEN %s THEN 'published' ELSE publish_status END,
+                    reviewed_at=CASE WHEN %s AND reviewed_at IS NULL THEN %s ELSE reviewed_at END,
+                    reviewer=CASE WHEN %s AND reviewer IS NULL THEN 'pipeline:auto' ELSE reviewer END,
+                    updated_at=%s WHERE id=%s""",
+                    (
+                        values["recognition_status"], values["source_id"], values["parsed_row_id"],
+                        values["recognized_brand"], values["recognized_product_name"],
+                        values["ingredient_composition"], values["guarantee_json"],
+                        values["recognition_result_json"], values["standard_product_id"],
+                        values["formula_id"], values["catalog_key"], auto_completed,
+                        auto_completed, auto_completed, _now(), auto_completed, _now(), row["id"],
+                    ),
+                )
+        if persist:
+            conn.commit()
     stage = next((n for n in task.get("nodes", []) if n["node_status"] not in {"success", "skipped"}), {})
     # Detailed node errors remain in the admin task, not in the customer page.
     message = {
@@ -333,9 +369,12 @@ def _sync_recognition(row: dict[str, Any]) -> dict[str, Any]:
         "cancelled": "已撤销此次投稿。",
     }.get(task.get("task_status"), "")
     return {**row, **values, "processing_status": task.get("task_status"),
-            "processing_stage": stage.get("node_name") or "分析完成",
+            "processing_stage": _customer_processing_stage(task.get("task_status"), task.get("nodes", [])),
             "processing_message": message,
-            "result_available": task.get("task_status") == "done" and recognition_status == "success"}
+            "result_available": result_ready if versioned else task.get("task_status") == "done" and recognition_status == "success",
+            "result_id": result_bundle.get('result_id'), "result_stage": result_bundle.get('result_stage'),
+            "result_updating": result_bundle.get('updating', False), "calculation_result": result_bundle,
+            "review_status": values['review_status'] if not versioned or auto_completed else ('rejected' if row.get('review_status') == 'rejected' else 'pending')}
 
 
 def _serialize(row: dict[str, Any], images: list[dict[str, Any]] | None = None) -> dict[str, Any]:
@@ -365,6 +404,8 @@ def _serialize(row: dict[str, Any], images: list[dict[str, Any]] | None = None) 
         "processing_stage": row.get("processing_stage") or "排队中",
         "processing_message": row.get("processing_message") or "",
         "result_available": bool(row.get("result_available")),
+        "result_id": row.get('result_id'), "result_stage": row.get('result_stage'),
+        "result_updating": bool(row.get('result_updating')), "calculation_result": row.get('calculation_result') or {},
         "result_notification": public_config(),
         "created_at": str(row.get("created_at") or ""),
         "updated_at": str(row.get("updated_at") or ""),
@@ -470,7 +511,7 @@ def list_food_submissions(user_id: Any, *, limit: Any = 50) -> dict[str, Any]:
         with conn.cursor() as cursor:
             cursor.execute(f"SELECT * FROM {TABLE_NAME} WHERE user_id=%s ORDER BY created_at DESC LIMIT %s", (_clean(user_id, 128), limit))
             rows = list(cursor.fetchall() or [])
-    return {"ok": True, "count": len(rows), "items": [_serialize(_sync_recognition(row)) for row in rows]}
+    return {"ok": True, "count": len(rows), "items": [_serialize(_sync_recognition(row, persist=False)) for row in rows]}
 
 
 def get_food_submission(user_id: Any, submission_id: Any) -> dict[str, Any]:
@@ -483,7 +524,59 @@ def get_food_submission(user_id: Any, submission_id: Any) -> dict[str, Any]:
                 raise LookupError("食品添加记录不存在")
             cursor.execute(f"SELECT * FROM {IMAGE_TABLE} WHERE submission_id=%s AND user_id=%s ORDER BY sort_order", (row["id"], row["user_id"]))
             images = list(cursor.fetchall() or [])
-    return {"ok": True, "item": _serialize(_sync_recognition(row), images)}
+    return {"ok": True, "item": _serialize(_sync_recognition(row, persist=False), images)}
+
+
+def get_food_submission_status(user_id: Any, submission_id: Any) -> dict[str, Any]:
+    """Two read-only queries; never load task outputs or published result JSON."""
+    from services.formula_calculation_service import enabled, digest
+    init_food_submission_tables()
+    versioned = enabled()
+    columns, joins = "", ""
+    if versioned:
+        columns = """, c.requested_run_id,c.published_run_id,c.invalidated,
+            pub.result_stage,pub.updated_at AS result_updated_at,
+            (pub.status='published' AND pub.result_json IS NOT NULL) AS has_result"""
+        joins = """LEFT JOIN formula_calculation_task binding ON binding.task_id=BINARY s.orchestrator_task_id
+            LEFT JOIN formula_calculation_run target ON target.id=binding.run_id
+            LEFT JOIN formula_calculation_current c ON c.formula_id=COALESCE(target.formula_id,s.formula_id)
+            LEFT JOIN formula_calculation_run pub ON pub.id=c.published_run_id"""
+    with _connect(autocommit=True) as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(f"""SELECT s.id,s.status,s.review_status,s.publish_status,s.recognition_status,
+                s.updated_at,s.orchestrator_task_id,t.task_status,t.updated_at AS task_updated_at
+                {columns} FROM {TABLE_NAME} s
+                LEFT JOIN pipeline_task t ON t.id=BINARY s.orchestrator_task_id
+                {joins} WHERE s.id=%s AND s.user_id=%s LIMIT 1""",
+                (_clean(submission_id, 32), _clean(user_id, 128)))
+            row = cursor.fetchone()
+            if not row:
+                raise LookupError("食品添加记录不存在")
+            nodes = []
+            if row.get('orchestrator_task_id'):
+                cursor.execute("""SELECT node_code,node_status,updated_at FROM pipeline_task_node
+                    WHERE task_id=%s ORDER BY priority,created_at,node_code""", (row['orchestrator_task_id'],))
+                nodes = list(cursor.fetchall())
+    cancelled = row['status'] == 'cancelled' or row.get('task_status') == 'cancelled'
+    rejected = row['review_status'] == 'rejected'
+    task_status = ('cancelled' if cancelled else row.get('task_status') or
+                   ('failed' if row.get('orchestrator_task_id') else
+                    'done' if row['recognition_status'] == 'success' else 'created'))
+    result_ready = (bool(row.get('has_result')) and not row.get('invalidated') if versioned else
+                    task_status == 'done' and row['recognition_status'] == 'success')
+    result_ready = result_ready and not cancelled and not rejected
+    updating = bool(versioned and row.get('requested_run_id') and
+                    (row.get('invalidated') or row['requested_run_id'] != row.get('published_run_id')))
+    is_processing = not cancelled and not rejected and (task_status in {'created', 'processing'} or
+                      updating and task_status not in {'failed', 'need_review', 'waiting_input'})
+    provisional = result_ready and row.get('result_stage') == 'provisional'
+    needs_refresh = not cancelled and not rejected and (is_processing or provisional or task_status == 'need_review')
+    stage = _customer_processing_stage(task_status, nodes)
+    return {'ok': True, 'item': {'id': row['id'], 'revision': digest([row, nodes]),
+            'processing_status': task_status, 'processing_stage': stage,
+            'result_available': result_ready, 'result_id': str(row['published_run_id']) if result_ready and versioned else None,
+            'result_stage': row.get('result_stage') if result_ready else None,
+            'result_updating': updating, 'is_processing': is_processing, 'needs_refresh': needs_refresh}}
 
 
 def get_submission_image(user_id: Any, submission_id: Any, image_id: Any) -> dict[str, Any]:

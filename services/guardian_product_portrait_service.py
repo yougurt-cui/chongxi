@@ -25,7 +25,7 @@ def _portrait_score(value, field, maximum):
     return number / maximum if isfinite(number) and 0 <= number <= maximum else None
 
 
-def load_five_features(formula_ids):
+def _load_legacy_five_features(formula_ids):
     ids = sorted({int(i) for i in formula_ids if i})
     if not ids:
         return {}
@@ -50,7 +50,7 @@ def load_five_features(formula_ids):
         return {}
 
 
-def load_product_portraits(formula_ids):
+def _load_legacy_product_portraits(formula_ids):
     """Never rebuild in chat. Stale, incompatible or invalid rows are unavailable."""
     ids = sorted({int(i) for i in formula_ids if i})
     if not ids:
@@ -105,6 +105,23 @@ def load_product_portraits(formula_ids):
         return {}
 
 
+def _published_or_legacy(formula_ids, field, legacy):
+    from services.formula_calculation_service import published
+    ids = sorted({int(i) for i in formula_ids if i})
+    versions = published(ids)
+    result = legacy([i for i in ids if i not in versions])
+    result.update({i: value[field] for i, value in versions.items() if value.get(field)})
+    return result
+
+
+def load_five_features(formula_ids):
+    return _published_or_legacy(formula_ids, 'features', _load_legacy_five_features)
+
+
+def load_product_portraits(formula_ids):
+    return _published_or_legacy(formula_ids, 'portrait', _load_legacy_product_portraits)
+
+
 def compare_portraits(current, target):
     result = {'status': 'unavailable', 'common': [], 'complements': [], 'shortcomings': [],
               'missing_dimensions': [], 'feature_version': DEFAULT_FEATURE_VERSION,
@@ -116,6 +133,9 @@ def compare_portraits(current, target):
     if any(p.get('feature_version') != DEFAULT_FEATURE_VERSION or p.get('portrait_version') != PORTRAIT_VERSION
            for p in (current, target)):
         result['note'] = '画像版本不一致，暂不比较。'
+        return result
+    if current.get('calculation_version') != target.get('calculation_version'):
+        result['note'] = '两款粮的计算规则版本不同，更新到同一版本后再比较。'
         return result
     result.update(current_formula_id=current['formula_id'], target_formula_id=target['formula_id'])
     for field, (label, maximum, name) in PORTRAIT_DIMENSIONS.items():

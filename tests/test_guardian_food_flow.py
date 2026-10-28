@@ -15,6 +15,7 @@ INCOMPLETE = {**NEW, "catalog_key": "formula:4", "formula_id": 4, "product_id": 
 
 class FoodFlowTests(unittest.TestCase):
     def setUp(self):
+        patch.object(food, 'load_factor_profiles', return_value={}).start()
         patch.object(food, 'load_product_portraits', return_value={}).start()
         patch.object(food, 'load_nutrition', return_value={}).start()
         patch.object(food, 'load_risks', return_value={}).start()

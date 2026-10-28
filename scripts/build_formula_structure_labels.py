@@ -99,7 +99,7 @@ def load_protein(engine) -> pd.DataFrame:
         "primary_meat_source_type, secondary_meat_source_type, meat_source_complexity, "
         "animal_sources, protein_source_details, "
         "plant_protein_interference, hydrolyzed_protein_role "
-        "FROM protein_source_aggregate",
+        "FROM protein_source_aggregate WHERE formula_id IN (SELECT formula_id FROM csv_labeling.catfood_standard_formula WHERE status='active' AND is_current=1)",
         engine,
     )
 
