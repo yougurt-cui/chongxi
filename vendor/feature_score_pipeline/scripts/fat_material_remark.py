@@ -451,7 +451,7 @@ def fetch_source_data(conn):
         FROM {SOURCE_TABLE} s
         JOIN csv_labeling.catfood_formula_feature_profile gate
           ON gate.formula_id = s.formula_id
-         AND gate.overall_status = 'ready_for_rebuild'
+         AND gate.overall_status IN ('ready_for_rebuild', 'provisional_ready')
         LEFT JOIN ranked_fat_guarantee rg
           ON rg.source_id = s.source_id
          AND rg.rn = 1

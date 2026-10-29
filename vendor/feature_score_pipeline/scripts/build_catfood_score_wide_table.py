@@ -241,7 +241,7 @@ def main():
           ON parsed.formula_id = protein.formula_id
         INNER JOIN csv_labeling.catfood_formula_feature_profile AS gate
           ON gate.formula_id = protein.formula_id
-         AND gate.overall_status = 'ready_for_rebuild'
+         AND gate.overall_status IN ('ready_for_rebuild', 'provisional_ready')
         """,
         engine,
     )

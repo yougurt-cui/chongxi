@@ -1088,7 +1088,7 @@ def batch_process():
                 JOIN {STANDARD_DB}.catfood_standard_brand b ON b.brand_id=p.brand_id
                 JOIN {STANDARD_DB}.catfood_formula_feature_profile gate
                   ON gate.formula_id=s.formula_id
-                 AND gate.overall_status='ready_for_rebuild'
+                 AND gate.overall_status IN ('ready_for_rebuild','provisional_ready')
                 WHERE (%s IS NULL OR s.formula_id=%s)
             """, (formula_id, formula_id))
             rows = cursor.fetchall()

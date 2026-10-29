@@ -819,7 +819,7 @@ def main() -> None:
                   SELECT 1
                   FROM {SOURCE_DB}.catfood_formula_feature_profile gate
                   WHERE gate.formula_id = s.formula_id
-                    AND gate.overall_status = 'ready_for_rebuild'
+                    AND gate.overall_status IN ('ready_for_rebuild', 'provisional_ready')
               )
         """
 
