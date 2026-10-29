@@ -554,14 +554,23 @@ def build_formula_feature_input(
                 if completeness >= 0.7
                 else "nutrition_missing"
             )
+            cursor.execute(
+                "SELECT unmatched_ingredient_count, overall_status "
+                "FROM catfood_formula_feature_profile WHERE formula_id=%s",
+                (int(formula_id),),
+            )
+            ingredient_profile = cursor.fetchone() or {}
+            has_ingredient_proxy = int(ingredient_profile.get("unmatched_ingredient_count") or 0) > 0
             result_stage = (
                 "provisional"
-                if formula.get("confirmation_status") == "provisional"
+                if formula.get("confirmation_status") == "provisional" or has_ingredient_proxy
                 else "official"
             )
             quality_flags: list[str] = []
-            if result_stage == "provisional":
+            if formula.get("confirmation_status") == "provisional":
                 quality_flags.append("formula_unconfirmed")
+            if has_ingredient_proxy:
+                quality_flags.append("ingredient_proxy")
             if build_status == "nutrition_missing":
                 quality_flags.append("nutrition_incomplete")
             from services.formula_calculation_service import input_fingerprint
