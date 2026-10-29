@@ -517,7 +517,9 @@ def requeue_formulas(formula_ids, *, invalidate=False):
             if invalidate:
                 cur.execute(f'UPDATE formula_calculation_current SET invalidated=1 WHERE formula_id IN ({marks})', ids)
             cur.execute(f'''SELECT DISTINCT t.id FROM pipeline_task t
-                JOIN formula_calculation_task b ON b.task_id=t.id
+                JOIN formula_calculation_task b
+                  ON CONVERT(b.task_id USING utf8mb4) COLLATE utf8mb4_unicode_ci
+                   = CONVERT(t.id USING utf8mb4) COLLATE utf8mb4_unicode_ci
                 JOIN formula_calculation_run r ON r.id=b.run_id
                 WHERE t.task_status<>'cancelled' AND r.formula_id IN ({marks})''', ids)
             tasks = [r['id'] for r in cur.fetchall()]
