@@ -7,6 +7,7 @@ from services.catfood_standardization_service import (
     _merge_json_lists,
     _preferred_value,
     _select_exact_formula_auto_match,
+    _high_confidence_new_product_name,
     ingredient_similarity,
     nutrition_similarity,
     normalize_ingredients,
@@ -16,6 +17,33 @@ from services.catfood_standardization_service import (
 
 
 class CatfoodStandardizationServiceTest(unittest.TestCase):
+    def test_high_confidence_submitted_name_can_create_new_product(self):
+        result = _high_confidence_new_product_name(
+            {"product_name": "LA20"},
+            {"brand_status": "matched", "brand_confidence": 1.0},
+            formula_precheck={"precheck_status": "clear"},
+            name_matches=[],
+            formula_matches=[{"score": 0.3, "auto_match": False, "fingerprint_exact": False}],
+        )
+        self.assertEqual(result, "LA20")
+
+    def test_new_product_auto_approval_rejects_ocr_placeholder_and_conflicts(self):
+        mapping = {"brand_status": "matched", "brand_confidence": 1.0}
+        clear = {"precheck_status": "clear"}
+        self.assertIsNone(_high_confidence_new_product_name(
+            {"product_name": "OCR f341c89b74"}, mapping,
+            formula_precheck=clear, name_matches=[], formula_matches=[],
+        ))
+        self.assertIsNone(_high_confidence_new_product_name(
+            {"product_name": "T24"}, mapping,
+            formula_precheck={"precheck_status": "matched"}, name_matches=[], formula_matches=[],
+        ))
+        self.assertIsNone(_high_confidence_new_product_name(
+            {"product_name": "T24"}, mapping,
+            formula_precheck=clear, name_matches=[],
+            formula_matches=[{"fingerprint_exact": True}],
+        ))
+
     def test_exact_formula_auto_reuses_unique_same_brand_named_product(self):
         match = _select_exact_formula_auto_match(
             [

@@ -1881,6 +1881,90 @@ def _product_name_candidates(payload: dict[str, Any], mapping: dict[str, Any]) -
     return candidates
 
 
+def _high_confidence_new_product_name(
+    payload: dict[str, Any],
+    mapping: dict[str, Any],
+    *,
+    formula_precheck: dict[str, Any],
+    name_matches: list[dict[str, Any]],
+    formula_matches: list[dict[str, Any]],
+) -> str | None:
+    """Return a safe user-supplied name that may create a new active product."""
+    product_name = _clean(payload.get("product_name"))
+    normalized = normalize_name(product_name)
+    if (
+        mapping.get("brand_status") != "matched"
+        or float(mapping.get("brand_confidence") or 0) < 0.95
+        or not product_name
+        or len(product_name) > 128
+        or len(normalized) < 2
+        or not re.search(r"[a-zA-Z\u4e00-\u9fff]", product_name)
+        or re.fullmatch(r"OCR[0-9a-f]{6,}", normalized, flags=re.IGNORECASE)
+        or name_matches
+        or any(item.get("fingerprint_exact") or item.get("auto_match") for item in formula_matches)
+        or str(formula_precheck.get("precheck_status") or "") != "clear"
+    ):
+        return None
+    return product_name
+
+
+def _activate_new_standard_product(
+    cursor,
+    *,
+    candidate_product_id: int,
+    brand_id: int,
+    product_name: str,
+) -> dict[str, Any]:
+    """Approve a high-confidence candidate and materialize its standard product."""
+    cursor.execute(
+        f"""
+        UPDATE `{PRODUCT_CANDIDATE_TABLE}`
+        SET standard_product_name = %s,
+            display_name = %s,
+            quality_level = 'strong',
+            review_status = 'approved',
+            active = 1,
+            quality_reasons_json = JSON_ARRAY('高可信新增产品自动批准'),
+            updated_at = NOW()
+        WHERE product_id = %s
+        """,
+        (product_name, product_name, candidate_product_id),
+    )
+    cursor.execute(
+        f"""
+        INSERT INTO `{PRODUCT_TABLE}`(
+          brand_id, standard_product_name, display_name, candidate_type,
+          active, source_candidate_id
+        ) VALUES(%s, %s, %s, 'official_name', 1, %s)
+        ON DUPLICATE KEY UPDATE
+          display_name = VALUES(display_name),
+          active = 1,
+          source_candidate_id = VALUES(source_candidate_id),
+          product_id = LAST_INSERT_ID(product_id)
+        """,
+        (brand_id, product_name, product_name, candidate_product_id),
+    )
+    standard_product_id = int(cursor.lastrowid)
+    cursor.execute(
+        f"""
+        INSERT INTO `{PRODUCT_ALIAS_TABLE}`(
+          product_id, brand_id, alias_name, normalized_alias, source, active
+        ) VALUES(%s, %s, %s, %s, 'high_confidence_auto_create', 1)
+        ON DUPLICATE KEY UPDATE
+          product_id = VALUES(product_id),
+          alias_name = VALUES(alias_name),
+          active = 1
+        """,
+        (standard_product_id, brand_id, product_name, normalize_name(product_name)),
+    )
+    return {
+        "product_id": standard_product_id,
+        "brand_id": brand_id,
+        "standard_product_name": product_name,
+        "display_name": product_name,
+    }
+
+
 def _name_match_conflicts_with_formula_precheck(product_id: int, precheck: dict[str, Any]) -> bool:
     if not isinstance(precheck, dict):
         return False
@@ -2146,6 +2230,43 @@ def standardize_product(payload: dict[str, Any]) -> dict[str, Any]:
             else:
                 status = "pending"
             candidate_product_id = None
+            trusted_new_name = None
+            if status == "pending":
+                trusted_new_name = _high_confidence_new_product_name(
+                    payload,
+                    mapping,
+                    formula_precheck=formula_precheck,
+                    name_matches=name_matches,
+                    formula_matches=formula_candidates,
+                )
+            if trusted_new_name:
+                brand_name = ""
+                cursor.execute(
+                    f"SELECT standard_brand_name FROM `{BRAND_TABLE}` WHERE brand_id = %s",
+                    (mapping["brand_id"],),
+                )
+                brand_row = cursor.fetchone()
+                if brand_row:
+                    brand_name = _clean(brand_row.get("standard_brand_name"))
+                candidate_product_id = _upsert_product_review_candidate(
+                    cursor,
+                    mapping={
+                        **mapping,
+                        "raw_product_name": trusted_new_name,
+                        "standard_brand_name": brand_name,
+                    },
+                    product_status="auto_approved_new",
+                )
+                if candidate_product_id is not None:
+                    match = _activate_new_standard_product(
+                        cursor,
+                        candidate_product_id=candidate_product_id,
+                        brand_id=int(mapping["brand_id"]),
+                        product_name=trusted_new_name,
+                    )
+                    status = "matched"
+                    confidence = 1.0
+                    match_method = "high_confidence_new_product"
             if status != "matched":
                 brand_name = ""
                 cursor.execute(
