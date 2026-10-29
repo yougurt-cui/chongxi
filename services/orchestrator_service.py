@@ -1229,8 +1229,9 @@ def output_check(node_code: str, output: dict[str, Any], task_payload: dict[str,
         return CheckResult(False, NODE_FAILED, f"配方输入状态异常: {status or 'empty'}")
     if node_code == "ingredient_extract":
         status = str(output.get("overall_status") or "")
-        if status == "ready_for_rebuild":
-            return CheckResult(True, NODE_SUCCESS, "原料标准化与 Profile 检查通过")
+        if status in {"ready_for_rebuild", "provisional_ready"}:
+            message = "原料粗分类已完成，可继续初算" if status == "provisional_ready" else "原料标准化与 Profile 检查通过"
+            return CheckResult(True, NODE_SUCCESS, message, {"result_stage": "provisional" if status == "provisional_ready" else "official"})
         if status in {"partially_ready", "need_review"}:
             return CheckResult(False, NODE_NEED_REVIEW, f"Profile 状态需要复核: {status}")
         return CheckResult(False, NODE_FAILED, f"Profile 状态异常: {status or 'empty'}")
@@ -1247,8 +1248,11 @@ def output_check(node_code: str, output: dict[str, Any], task_payload: dict[str,
     if node_code == "formula_profile":
         return _check_formula_profile(output)
     if node_code == "market_profile_build":
-        if output.get('scope') == 'deferred_market' and output.get('queued'):
-            return CheckResult(True, NODE_SUCCESS, "市场更新已独立排队，不阻塞当前结果")
+        if output.get('scope') == 'deferred_market':
+            if output.get('queued'):
+                return CheckResult(True, NODE_SUCCESS, "市场更新已独立排队，不阻塞当前结果")
+            if output.get('reason') == 'provisional_result_not_published_to_market':
+                return CheckResult(True, NODE_SUCCESS, "初算结果不进入市场画像，正式结果生成后再更新")
         return _check_market_profile_build(output)
     if output:
         return CheckResult(True, NODE_SUCCESS, "默认输出检查通过")
@@ -1525,6 +1529,27 @@ def get_task(task_id: str) -> dict[str, Any] | None:
     return task
 
 
+def _coerce_int(value: Any) -> int | None:
+    """安全转 int：'null'/''/None/非数字一律返回 None，不抛异常。
+
+    JSON_EXTRACT 命中 JSON null 时 JSON_UNQUOTE 会返回字符串 'null'，
+    直接 int('null') 会 ValueError，进而让整个列表接口 400。
+    """
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value
+    text = str(value).strip()
+    if not text or text.lower() in {"null", "none", "nan"}:
+        return None
+    try:
+        return int(float(text)) if "." in text else int(text)
+    except (TypeError, ValueError):
+        return None
+
+
 def list_review_items(limit: int = 50, statuses: list[str] | None = None) -> dict[str, Any]:
     init_db()
     limit = max(1, min(int(limit or 50), 200))
@@ -1553,10 +1578,13 @@ def list_review_items(limit: int = 50, statuses: list[str] | None = None) -> dic
                     n.error_message AS node_error_message,
                     n.updated_at AS node_updated_at,
                     o.output_json,
-                    COALESCE(
-                        JSON_UNQUOTE(JSON_EXTRACT(o.output_json, '$.formula_id')),
-                        JSON_UNQUOTE(JSON_EXTRACT(fi.output_json, '$.formula_id')),
-                        JSON_UNQUOTE(JSON_EXTRACT(fs.output_json, '$.formula_id'))
+                    NULLIF(
+                        COALESCE(
+                            JSON_UNQUOTE(JSON_EXTRACT(o.output_json, '$.formula_id')),
+                            JSON_UNQUOTE(JSON_EXTRACT(fi.output_json, '$.formula_id')),
+                            JSON_UNQUOTE(JSON_EXTRACT(fs.output_json, '$.formula_id'))
+                        ),
+                        'null'
                     ) AS formula_id
                 FROM pipeline_task_node n
                 JOIN pipeline_task t ON t.id = n.task_id
@@ -1589,7 +1617,7 @@ def list_review_items(limit: int = 50, statuses: list[str] | None = None) -> dic
                 "node_status": row["node_status"],
                 "node_error_message": row["node_error_message"],
                 "node_updated_at": str(row["node_updated_at"]),
-                "formula_id": int(row["formula_id"]) if row.get("formula_id") else None,
+                "formula_id": _coerce_int(row.get("formula_id")),
                 "output": _json_loads(row["output_json"], {}),
             }
         )

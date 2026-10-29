@@ -61,6 +61,7 @@ def build_science_features(
     items: Iterable[dict[str, Any]],
     profiles: dict[str, dict[str, Any]],
 ) -> dict[str, Any]:
+    items = list(items)
     fields = {
         "fat_sources": [],
         "fat_source_types": [],
@@ -78,7 +79,8 @@ def build_science_features(
         if item.get("is_ignored"):
             continue
         standard_id = str(item.get("standard_ingredient_id") or "")
-        profile = profiles.get(standard_id)
+        from services.ingredient_coarse_proxy_service import proxy_profile
+        profile = profiles.get(standard_id) or proxy_profile(item)
         if not profile or profile.get("science_status") != "active":
             continue
         category = str(profile.get("nutrition_category") or "")

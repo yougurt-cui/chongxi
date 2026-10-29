@@ -131,7 +131,7 @@ def materialize_formula_scores(*, formula_id: int, batch_id: str | None = None) 
                 (formula_id,),
             )
             profile = cursor.fetchone()
-    if not profile or profile["overall_status"] != "ready_for_rebuild":
+    if not profile or profile["overall_status"] not in {"ready_for_rebuild", "provisional_ready"}:
         return {"ok": False, "status": "need_review", "formula_id": formula_id, "overall_status": profile and profile["overall_status"]}
 
     source_statuses = _science_source_statuses(formula_id)
@@ -181,7 +181,7 @@ def materialize_formula_science_features(
                 (formula_id,),
             )
             profile = cursor.fetchone()
-    if not profile or profile["overall_status"] != "ready_for_rebuild":
+    if not profile or profile["overall_status"] not in {"ready_for_rebuild", "provisional_ready"}:
         return {
             "ok": False,
             "status": "need_review",

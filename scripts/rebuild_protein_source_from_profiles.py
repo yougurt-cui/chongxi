@@ -126,7 +126,7 @@ def load_rows(formula_id: int | None = None) -> list[dict[str, Any]]:
                   ON i.formula_id=fi.formula_id AND i.is_ignored=0
                 LEFT JOIN catfood_ingredient_science_profile sp
                   ON sp.standard_ingredient_id=i.standard_ingredient_id
-                WHERE p.overall_status='ready_for_rebuild'
+                WHERE p.overall_status IN ('ready_for_rebuild','provisional_ready')
                   AND (%s IS NULL OR fi.formula_id=%s)
                 ORDER BY fi.formula_id, i.position
                 """
@@ -145,6 +145,14 @@ def load_rows(formula_id: int | None = None) -> list[dict[str, Any]]:
 
     grouped: dict[int, dict[str, Any]] = {}
     for source in source_rows:
+        if not source.get("science_status"):
+            from services.ingredient_coarse_proxy_service import proxy_profile
+            proxy = proxy_profile(source)
+            if proxy:
+                source["science_status"] = proxy.get("science_status")
+                source["science_nutrition_category"] = proxy.get("nutrition_category")
+                source["science_domain_attributes_json"] = proxy.get("domain_attributes_json")
+                source["science_profile_version"] = proxy.get("profile_version")
         formula_id = int(source["formula_id"])
         group = grouped.setdefault(formula_id, {"source": source, "items": []})
         if source.get("position") is not None:

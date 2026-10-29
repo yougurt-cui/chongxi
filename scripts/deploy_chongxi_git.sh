@@ -53,6 +53,7 @@ git pull --ff-only origin "$REMOTE_BRANCH"
   services/formula_feature_link_service.py \
   services/fiber_science_materialization_service.py \
   services/fat_science_materialization_service.py \
+  services/ingredient_coarse_proxy_service.py \
   services/formula_incremental_service.py \
   services/formula_calculation_service.py \
   services/unified_product_profile_service.py \
@@ -117,6 +118,7 @@ git pull --ff-only origin "$REMOTE_BRANCH"
   vendor/feature_score_pipeline/scripts/protein_score1.py \
   vendor/feature_score_pipeline/scripts/rebuild_protein_source_aggregate.py \
   scripts/rebuild_protein_source_from_profiles.py \
+  scripts/ingredient_calibrator.py \
   scripts/generate_pet_content.py \
   scripts/pet_material_onefile.py \
   scripts/extract_product_preference_qwen.py \

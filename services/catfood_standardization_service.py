@@ -848,7 +848,27 @@ def list_standard_ingredients(*, query: str = "", limit: int = 1000) -> list[dic
             return cursor.fetchall()
 
 
+def _calibration_payload(row: dict[str, Any]) -> dict[str, Any]:
+    """候选表里 qwen-calibrator 写的结论（model_result_json 可能被别的流程用过，只认带 verdict 的）。"""
+    raw = row.get("model_result_json")
+    if not raw:
+        return {}
+    try:
+        payload = json.loads(raw) if isinstance(raw, str) else dict(raw)
+    except (TypeError, ValueError):
+        return {}
+    if not isinstance(payload, dict) or "verdict" not in payload:
+        return {}
+    return payload
+
+
 def list_ingredient_review_items(*, formula_id: int | None = None, limit: int = 200) -> dict[str, Any]:
+    """待审原材料，按 AI 结论分成「可自动确认」和「待人工」两组返回。
+
+    verdict=auto   模型判定等价且通过全部确定性闸门 → 页面可直接批量确认
+    verdict=manual 模型放弃 / 投票未过半 / 被闸门拦截 / 库中无对应
+    verdict=unrun  尚未校准过
+    """
     where = "WHERE i.match_status = 'unmatched' AND i.review_status = 'pending'"
     params: list[Any] = []
     if formula_id is not None:
@@ -860,10 +880,17 @@ def list_ingredient_review_items(*, formula_id: int | None = None, limit: int = 
             cursor.execute(
                 f"""
                 SELECT i.*, c.candidate_id, c.context,
-                       c.suggested_standard_ingredient_id, c.suggested_standard_name
+                       c.suggested_standard_ingredient_id, c.suggested_standard_name,
+                       c.model_result_json, c.status AS candidate_status
                 FROM catfood_formula_ingredient_item i
                 LEFT JOIN catfood_standard_ingredient_candidate c
-                  ON c.normalized_raw_name = i.raw_name AND c.status = 'pending'
+                  ON c.candidate_id = (
+                    SELECT c2.candidate_id
+                    FROM catfood_standard_ingredient_candidate c2
+                    WHERE c2.raw_name = i.raw_name
+                    ORDER BY (c2.reviewer = 'qwen-calibrator') DESC, c2.candidate_id DESC
+                    LIMIT 1
+                  )
                 {where}
                 ORDER BY i.formula_id DESC, i.position
                 LIMIT %s
@@ -871,7 +898,120 @@ def list_ingredient_review_items(*, formula_id: int | None = None, limit: int = 
                 params,
             )
             items = cursor.fetchall()
-    return {"ok": True, "items": items, "count": len(items)}
+
+    groups: dict[str, list[dict[str, Any]]] = {"auto": [], "manual": [], "unrun": []}
+    counter: dict[str, dict[str, int]] = {}
+    for row in items:
+        payload = _calibration_payload(row)
+        verdict = str(payload.get("verdict") or "unrun")
+        if verdict not in groups:
+            verdict = "unrun"
+        votes = payload.get("votes") or {}
+        item = {
+            **row,
+            "ai_verdict": verdict,
+            "ai_standard_id": payload.get("suggested_standard_id"),
+            "ai_standard_name": payload.get("suggested_standard_name"),
+            "ai_proposed_standard_id": payload.get("model_proposed_standard_id"),
+            "ai_proposed_standard_name": payload.get("model_proposed_standard_name"),
+            "ai_reasons": payload.get("reasons") or [],
+            "ai_vote_winning": votes.get("winning"),
+            "ai_vote_total": votes.get("total"),
+            "ai_position": payload.get("position"),
+            "ai_formula_count": payload.get("formula_count"),
+            "ai_model": payload.get("model"),
+            "ai_reviewed_at": payload.get("reviewed_at"),
+        }
+        item.pop("model_result_json", None)
+        groups[verdict].append(item)
+        # 统计按「原料名」而不是按行，避免同一名字在多个配方里被重复计数
+        bucket = counter.setdefault(verdict, {})
+        bucket[row["raw_name"]] = bucket.get(row["raw_name"], 0) + 1
+
+    return {
+        "ok": True,
+        "items": [x for group in ("auto", "manual", "unrun") for x in groups[group]],
+        "groups": groups,
+        "count": len(items),
+        "summary": {
+            "total_rows": len(items),
+            "auto_rows": len(groups["auto"]),
+            "manual_rows": len(groups["manual"]),
+            "unrun_rows": len(groups["unrun"]),
+            "auto_names": len(counter.get("auto", {})),
+            "manual_names": len(counter.get("manual", {})),
+            "unrun_names": len(counter.get("unrun", {})),
+        },
+    }
+
+
+def batch_resolve_ingredient_reviews(payload: dict[str, Any]) -> dict[str, Any]:
+    """批量把原料挂到已有标准成分（等价于逐条 resolve action=alias）。
+
+    resolve 会整表重建配方、item_id 全部变化，所以按 raw_name 逐轮重查，
+    每个原料名只处理第一条（写别名后全局生效），最多 3 轮。
+    """
+    targets = payload.get("items") or []
+    reviewer = _clean(payload.get("reviewer")) or "pipeline-review-page"
+    if not isinstance(targets, list) or not targets:
+        raise ValueError("items 不能为空")
+    wanted: dict[str, str] = {}
+    for entry in targets:
+        name = _clean((entry or {}).get("raw_name"))
+        standard_id = _clean((entry or {}).get("standard_ingredient_id"))
+        if name and standard_id:
+            wanted[name] = standard_id
+    if not wanted:
+        raise ValueError("items 里没有有效的 raw_name / standard_ingredient_id")
+
+    applied: list[dict[str, Any]] = []
+    failed: list[dict[str, Any]] = []
+    resumed: list[str] = []
+    done: set[str] = set()
+    for _round in range(3):
+        remaining = {k: v for k, v in wanted.items() if k not in done}
+        if not remaining:
+            break
+        placeholders = ",".join(["%s"] * len(remaining))
+        with _connect() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    f"""
+                    SELECT item_id, raw_name, formula_id
+                    FROM catfood_formula_ingredient_item
+                    WHERE coalesce(is_ignored, 0) = 0
+                      AND match_status = 'unmatched' AND review_status = 'pending'
+                      AND raw_name IN ({placeholders})
+                    ORDER BY item_id
+                    """,
+                    list(remaining.keys()),
+                )
+                rows = cursor.fetchall()
+        seen: set[str] = set()
+        for row in rows:
+            name = row["raw_name"]
+            if name in seen or name in done:
+                continue
+            seen.add(name)
+            try:
+                result = resolve_ingredient_review(int(row["item_id"]), {
+                    "action": "alias",
+                    "standard_ingredient_id": remaining[name],
+                    "reviewer": reviewer,
+                    "review_note": "页面批量确认：AI 校准建议（%s）" % reviewer,
+                })
+            except Exception as exc:  # noqa: BLE001
+                failed.append({"raw_name": name, "formula_id": row["formula_id"], "error": str(exc)})
+                continue
+            done.add(name)
+            applied.append({"raw_name": name, "standard_ingredient_id": remaining[name],
+                            "formula_id": row["formula_id"]})
+            for task_id in result.get("resumed_task_ids") or []:
+                if task_id not in resumed:
+                    resumed.append(task_id)
+    return {"ok": True, "applied": applied, "failed": failed,
+            "resumed_task_ids": resumed,
+            "pending": sorted(set(wanted) - done)}
 
 
 def resolve_ingredient_review(item_id: int, payload: dict[str, Any]) -> dict[str, Any]:

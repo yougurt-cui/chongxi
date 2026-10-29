@@ -85,6 +85,8 @@ def _features_for_item(item: dict[str, Any]) -> dict[str, Any]:
             features["protein.animal_source"] = item["animal_source"]
     if item.get("protein_rule_ids"):
         features["protein.rule_ids"] = item["protein_rule_ids"]
+    if item.get("coarse_proxy"):
+        features["coarse_proxy"] = item["coarse_proxy"]
     return features
 
 
@@ -363,6 +365,11 @@ def backfill_formula(
             formula = cursor.fetchone()
             if not formula:
                 raise KeyError(f"formula_id 不存在: {formula_id}")
+            cursor.execute(
+                "SELECT confirmation_status FROM catfood_standard_formula WHERE formula_id=%s",
+                (int(formula_id),),
+            )
+            identity_confirmation = (cursor.fetchone() or {}).get("confirmation_status")
 
             ingredient_text = formula.get("ingredient_composition") or ""
             main_ingredient_text = _strip_additives(ingredient_text)
@@ -391,6 +398,9 @@ def backfill_formula(
                 protein_rules,
             )
             effective_items = [item for item in items if not item.get("is_ignored")]
+            from services.ingredient_coarse_proxy_service import apply_proxy
+            for item in effective_items:
+                apply_proxy(item)
             status_payload = _domain_status_for_unmatched(effective_items)
             if materialize_science_features:
                 science_profiles = _load_science_profiles(cursor, effective_items)
@@ -460,6 +470,11 @@ def backfill_formula(
 
             matched = sum(1 for item in effective_items if item.get("standard_ingredient_id"))
             unmatched = len(effective_items) - matched
+            result_stage = (
+                "official"
+                if not unmatched and identity_confirmation != "provisional"
+                else "provisional"
+            )
             domain_status = dict(status_payload["domain_status"])
             gates = {}
             dirty_domains = []
@@ -476,7 +491,8 @@ def backfill_formula(
                     dirty_domains.append(domain)
             allowed_count = len(dirty_domains)
             overall_status = (
-                "ready_for_rebuild" if allowed_count == 4
+                "ready_for_rebuild" if unmatched == 0 and allowed_count == 4
+                else "provisional_ready" if effective_items
                 else "partially_ready" if allowed_count
                 else "need_review"
             )
@@ -507,6 +523,8 @@ def backfill_formula(
                 "standardized_count": matched,
                 "ignored_count": ignored_count,
                 "unmatched_count": unmatched,
+                "proxy_count": unmatched,
+                "result_stage": result_stage,
                 "blocking_count": len(status_payload["blocking_domains"]),
                 "warning_count": len(status_payload["warning_domains"]),
                 "coverage": round(coverage, 5),
@@ -516,7 +534,8 @@ def backfill_formula(
                     {
                         "fingerprint": formula.get("ingredient_fingerprint"),
                         "items": [
-                            [item.get("position"), item.get("standard_ingredient_id"), bool(item.get("is_ignored"))]
+                            [item.get("position"), item.get("standard_ingredient_id"),
+                             (item.get("coarse_proxy") or {}).get("category"), bool(item.get("is_ignored"))]
                             for item in items
                         ],
                     },
@@ -573,6 +592,27 @@ def backfill_formula(
                     json.dumps({"gate": "gate-v1"}, ensure_ascii=False),
                 ),
             )
+            # The formula identity can already be confirmed while individual
+            # ingredients are still pending. Keep that calculation explicitly
+            # provisional until the strict ingredient gate is clean.
+            existing_quality_flags = formula.get("quality_flags_json") or []
+            if isinstance(existing_quality_flags, str):
+                try:
+                    existing_quality_flags = json.loads(existing_quality_flags)
+                except json.JSONDecodeError:
+                    existing_quality_flags = []
+            quality_flags = [flag for flag in existing_quality_flags if flag != "ingredient_proxy"]
+            if unmatched:
+                quality_flags.append("ingredient_proxy")
+            cursor.execute(
+                f"UPDATE `{FORMULA_INPUT_TABLE}` SET result_stage=%s, "
+                "quality_flags_json=%s WHERE formula_id=%s",
+                (
+                    result_stage,
+                    json.dumps(quality_flags, ensure_ascii=False),
+                    int(formula_id),
+                ),
+            )
         if apply:
             conn.commit()
         else:
@@ -587,6 +627,9 @@ def backfill_formula(
         "item_count": len(items),
         "matched_count": matched,
         "unmatched_count": unmatched,
+        "proxy_count": unmatched,
+        "result_stage": result_stage,
+        "overall_status": overall_status,
         "protein_source_details": labels.get("protein_source_details"),
         "main_protein_form": labels.get("primary_meat_source_type"),
         "secondary_protein_form": labels.get("secondary_meat_source_type"),

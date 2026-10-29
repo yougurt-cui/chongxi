@@ -168,6 +168,23 @@
       font-size: 12px;
       font-weight: 700;
     }
+    .chip-auto { background: #ecfdf5; border-color: #a7f3d0; color: #047857; }
+    .chip-manual { background: #fff7ed; border-color: #fed7aa; color: #9a3412; }
+    .chip-warn { background: #fef2f2; border-color: #fecaca; color: #b91c1c; }
+    .chip-muted { background: var(--panel-soft); border-color: var(--line); color: var(--muted); }
+    .card-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 12px;
+      padding: 14px;
+      border-bottom: 1px solid var(--line);
+    }
+    .card-head .muted { margin-top: 6px; max-width: 720px; line-height: 1.6; }
+    .reason-chips { display: flex; flex-wrap: wrap; gap: 6px; max-width: 300px; }
+    .reason-chips .chip { min-height: 24px; font-size: 11px; font-weight: 600; line-height: 1.4; padding: 3px 8px; }
+    .verdict-map { font-weight: 700; color: #047857; }
+    .verdict-map small { display: block; color: var(--muted); font-weight: 400; margin-top: 2px; }
     .table-wrap { overflow-x: auto; }
     table {
       width: 100%;
@@ -967,14 +984,49 @@
 
       <div id="ingredientIdentityPanel" hidden>
         <section class="toolbar">
-          <div><div class="title">待确认原材料身份</div><div id="ingredientIdentitySummary" class="muted">等待加载...</div></div>
-          <div class="row-actions"><input id="ingredientFormulaFilter" class="cell-input" value="291" placeholder="formula_id" />
-          <button id="ingredientIdentityRefresh" class="button secondary" type="button">刷新原料候选</button></div>
+          <div><div class="title">原材料身份确认</div><div id="ingredientIdentitySummary" class="muted">等待加载...</div></div>
+          <div class="row-actions"><input id="ingredientFormulaFilter" class="cell-input" value="" placeholder="formula_id（留空=全部）" />
+          <button id="ingredientIdentityRefresh" class="button secondary" type="button">刷新</button></div>
         </section>
-        <section class="card"><div class="table-wrap"><table style="min-width:1250px;"><thead><tr>
-          <th>配方</th><th>待确认原料</th><th>上下文</th><th>标准原料</th><th>原料族</th><th>来源类型</th><th>动物来源</th><th>营养角色</th><th>操作</th>
-        </tr></thead><tbody id="ingredientIdentityRows"></tbody></table></div>
-        <div id="ingredientIdentityEmpty" class="empty" style="display:none;">暂无待确认原料。</div></section>
+
+        <section class="card" style="margin-bottom:18px;">
+          <div class="card-head">
+            <div>
+              <div class="title">AI 批量确认 <span id="ingredientAiCount" class="chip chip-auto">0 条</span></div>
+              <div id="ingredientAiSummary" class="muted">模型判定语义等价、且通过物种/域/形态三道确定性闸门的原料，可直接批量挂到标准成分。</div>
+            </div>
+            <div class="row-actions">
+              <label class="muted" style="display:inline-flex;align-items:center;gap:6px;white-space:nowrap;cursor:pointer;">
+                <input id="ingredientIncludeGeneric" type="checkbox" style="width:auto;margin:0;" /> 含泛化映射
+              </label>
+              <button id="ingredientAiApply" class="button" type="button">全部确认</button>
+            </div>
+          </div>
+          <div class="table-wrap"><table style="min-width:1120px;"><thead><tr>
+            <th>原料</th><th>出现</th><th>位置</th><th>AI 建议映射</th><th>置信</th><th>上下文</th><th>操作</th>
+          </tr></thead><tbody id="ingredientAiRows"></tbody></table></div>
+          <div id="ingredientAiEmpty" class="empty" style="display:none;">暂无 AI 可自动确认的原料。</div>
+        </section>
+
+        <section class="card">
+          <div class="card-head">
+            <div>
+              <div class="title">等待人工确认 <span id="ingredientManualCount" class="chip chip-manual">0 条</span></div>
+              <div id="ingredientManualSummary" class="muted">模型放弃、投票未过半、被确定性闸门拦截，或尚未校准的原料。</div>
+            </div>
+            <div class="row-actions">
+              <select id="ingredientManualFilter" class="cell-input" style="min-width:160px;">
+                <option value="all">全部待人工</option>
+                <option value="manual">AI 已判需人工</option>
+                <option value="unrun">尚未校准</option>
+              </select>
+            </div>
+          </div>
+          <div class="table-wrap"><table style="min-width:1320px;"><thead><tr>
+            <th>原料</th><th>出现</th><th>位置</th><th>卡点</th><th>标准原料</th><th>原料族</th><th>来源类型</th><th>动物来源</th><th>营养角色</th><th>操作</th>
+          </tr></thead><tbody id="ingredientManualRows"></tbody></table></div>
+          <div id="ingredientManualEmpty" class="empty" style="display:none;">暂无待人工确认原料。</div>
+        </section>
       </div>
 
       <div id="scienceProfilePanel" hidden>
@@ -1454,8 +1506,17 @@
     const formulaIdentitySummaryEl = document.getElementById("formulaIdentitySummary");
     const formulaIdentityRefreshBtn = document.getElementById("formulaIdentityRefresh");
     const ingredientIdentityPanel = document.getElementById("ingredientIdentityPanel");
-    const ingredientIdentityRowsEl = document.getElementById("ingredientIdentityRows");
-    const ingredientIdentityEmptyEl = document.getElementById("ingredientIdentityEmpty");
+    const ingredientAiRowsEl = document.getElementById("ingredientAiRows");
+    const ingredientAiEmptyEl = document.getElementById("ingredientAiEmpty");
+    const ingredientAiCountEl = document.getElementById("ingredientAiCount");
+    const ingredientAiSummaryEl = document.getElementById("ingredientAiSummary");
+    const ingredientAiApplyBtn = document.getElementById("ingredientAiApply");
+    const ingredientIncludeGeneric = document.getElementById("ingredientIncludeGeneric");
+    const ingredientManualRowsEl = document.getElementById("ingredientManualRows");
+    const ingredientManualEmptyEl = document.getElementById("ingredientManualEmpty");
+    const ingredientManualCountEl = document.getElementById("ingredientManualCount");
+    const ingredientManualSummaryEl = document.getElementById("ingredientManualSummary");
+    const ingredientManualFilter = document.getElementById("ingredientManualFilter");
     const ingredientIdentitySummaryEl = document.getElementById("ingredientIdentitySummary");
     const ingredientIdentityRefreshBtn = document.getElementById("ingredientIdentityRefresh");
     const ingredientFormulaFilter = document.getElementById("ingredientFormulaFilter");
@@ -2685,21 +2746,140 @@
       }
     }
 
-    function renderIngredientIdentityItems(items) {
-      ingredientIdentitySummaryEl.textContent = `待确认 ${items.length} 条`;
-      ingredientIdentityRowsEl.innerHTML = "";
-      ingredientIdentityEmptyEl.style.display = items.length ? "none" : "block";
+    // 原材料身份：同一个原料名可能出现在多个配方里，按名字聚合，一次别名全局生效
+    let ingredientReviewGroups = { auto: [], manual: [] };
+    let lastIngredientPayload = { groups: { auto: [], manual: [], unrun: [] } };
+    // 「转人工」只是本次会话的取舍，不写库；刷新后仍在，关掉浏览器就回到 AI 建议
+    const ingredientManualOverrideKey = "chx_ingredient_manual_override";
+    function loadIngredientOverrides() {
+      try { return new Set(JSON.parse(window.sessionStorage.getItem(ingredientManualOverrideKey) || "[]")); }
+      catch { return new Set(); }
+    }
+    function saveIngredientOverrides(names) {
+      try { window.sessionStorage.setItem(ingredientManualOverrideKey, JSON.stringify([...names])); } catch { /* 忽略隐私模式 */ }
+    }
+
+    function groupIngredientReviewItems(items) {
+      const map = new Map();
       items.forEach((item) => {
-        const row = document.createElement("tr");
-        const options = (values, placeholder) => `<option value="">${placeholder}</option>${values.map((value) => `<option value="${escapeHtml(value)}">${escapeHtml(value)}</option>`).join("")}`;
-        row.innerHTML = `<td>${escapeHtml(item.formula_id)}</td><td><strong>${escapeHtml(item.raw_name)}</strong></td>
-          <td class="payload-cell">${escapeHtml(item.context || "-")}</td>
-          <td><input class="cell-input" data-field="standard_name" list="standardIngredientOptions" value="${escapeHtml(item.suggested_standard_name || "")}" placeholder="选择已有或输入新标准名" /></td>
+        const name = item.raw_name;
+        if (!map.has(name)) {
+          map.set(name, {
+            raw_name: name, item_id: item.item_id, formulaIds: [], positions: [],
+            verdict: item.ai_verdict || "unrun",
+            aiStandardId: item.ai_standard_id || "",
+            aiStandardName: item.ai_standard_name || "",
+            aiProposedId: item.ai_proposed_standard_id || "",
+            aiProposedName: item.ai_proposed_standard_name || "",
+            aiReasons: Array.isArray(item.ai_reasons) ? [...item.ai_reasons] : [],
+            aiWinning: item.ai_vote_winning, aiTotal: item.ai_vote_total,
+            aiModel: item.ai_model || "", aiReviewedAt: item.ai_reviewed_at || "",
+            context: item.context || "", suggestedName: item.suggested_standard_name || "",
+          });
+        }
+        const group = map.get(name);
+        const fid = String(item.formula_id ?? "");
+        if (fid && !group.formulaIds.includes(fid)) group.formulaIds.push(fid);
+        const pos = Number(item.position);
+        if (Number.isFinite(pos) && !group.positions.includes(pos)) group.positions.push(pos);
+        if (!group.aiReasons.length && Array.isArray(item.ai_reasons)) group.aiReasons = [...item.ai_reasons];
+        if (!group.aiProposedName && item.ai_proposed_standard_name) group.aiProposedName = item.ai_proposed_standard_name;
+      });
+      return [...map.values()].sort((a, b) => Math.min(...a.positions, 999) - Math.min(...b.positions, 999));
+    }
+
+    function ingredientAppearanceCell(group) {
+      const ids = group.formulaIds;
+      const preview = ids.slice(0, 3).map((id) => `f${id}`).join("、");
+      const more = ids.length > 3 ? ` 等 ${ids.length} 个` : "";
+      return `<td>${ids.length} 个配方<div class="muted">${escapeHtml(preview + more)}</div></td>`;
+    }
+
+    function ingredientPositionCell(group) {
+      if (!group.positions.length) return `<td class="muted">-</td>`;
+      return `<td>第 ${Math.min(...group.positions)} 位</td>`;
+    }
+
+    // 映射精度：标准名是原料名的子串且更短，说明把「细分」降级成了库里的「泛名」
+    // 例：冬南瓜粉 → 南瓜、羔羊肉粉 → 羊肉粉、油鲱鱼 → 鲱鱼。这类闸门拦不住，必须靠人看一眼。
+    const INGREDIENT_FORM_SUFFIXES = ["粉", "干", "油", "粒", "块", "片", "膏", "浆"];
+    function stripIngredientForm(name) {
+      const text = String(name || "").replace(/[（(].*?[）)]/g, "").trim();
+      const hit = INGREDIENT_FORM_SUFFIXES.find((suffix) => text.endsWith(suffix) && text.length > suffix.length + 1);
+      return hit ? text.slice(0, -hit.length) : text;
+    }
+    function ingredientMappingPrecision(group) {
+      const raw = stripIngredientForm(group.raw_name);
+      const standard = stripIngredientForm(group.aiStandardName);
+      if (!raw || !standard) return "unknown";
+      if (raw !== standard && raw.includes(standard)) return "generic";
+      return "exact";
+    }
+    function ingredientPrecisionChip(group) {
+      const precision = ingredientMappingPrecision(group);
+      if (precision === "generic") return `<span class="chip chip-manual">泛化映射 · 建议复核</span>`;
+      if (precision === "exact") return `<span class="chip chip-auto">精确</span>`;
+      return "";
+    }
+
+    function ingredientReasonChips(group) {
+      if (group.verdict === "unrun") {
+        // 含「、」的复合文本没法写别名（别名表按「、」切分），只能新建或判噪声
+        const composite = group.raw_name.includes("、");
+        return `<div class="reason-chips"><span class="chip chip-muted">尚未校准</span>${composite ? `<span class="chip chip-warn">复合文本，别名机制无法承载，需新建或判噪声</span>` : ""}</div>`;
+      }
+      if (!group.aiReasons.length) return `<div class="reason-chips"><span class="chip chip-manual">模型判需人工</span></div>`;
+      return `<div class="reason-chips">${group.aiReasons.map((reason) => `<span class="chip chip-manual">${escapeHtml(reason)}</span>`).join("")}</div>`;
+    }
+
+    function buildIngredientRow(group, mode) {
+      const row = document.createElement("tr");
+      const options = (values, placeholder) => `<option value="">${placeholder}</option>${values.map((value) => `<option value="${escapeHtml(value)}">${escapeHtml(value)}</option>`).join("")}`;
+      const nameCell = `<td><strong>${escapeHtml(group.raw_name)}</strong></td>`;
+      if (mode === "auto") {
+        const votes = group.aiTotal ? `${group.aiWinning}/${group.aiTotal}` : "-";
+        row.innerHTML = `${nameCell}${ingredientAppearanceCell(group)}${ingredientPositionCell(group)}
+          <td class="verdict-map">${escapeHtml(group.aiStandardName || "-")}<small>${escapeHtml(group.aiStandardId || "")}</small>
+            <div class="reason-chips" style="margin-top:6px;">${ingredientPrecisionChip(group)}</div></td>
+          <td><span class="chip chip-auto">${escapeHtml(votes)} 票</span></td>
+          <td class="payload-cell">${escapeHtml(compactText(group.context, 90) || "-")}</td>
+          <td><div class="row-actions"><button class="small-button" data-action="confirm" type="button">确认</button><button class="small-button secondary" data-action="to-manual" type="button">转人工</button><button class="small-button danger" data-action="noise" type="button">噪声</button></div></td>`;
+        row.querySelector('[data-action="to-manual"]').addEventListener("click", () => {
+          const set = loadIngredientOverrides();
+          set.add(group.raw_name);
+          saveIngredientOverrides(set);
+          showToast(`已转入人工清单：${group.raw_name}`);
+          renderIngredientIdentityItems(lastIngredientPayload);
+        });
+        row.querySelector('[data-action="confirm"]').addEventListener("click", async () => {
+          if (!group.aiStandardId) { showToast("这条没有 AI 建议映射", "error"); return; }
+          const precision = ingredientMappingPrecision(group);
+          const warn = precision === "generic"
+            ? `\n\n注意：${group.raw_name} → ${group.aiStandardName} 是把细分降级成了库里更泛的名字，确认前请核对。`
+            : "";
+          if (!window.confirm(`把“${group.raw_name}”挂到 ${group.aiStandardName}（${group.aiStandardId}）？${warn}`)) return;
+          await runAction(async () => {
+            const result = await api(`/api/catfood/standardization/ingredient-reviews/${group.item_id}/resolve`, {
+              method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify({
+                action: "alias", standard_ingredient_id: group.aiStandardId,
+                reviewer: "pipeline-review-page-ai", context: group.context || "",
+                review_note: "页面确认 AI 校准建议",
+              })
+            });
+            for (const taskId of result.resumed_task_ids || []) await api("/api/orchestrator/dispatch-call-sync", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({limit:1,task_id:taskId,node_codes:["ingredient_extract"]})});
+            showToast(result.science_profile_warning ? `原料身份已确认；${result.science_profile_warning}` : "原料身份已确认", result.science_profile_warning ? "error" : undefined);
+          });
+        });
+      } else {
+        const preset = group.aiProposedName || group.suggestedName || "";
+        row.innerHTML = `${nameCell}${ingredientAppearanceCell(group)}${ingredientPositionCell(group)}
+          ${ingredientReasonChips(group)}
+          <td><input class="cell-input" data-field="standard_name" list="standardIngredientOptions" value="${escapeHtml(preset)}" placeholder="选择已有或输入新标准名" /></td>
           <td><select class="cell-input" data-field="ingredient_family">${options(ingredientMetaOptions.families, "选择原料族")}</select></td>
           <td><select class="cell-input" data-field="source_type">${options(ingredientMetaOptions.sources, "选择来源类型")}</select></td>
           <td><select class="cell-input" data-field="animal_source">${options(ingredientMetaOptions.animals, "无/选择动物来源")}</select></td>
           <td><select class="cell-input" data-field="primary_nutrition_role">${options(ingredientMetaOptions.roles, "选择营养角色")}</select></td>
-          <td><div class="row-actions"><button class="small-button" data-action="alias" type="button">添加原料别名</button><button class="small-button secondary" data-action="create" type="button">添加标准原料</button><button class="small-button danger" data-action="noise" type="button">噪声</button></div></td>`;
+          <td><div class="row-actions"><button class="small-button" data-action="alias" type="button">添加别名</button><button class="small-button secondary" data-action="create" type="button">新建标准原料</button><button class="small-button danger" data-action="noise" type="button">噪声</button></div></td>`;
         const standardNameInput = row.querySelector('[data-field="standard_name"]');
         const metadataFields = ["ingredient_family", "source_type", "animal_source", "primary_nutrition_role"];
         const syncStandardMetadata = () => {
@@ -2713,32 +2893,124 @@
         standardNameInput.addEventListener("input", syncStandardMetadata);
         standardNameInput.addEventListener("change", syncStandardMetadata);
         syncStandardMetadata();
-        ["alias", "create", "noise"].forEach((action) => row.querySelector(`[data-action="${action}"]`).addEventListener("click", async () => {
+        ["alias", "create"].forEach((action) => row.querySelector(`[data-action="${action}"]`).addEventListener("click", async () => {
           const standardName = row.querySelector('[data-field="standard_name"]').value.trim();
           const standard = standardIngredients.find((entry) => entry.standard_name === standardName);
-          if (action !== "noise" && (!standardName || (action === "alias" && !standard))) {
+          if (!standardName || (action === "alias" && !standard)) {
             showToast(action === "alias" ? "请选择已有标准原料" : "标准原料名不能为空", "error"); return;
           }
-          const actionLabel = action === "alias" ? `把该名称添加为原料别名：${standardName}` : action === "create" ? `创建标准原料：${standardName}` : `把“${item.raw_name}”加入噪声池并从原材料中剔除`;
+          const actionLabel = action === "alias" ? `把该名称添加为原料别名：${standardName}` : `创建标准原料：${standardName}`;
           if (!window.confirm(`${actionLabel}？`)) return;
           await runAction(async () => {
-            const result = await api(`/api/catfood/standardization/ingredient-reviews/${item.item_id}/resolve`, {
+            const result = await api(`/api/catfood/standardization/ingredient-reviews/${group.item_id}/resolve`, {
               method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify({
                 action, standard_ingredient_id: standard?.standard_ingredient_id, standard_name: standardName,
                 ingredient_family: row.querySelector('[data-field="ingredient_family"]').value.trim(),
                 source_type: row.querySelector('[data-field="source_type"]').value,
                 animal_source: row.querySelector('[data-field="animal_source"]').value.trim(),
                 primary_nutrition_role: row.querySelector('[data-field="primary_nutrition_role"]').value.trim(),
-                context: item.context || "", review_reason: action === "noise" ? "OCR误识别/非原材料" : "",
-                reviewer: "pipeline-review-page"
+                context: group.context || "", review_reason: "", reviewer: "pipeline-review-page"
               })
             });
             for (const taskId of result.resumed_task_ids || []) await api("/api/orchestrator/dispatch-call-sync", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({limit:1,task_id:taskId,node_codes:["ingredient_extract"]})});
-            showToast(action === "noise" ? "已加入噪声池并从原材料中剔除" : result.science_profile_warning ? `原料身份已确认；${result.science_profile_warning}` : "原料身份已确认，科学属性草稿已生成，Profile 正在重新生成", result.science_profile_warning ? "error" : undefined);
+            showToast(result.science_profile_warning ? `原料身份已确认；${result.science_profile_warning}` : "原料身份已确认，科学属性草稿已生成，Profile 正在重新生成", result.science_profile_warning ? "error" : undefined);
           });
         }));
-        ingredientIdentityRowsEl.appendChild(row);
+      }
+      row.querySelector('[data-action="noise"]').addEventListener("click", async () => {
+        if (!window.confirm(`把“${group.raw_name}”加入噪声池并从原材料中剔除？`)) return;
+        await runAction(async () => {
+          const result = await api(`/api/catfood/standardization/ingredient-reviews/${group.item_id}/resolve`, {
+            method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify({
+              action: "noise", standard_name: "", context: group.context || "",
+              review_reason: "OCR误识别/非原材料", reviewer: "pipeline-review-page"
+            })
+          });
+          for (const taskId of result.resumed_task_ids || []) await api("/api/orchestrator/dispatch-call-sync", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({limit:1,task_id:taskId,node_codes:["ingredient_extract"]})});
+          showToast("已加入噪声池并从原材料中剔除");
+        });
       });
+      return row;
+    }
+
+    function renderIngredientIdentityItems(payload) {
+      lastIngredientPayload = payload;
+      const groups = payload.groups || { auto: [], manual: [], unrun: [] };
+      const overrides = loadIngredientOverrides();
+      const autoAll = groupIngredientReviewItems(groups.auto || []);
+      const autoGroups = autoAll.filter((group) => !overrides.has(group.raw_name));
+      const pushed = autoAll.filter((group) => overrides.has(group.raw_name)).map((group) => ({
+        ...group,
+        verdict: "manual",
+        aiReasons: [`已转人工：AI 建议 ${group.aiStandardName || "-"}（${group.aiStandardId || "-"}）`],
+      }));
+      const manualManual = groupIngredientReviewItems([...(groups.manual || []), ...(groups.unrun || [])]).concat(pushed);
+      const manualAll = manualManual;
+      const filter = ingredientManualFilter.value || "all";
+      const manualShown = filter === "all" ? manualAll : manualAll.filter((group) => group.verdict === filter);
+      ingredientReviewGroups = { auto: autoGroups, manual: manualAll };
+
+      const totalNames = autoGroups.length + manualAll.length;
+      ingredientIdentitySummaryEl.textContent = totalNames
+        ? `共 ${totalNames} 个待确认原料名（${payload.count || 0} 行）· AI 可自动 ${autoGroups.length} · 待人工 ${manualAll.length}`
+        : "当前范围内没有待确认原材料。";
+
+      ingredientAiCountEl.textContent = `${autoGroups.length} 个原料`;
+      ingredientAiApplyBtn.disabled = !autoGroups.length;
+      const genericCount = autoGroups.filter((group) => ingredientMappingPrecision(group) === "generic").length;
+      ingredientAiSummaryEl.textContent = autoGroups.length
+        ? `模型判定语义等价、且通过物种/域/形态三道确定性闸门。`
+          + (genericCount ? `其中 ${genericCount} 条是泛化映射（细分降级成库中更泛的名字），默认不参与批量确认，可单条「转人工」。` : "全部为精确映射。")
+          + (pushed.length ? ` 已转人工 ${pushed.length} 条。` : "")
+        : "暂无 AI 可自动确认的原料。可先跑一次校准：scripts/ingredient_calibrator.py --persist";
+      ingredientAiRowsEl.innerHTML = "";
+      ingredientAiEmptyEl.style.display = autoGroups.length ? "none" : "block";
+      autoGroups.forEach((group) => ingredientAiRowsEl.appendChild(buildIngredientRow(group, "auto")));
+
+      const manualCount = manualAll.filter((g) => g.verdict === "manual").length;
+      const unrunCount = manualAll.filter((g) => g.verdict === "unrun").length;
+      ingredientManualCountEl.textContent = `${manualShown.length} 个原料`;
+      ingredientManualSummaryEl.textContent = `AI 已判需人工 ${manualCount} 个 · 尚未校准 ${unrunCount} 个。选好标准原料后可直接添加别名，或新建标准成分。`;
+      ingredientManualRowsEl.innerHTML = "";
+      ingredientManualEmptyEl.style.display = manualShown.length ? "none" : "block";
+      manualShown.forEach((group) => ingredientManualRowsEl.appendChild(buildIngredientRow(group, "manual")));
+    }
+
+    async function applyAiIngredientSuggestions() {
+      const includeGeneric = Boolean(ingredientIncludeGeneric && ingredientIncludeGeneric.checked);
+      const eligible = ingredientReviewGroups.auto.filter((group) => group.aiStandardId);
+      const generic = eligible.filter((group) => ingredientMappingPrecision(group) === "generic");
+      const picked = includeGeneric ? eligible : eligible.filter((group) => ingredientMappingPrecision(group) !== "generic");
+      const targets = picked.map((group) => ({ raw_name: group.raw_name, standard_ingredient_id: group.aiStandardId }));
+      if (!targets.length) {
+        showToast(generic.length ? "剩下的都是泛化映射，需要人工确认或勾选「含泛化映射」" : "没有可批量确认的原料", "error");
+        return;
+      }
+      const list = targets.map((t) => `${t.raw_name} → ${t.standard_ingredient_id}`).slice(0, 12).join("\n");
+      const more = targets.length > 12 ? `\n…共 ${targets.length} 个` : "";
+      const skipNote = (!includeGeneric && generic.length)
+        ? `\n\n将跳过 ${generic.length} 条泛化映射（需人工复核）：${generic.map((g) => g.raw_name).join("、")}`
+        : "";
+      if (!window.confirm(`确认把以下 ${targets.length} 个原料挂到标准成分？\n\n${list}${more}${skipNote}\n\n会写入别名并触发对应配方重建。`)) return;
+      ingredientAiApplyBtn.disabled = true;
+      try {
+        const result = await api("/api/catfood/standardization/ingredient-reviews/batch-resolve", {
+          method: "POST", headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({ items: targets, reviewer: "pipeline-review-page-ai" }),
+        });
+        const applied = (result.applied || []).length;
+        const failed = result.failed || [];
+        const tasks = (result.resumed_task_ids || []).slice(0, 20);
+        for (const taskId of tasks) {
+          await api("/api/orchestrator/dispatch-call-sync", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({limit:1,task_id:taskId,node_codes:["ingredient_extract"]})});
+        }
+        showToast(`批量确认：成功 ${applied} 个${failed.length ? `，失败 ${failed.length} 个` : ""}${tasks.length ? `，已重跑 ${tasks.length} 个配方节点` : ""}`, failed.length ? "error" : undefined);
+        await loadIngredientIdentityItems();
+      } catch (error) {
+        showToast(error instanceof Error ? error.message : "批量确认失败", "error");
+      } finally {
+        ingredientAiApplyBtn.disabled = false;
+      }
     }
 
     async function loadIngredientIdentityItems() {
@@ -2746,8 +3018,8 @@
       try {
         if (!standardIngredients.length) await loadStandardIngredientOptions();
         const formulaId = ingredientFormulaFilter.value.trim();
-        const data = await api(`/api/catfood/standardization/ingredient-reviews?limit=200${formulaId ? `&formula_id=${encodeURIComponent(formulaId)}` : ""}`);
-        renderIngredientIdentityItems(data.items || []);
+        const data = await api(`/api/catfood/standardization/ingredient-reviews?limit=500${formulaId ? `&formula_id=${encodeURIComponent(formulaId)}` : ""}`);
+        renderIngredientIdentityItems(data);
       } catch (error) { showToast(error instanceof Error ? error.message : "原料候选加载失败", "error"); }
       finally { ingredientIdentityRefreshBtn.disabled = false; }
     }
@@ -3549,6 +3821,16 @@
     scoreRuleTab.addEventListener("click", () => switchIdentityTab("rules"));
     formulaIdentityRefreshBtn.addEventListener("click", loadFormulaIdentityItems);
     ingredientIdentityRefreshBtn.addEventListener("click", loadIngredientIdentityItems);
+    ingredientAiApplyBtn.addEventListener("click", applyAiIngredientSuggestions);
+    ingredientManualFilter.addEventListener("change", () => {
+      const groups = ingredientReviewGroups.manual || [];
+      const filter = ingredientManualFilter.value || "all";
+      const shown = filter === "all" ? groups : groups.filter((group) => group.verdict === filter);
+      ingredientManualCountEl.textContent = `${shown.length} 个原料`;
+      ingredientManualRowsEl.innerHTML = "";
+      ingredientManualEmptyEl.style.display = shown.length ? "none" : "block";
+      shown.forEach((group) => ingredientManualRowsEl.appendChild(buildIngredientRow(group, "manual")));
+    });
     ingredientFormulaFilter.addEventListener("keydown", (event) => { if (event.key === "Enter") loadIngredientIdentityItems(); });
     scienceProfileRefresh.addEventListener("click", loadScienceProfiles);
     scoreRuleRefresh.addEventListener("click", loadScoreRules);

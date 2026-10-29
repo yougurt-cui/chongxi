@@ -3,6 +3,7 @@
 from flask import Blueprint, jsonify, request
 
 from services.catfood_standardization_service import (
+    batch_resolve_ingredient_reviews,
     build_formula_feature_input,
     get_standard_mapping,
     initialize_brand_candidates,
@@ -174,6 +175,15 @@ def standardization_ingredient_reviews():
         formula_id = request.args.get("formula_id")
         return jsonify(list_ingredient_review_items(formula_id=int(formula_id) if formula_id else None,
                                                     limit=int(request.args.get("limit") or 200))), 200
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+
+
+@catfood_standardization_api.post("/ingredient-reviews/batch-resolve")
+def standardization_ingredient_reviews_batch_resolve():
+    """页面「AI 批量确认」按钮：把一批 raw_name 挂到 AI 给出的标准成分上。"""
+    try:
+        return jsonify(batch_resolve_ingredient_reviews(request.get_json(silent=True) or {})), 200
     except Exception as exc:
         return jsonify({"ok": False, "error": str(exc)}), 400
 

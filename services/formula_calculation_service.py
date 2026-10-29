@@ -50,6 +50,7 @@ def algorithm_fingerprint():
     paths += [root / 'scripts/run_formula_phase.py',
               root / 'scripts/backfill_formula_ingredient_features.py',
               root / 'scripts/rebuild_protein_source_from_profiles.py',
+              root / 'services/ingredient_coarse_proxy_service.py',
               root / 'services/product_portrait_summary_service.py',
               root / 'services/formula_incremental_service.py',
               root / 'services/catfood_standardization_service.py',
@@ -390,13 +391,17 @@ def promote(formula_id):
 def mark_market_dirty(formula_id):
     with connect() as conn:
         with conn.cursor() as cur:
-            cur.execute("SELECT status FROM catfood_standard_formula WHERE formula_id=%s", (formula_id,))
+            cur.execute("""SELECT f.status,i.result_stage FROM catfood_standard_formula f
+                LEFT JOIN catfood_formula_feature_input i ON i.formula_id=f.formula_id
+                WHERE f.formula_id=%s""", (formula_id,))
             formula = cur.fetchone()
-            if formula and formula['status'] == 'active':
+            queued = bool(formula and formula['status'] == 'active' and formula.get('result_stage') == 'official')
+            if queued:
                 cur.execute('''INSERT INTO formula_market_dirty(formula_id) VALUES(%s)
                     ON DUPLICATE KEY UPDATE generation=generation+1,updated_at=UTC_TIMESTAMP()''', (formula_id,))
         conn.commit()
-    return {'ok': True, 'formula_id': formula_id, 'scope': 'deferred_market', 'queued': True}
+    return {'ok': True, 'formula_id': formula_id, 'scope': 'deferred_market', 'queued': queued,
+            'reason': None if queued else 'provisional_result_not_published_to_market'}
 
 
 def draft_identity(source_id):

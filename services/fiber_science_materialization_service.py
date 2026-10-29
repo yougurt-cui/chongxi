@@ -7,6 +7,8 @@ import json
 from collections import Counter
 from typing import Any, Iterable
 
+from services.ingredient_coarse_proxy_service import proxy_profile
+
 
 SCIENCE_PROFILE_VERSION = "science-v1"
 RELEVANT_CATEGORIES = {"carbohydrate", "fiber", "prebiotic"}
@@ -63,6 +65,7 @@ def build_science_payload(
     items: Iterable[dict[str, Any]],
     profiles: dict[str, dict[str, Any]],
 ) -> dict[str, Any]:
+    items = list(items)
     details: dict[str, dict[str, Any]] = {}
     subtype_tags: dict[str, list[str]] = {}
     starch_items: list[dict[str, Any]] = []
@@ -74,7 +77,7 @@ def build_science_payload(
         if item.get("is_ignored"):
             continue
         standard_id = str(item.get("standard_ingredient_id") or "")
-        profile = profiles.get(standard_id)
+        profile = profiles.get(standard_id) or proxy_profile(item)
         profile_category = str((profile or {}).get("nutrition_category") or "")
         role = str(item.get("primary_nutrition_role") or "")
         relevant = profile_category in RELEVANT_CATEGORIES or role in RELEVANT_ROLES
@@ -91,7 +94,7 @@ def build_science_payload(
             )
             continue
 
-        used_ids.append(standard_id)
+        used_ids.append(standard_id or f"proxy:{item.get('position')}:{item.get('raw_name')}")
         attributes = _json_object(profile.get("domain_attributes_json"))
         name = str(item.get("standard_name") or item.get("raw_name") or standard_id)
         category = profile_category
@@ -145,13 +148,10 @@ def build_science_payload(
         "ingredient_subtype_tags": subtype_tags,
         "ingredient_tag_detail": details,
     }
-    versions = sorted(
-        {
-            (standard_id, profiles[standard_id].get("profile_version"))
-            for standard_id in used_ids
-            if standard_id in profiles
-        }
-    )
+    versions = sorted((str(item.get("standard_ingredient_id") or f"proxy:{item.get('position')}"),
+                       (profiles.get(str(item.get("standard_ingredient_id") or "")) or
+                        proxy_profile(item) or {}).get("profile_version"))
+                      for item in items if not item.get("is_ignored"))
     fingerprint = hashlib.sha256(
         json.dumps(versions, ensure_ascii=False, sort_keys=True, default=str).encode("utf-8")
     ).hexdigest()
