@@ -23,6 +23,7 @@ def connection():
 def test_identity_and_nutritional_evidence_in_cache_key():
     row = {'normalized_ingredients_json': ['鸡肉', '鱼油'], 'nutrition_json': {'protein': {'value': 30, 'unit': '%', 'operator': '>='}}, 'standard_brand_name': 'A'}
     assert calc.input_fingerprint(row) == calc.input_fingerprint({**row, 'nutrition_json': json.dumps(row['nutrition_json']), 'source_id': 2, 'result_stage': 'official'})
+    assert calc.input_fingerprint(row) != calc.input_fingerprint({**row, 'result_stage': 'provisional', 'quality_flags_json': '["ingredient_proxy"]'})
     for patch_row in ({'standard_brand_name': 'B'}, {'normalized_ingredients_json': ['鱼油', '鸡肉']}, {'nutrition_json': {'protein': {'value': 30, 'unit': '%', 'operator': '='}}}):
         assert calc.input_fingerprint(row) != calc.input_fingerprint({**row, **patch_row})
 

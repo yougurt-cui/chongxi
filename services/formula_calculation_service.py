@@ -38,9 +38,17 @@ def decoded(value, default=None):
 
 
 def input_fingerprint(row):
-    # Provenance and approval do not change maths; brand identity affects risk feedback.
-    return digest({k: decoded(row.get(k), {}) if k in {'nutrition_json', 'normalized_ingredients_json'} else row.get(k)
-                   for k in ('normalized_ingredient_composition', 'normalized_ingredients_json', 'nutrition_json', 'standard_brand_name')})
+    # Provisional ingredient proxies may leave the visible composition unchanged,
+    # but they must never reuse or promote an official calculation publication.
+    value = {
+        'normalized_ingredient_composition': row.get('normalized_ingredient_composition'),
+        'normalized_ingredients_json': decoded(row.get('normalized_ingredients_json'), {}),
+        'nutrition_json': decoded(row.get('nutrition_json'), {}),
+        'standard_brand_name': row.get('standard_brand_name'),
+        'result_stage': row.get('result_stage') or 'official',
+        'quality_flags_json': decoded(row.get('quality_flags_json'), []),
+    }
+    return digest(value)
 
 
 @lru_cache(maxsize=1)
