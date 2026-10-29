@@ -8,7 +8,7 @@ from app_config import get_chat_model_config
 logger = logging.getLogger(__name__)
 
 
-def build_overview(reports, comparisons):
+def build_overview(reports, comparisons, *, use_model=True):
     facts = []
     # Equal statements can be shared by products without implying a chronology.
     for kind, section in (('advantage', 'advantages'), ('attention', 'attentions')):
@@ -33,7 +33,7 @@ def build_overview(reports, comparisons):
               for kind in ('advantage', 'attention')}
     model_name = None
     cfg = get_chat_model_config()
-    if facts and cfg.get('api_key'):
+    if use_model and facts and cfg.get('api_key'):
         try:
             options = {'extra_body': {'thinking': {'type': 'disabled'}}} if cfg.get('provider') == 'deepseek' else {}
             response = OpenAI(api_key=cfg['api_key'], base_url=cfg['base_url'], timeout=20, max_retries=0).chat.completions.create(

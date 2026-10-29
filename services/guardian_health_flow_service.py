@@ -205,7 +205,7 @@ def build_analysis_reply(user_id, conversation, state, context):
                                'text': portrait_comparison_text(evidence).replace('原粮', subjects[0]['label']).replace('目标粮', other['label'])})
     analysis_id = uuid.uuid4().hex
     multiple = len(subjects) > 1
-    overview = build_overview(reports, comparison) if multiple else None
+    overview = build_overview(reports, comparison, use_model=False) if multiple else None
     coverage_note = ('本次使用最近10条口粮记录；还有更早记录未包含，请指定要继续分析的粮款。'
                      if scope in {'history', 'current_vs_history', 'saved_diet'} and context.get('diet_history_has_more') else '')
     if scope == 'saved_diet' and context.get('diet_history_status') == 'unavailable':
@@ -225,7 +225,7 @@ def build_analysis_reply(user_id, conversation, state, context):
     ask_recommendation = confirm_slot == RECOMMEND_SLOT
     prompt = '是否需要根据上述内容推荐新粮？' if ask_recommendation else '你家猫已经在吃这款粮了吗？'
     lines.append(prompt)
-    return {'response_type': 'result_card', 'reply': '\n\n'.join(lines),
+    reply = {'response_type': 'result_card', 'reply': '\n\n'.join(lines),
             'interaction': {'slot': confirm_slot, 'analysis_id': analysis_id, 'options': ([
                 {'label': '需要推荐新粮', 'value': f'yes:{analysis_id}'},
                 {'label': '暂时不用', 'value': f'no:{analysis_id}'}] if ask_recommendation else [
@@ -235,3 +235,5 @@ def build_analysis_reply(user_id, conversation, state, context):
                        'health_analysis': {'version': 1, 'subjects': reports, 'comparisons': comparison, 'prompt': prompt,
                                            'overview': overview, 'is_multiple': multiple, 'coverage_note': coverage_note},
                        'food_candidates': []}, 'disclaimer': 'AI内容仅供参考，不能替代兽医诊断'}
+    from services.guardian_report_service import attach_report
+    return attach_report(reply, context, subjects)

@@ -387,7 +387,7 @@ def answer(message, context, plan, retrieval):
     return reply, mode, ids
 
 
-def handle_question(user_id, conversation, message, state):
+def handle_question(user_id, conversation, message, state, *, report_scene=None):
     context = load_context(user_id, conversation['pet_id'])
     previous = state['slots'].get(STATE_KEY) or {}
     if previous.get('turn_no') != state['turn_count'] or previous.get('pet_id') != conversation['pet_id']:
@@ -399,7 +399,7 @@ def handle_question(user_id, conversation, message, state):
                  missing_slots=[], followup_count=0, turn_count=state['turn_count'] + 1)
     state['slots'][STATE_KEY] = {'query': plan['query'], 'topics': plan['topics'], 'pet_id': conversation['pet_id'],
                                'turn_no': state['turn_count'], 'knowledge_ids': used_ids, 'guide_ids': used_ids}
-    return {'response_type': 'text', 'reply': reply, 'result': {
+    response = {'response_type': 'text', 'reply': reply, 'result': {
         'intent': 'general_pet_qa', 'pipeline': 'knowledge_qa', 'turn_no': state['turn_count'], 'sequence_no': 1,
         'data': data,
         'knowledge_qa': {'version': 2, 'review_note': note, 'status': 'insufficient_evidence' if mode == 'insufficient_evidence' else retrieval['status'], 'generation_source': mode,
@@ -409,3 +409,7 @@ def handle_question(user_id, conversation, message, state):
                                      for row in retrieval['items'] if row['id'] in used_ids],
                          'context_status': {'diet': context['diet_history_status'], 'health': context['health_anomalies']['status']}}},
         'disclaimer': 'AI内容仅供参考，不能替代兽医诊断'}
+    if report_scene:
+        from services.guardian_report_service import attach_report
+        attach_report(response, context, scene=report_scene)
+    return response

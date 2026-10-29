@@ -560,7 +560,8 @@ def submission_reply(submission, current_formula_id=None):
     return {'response_type': 'result_card', 'reply': '\n\n'.join(lines),
             'result': {'intent': 'food_analysis', 'status': 'ready', 'result_id': bundle['result_id'],
                        'result_stage': bundle['result_stage'], 'portrait_comparison': comparison,
-                       'product_portrait': target, 'quality_flags': bundle.get('quality_flags') or [], 'food_candidates': []}}
+                       'product_portrait': target, 'comparison_current_portrait': current,
+                       'quality_flags': bundle.get('quality_flags') or [], 'food_candidates': []}}
 
 
 def snapshot_nutrition(input_row):

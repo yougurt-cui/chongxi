@@ -1101,6 +1101,22 @@ def _handle_context_message(user_id, conversation, message, state, source_messag
     if submission and submission.get('result_available') and (submission.get('calculation_result') or {}).get('portrait'):
         from services.formula_calculation_service import submission_reply
         reply = submission_reply(submission, (context.get('current_food') or {}).get('formula_id'))
+        from services.guardian_report_service import attach_report
+        bundle = submission['calculation_result']
+        report_subjects = [{
+            'formula_id': submission.get('formula_id'), 'portrait': bundle['portrait'],
+            'label': ' '.join(filter(None, [submission.get('recognized_brand') or submission.get('claimed_brand'),
+                                           submission.get('recognized_product_name') or submission.get('claimed_product_name')])),
+            'roles': ['uploaded'], 'result_stage': bundle.get('result_stage'),
+            'result_id': bundle.get('result_id'), 'quality_flags': bundle.get('quality_flags') or [],
+        }]
+        current = context.get('current_food') or {}
+        current_portrait = reply['result'].get('comparison_current_portrait')
+        if current_portrait and current.get('formula_id') != submission.get('formula_id'):
+            report_subjects.insert(0, {'formula_id': current.get('formula_id'), 'portrait': current_portrait,
+                                      'label': ' '.join(filter(None, [current.get('brand'), current.get('product_name')])) or '当前粮',
+                                      'roles': ['current']})
+        attach_report(reply, context, report_subjects, scene='ingredient_analysis')
     elif submission and submission.get("recognition_status") in {"pending","processing"}:
         reply = {"response_type":"processing","reply":submission.get("recognition_message") or "配料表正在识别，请稍后刷新投稿后再交给我分析。",
                  "result":{"resource":"food_submission","id":submission["id"],"interval_ms":2000}}
@@ -1220,6 +1236,9 @@ def _handle_context_message(user_id, conversation, message, state, source_messag
                 reply.update(response_type='text_or_select', reply=text + '\n当前粮是否曾吃得稳定？也可以告诉我哪款历史粮吃得适应。',
                     interaction={'slot': 'food_tolerance', 'options': [
                         {'label': '当前粮曾吃得稳定', 'value': 'current_good'}, {'label': '暂不清楚', 'value': 'unknown'}]})
+    if state.get('primary_intent') == 'ingredient_analysis' and reply.get('response_type') == 'result_card':
+        from services.guardian_report_service import attach_report
+        attach_report(reply, context, scene='ingredient_analysis')
     result = {'intent': state.get('primary_intent'), **(reply.get("result") or {}), "turn_no": state["turn_count"],
               "sequence_no": 1, "model_name": model_name}
     return {**reply, "result": result, "messages": [{**reply, "result": result}]}
@@ -1370,7 +1389,9 @@ def handle_message(user_id: Any, conversation_id: Any, payload: dict[str, Any]) 
         except (pymysql.MySQLError, LookupError):
             pet = None
         scope_conflict = _life_stage_conflict(message, pet)
-    diet_entry = (client_context.get('entry_point') == 'diet_advice'
+    diet_entry = ((client_context.get('entry_point') == 'diet_advice'
+                   or bool(re.search(r'(?:饮食|喂养|喂食)(?:建议|分析)|日常(?:饮食|喂养)', message))
+                   and not re.search(r'换粮|软便|呕吐|腹泻|便血', message))
                   and not interaction and not attachments and bool(message))
     if not diet_entry and not interaction and not attachments:
         interaction = health_flow.confirmation_interaction(message, state)
@@ -1411,7 +1432,10 @@ def handle_message(user_id: Any, conversation_id: Any, payload: dict[str, Any]) 
             if snapshot.get('stage') == 'pending':
                 snapshot['stage'] = 'superseded'
             _pause_soft_stool(state)
-            reply = knowledge_qa.handle_question(user_id, conversation, message, state)
+            if diet_entry:
+                reply = knowledge_qa.handle_question(user_id, conversation, message, state, report_scene='diet_advice')
+            else:
+                reply = knowledge_qa.handle_question(user_id, conversation, message, state)
         else:
             reply = strategy.handle(user_id, conversation, message, state, user_message["id"],
                                     interaction=interaction, attachments=attachments,
