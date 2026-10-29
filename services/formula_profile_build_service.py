@@ -9,6 +9,7 @@ Step dependency order:
     1. module_ranking   → catfood_module_market_ranking
     2. structure_labels → catfood_formula_structure_labels
     3. formula_profile  → catfood_formula_profile  (depends on 1 + 2)
+    4. unified_profile  → catfood_unified_product_profile (depends on 1 + 2 + 3)
 """
 
 from __future__ import annotations
@@ -43,6 +44,12 @@ PIPELINE_STEPS: list[dict[str, str]] = [
         "name": "配方画像",
         "script": "build_formula_profile.py",
         "output_table": "catfood_formula_profile",
+    },
+    {
+        "key": "unified_profile",
+        "name": "单品统一画像",
+        "script": "build_unified_product_profiles.py",
+        "output_table": "catfood_unified_product_profile",
     },
 ]
 

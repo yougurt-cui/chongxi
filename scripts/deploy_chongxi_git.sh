@@ -55,11 +55,13 @@ git pull --ff-only origin "$REMOTE_BRANCH"
   services/fat_science_materialization_service.py \
   services/formula_incremental_service.py \
   services/formula_calculation_service.py \
+  services/unified_product_profile_service.py \
   services/guardian_factor_evidence_service.py \
   services/guardian_food_flow_service.py \
   scripts/migrate_formula_calculations.py \
   scripts/run_formula_market_updates.py \
   scripts/run_formula_phase.py \
+  scripts/build_unified_product_profiles.py \
   services/consumer_analysis_service.py \
   services/orchestrator_service.py \
   services/orchestrator_worker.py \

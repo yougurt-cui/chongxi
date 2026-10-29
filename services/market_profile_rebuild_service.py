@@ -24,6 +24,7 @@ STEPS = (
     ("module_ranking", "build_module_market_ranking.py"),
     ("structure_labels", "build_formula_structure_labels.py"),
     ("formula_profile", "build_formula_profile.py"),
+    ("unified_profile", "build_unified_product_profiles.py"),
 )
 _executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="market-profile")
 
@@ -79,6 +80,7 @@ def _result_counts() -> dict[str, dict[str, int]]:
         "catfood_module_market_ranking",
         "catfood_formula_structure_labels",
         "catfood_formula_profile",
+        "catfood_unified_product_profile",
     )
     counts: dict[str, dict[str, int]] = {}
     with _connect() as conn:
