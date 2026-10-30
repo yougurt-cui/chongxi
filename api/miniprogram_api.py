@@ -81,6 +81,13 @@ from services.miniprogram_idea_service import (
     support_idea,
     update_idea,
 )
+from services.miniprogram_activity_service import (
+    PostVerificationError,
+    claim_activity_code,
+    get_activity_stats,
+    get_my_activity_code,
+    import_activity_codes,
+)
 
 
 miniprogram_api = Blueprint("miniprogram_api", __name__, url_prefix="/api/miniprogram")
@@ -502,7 +509,13 @@ def create_moment_endpoint():
     try:
         payload = _json_payload()
         payload["user_id"] = _user_id_from_request(payload, required=True)
-        return jsonify(create_moment(payload)), 201
+        result = create_moment(payload)
+        # 活动帖：发帖事务已提交后再分配活动码，避免"码发了但帖子没存下来"。
+        # 领取失败不回滚发帖，仅在响应里带上失败原因，前端可用独立接口重试。
+        activity_id = payload.get("activity_id")
+        if activity_id not in (None, "", 0, "0"):
+            result["activity"] = _claim_code_after_publish(result, str(payload["user_id"]), activity_id)
+        return jsonify(result), 201
     except PermissionError as exc:
         return _auth_error_response(exc)
     except LookupError as exc:
@@ -1169,3 +1182,107 @@ def generate_miniprogram_url_link_endpoint():
     response = jsonify(result)
     response.headers["Cache-Control"] = "no-store"
     return response, status
+
+
+# ---------------------------------------------------------------------------
+# 活动码领取（发帖活动）
+# ---------------------------------------------------------------------------
+
+def _claim_code_after_publish(moment_result: dict, user_id: str, activity_id) -> dict:
+    """发帖成功后的领码兜底：任何异常都只记录在响应里，不影响发帖结果。"""
+    post_id = str(((moment_result or {}).get("item") or {}).get("id") or "")
+    try:
+        return claim_activity_code(user_id=user_id, activity_id=activity_id, post_id=post_id)
+    except Exception as exc:  # 帖子已落库，这里绝不向上抛
+        return {
+            "ok": False,
+            "status": "ERROR",
+            "message": str(exc) or "活动码领取失败",
+            "activity_id": activity_id,
+            "code": None,
+        }
+
+
+@miniprogram_api.post("/activity/claim")
+def claim_activity_code_endpoint():
+    """发帖成功后领取活动码。请求体：{"activity_id": 1001, "post_id": "<帖子ID>"}。"""
+    try:
+        payload = _json_payload()
+        user_id = _user_id_from_request(payload, required=True)
+    except PermissionError as exc:
+        return _auth_error_response(exc)
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    try:
+        result = claim_activity_code(
+            user_id=user_id,
+            activity_id=payload.get("activity_id"),
+            post_id=payload.get("post_id") or payload.get("moment_id"),
+        )
+        return jsonify(result), 200
+    except PostVerificationError as exc:
+        # 帖子不属于当前用户 / 已删除 / 不存在：明确区别于未登录
+        return jsonify({"ok": False, "status": "FORBIDDEN", "error": str(exc)}), 403
+    except PermissionError as exc:
+        return _auth_error_response(exc)
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    except Exception:
+        return jsonify({"ok": False, "error": "活动码领取失败，请稍后重试"}), 500
+
+
+@miniprogram_api.get("/activity/<int:activity_id>/my-code")
+def get_my_activity_code_endpoint(activity_id: int):
+    """查询当前用户在指定活动下已领取的码，用于关闭弹窗后恢复展示。"""
+    try:
+        user_id = _user_id_from_request(required=True)
+    except PermissionError as exc:
+        return _auth_error_response(exc)
+    try:
+        return jsonify(get_my_activity_code(user_id=user_id, activity_id=activity_id)), 200
+    except PermissionError as exc:
+        return _auth_error_response(exc)
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    except Exception:
+        return jsonify({"ok": False, "error": "活动码查询失败，请稍后重试"}), 500
+
+
+@miniprogram_api.get("/admin/activity/<int:activity_id>/stats")
+def get_activity_stats_endpoint(activity_id: int):
+    """运营用：查看活动码总量、已领取与剩余。"""
+    try:
+        _require_admin_token()
+        return jsonify(get_activity_stats(activity_id)), 200
+    except PermissionError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 401
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    except Exception:
+        return jsonify({"ok": False, "error": "活动码统计失败，请稍后重试"}), 500
+
+
+@miniprogram_api.post("/admin/activity/<int:activity_id>/codes")
+def import_activity_codes_endpoint(activity_id: int):
+    """运营用：批量补码。请求体 {"codes": ["A","B"]} 或 {"text": "每行一个码"}。"""
+    try:
+        _require_admin_token()
+        payload = _json_payload()
+        codes = payload.get("codes")
+        if isinstance(codes, str):
+            codes = codes.splitlines()
+        elif not isinstance(codes, list):
+            codes = str(payload.get("text") or "").splitlines()
+        result = import_activity_codes(
+            activity_id=activity_id,
+            codes=codes,
+            batch=str(payload.get("batch") or ""),
+            dry_run=bool(payload.get("dry_run")),
+        )
+        return jsonify({"ok": True, **result}), 200
+    except PermissionError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 401
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    except Exception:
+        return jsonify({"ok": False, "error": "活动码导入失败，请稍后重试"}), 500
