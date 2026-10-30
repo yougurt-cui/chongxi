@@ -957,8 +957,8 @@ def list_ingredient_review_items(*, formula_id: int | None = None, limit: int = 
 def batch_resolve_ingredient_reviews(payload: dict[str, Any]) -> dict[str, Any]:
     """批量把原料挂到已有标准成分（等价于逐条 resolve action=alias）。
 
-    resolve 会整表重建配方、item_id 全部变化，所以按 raw_name 逐轮重查，
-    每个原料名只处理第一条（写别名后全局生效），最多 3 轮。
+    每个原料名只处理第一条（写别名后全局生效）；整批处理结束后，
+    为受影响配方登记一次待重算请求，由调度统一检查正式门禁。
     """
     targets = payload.get("items") or []
     reviewer = _clean(payload.get("reviewer")) or "pipeline-review-page"
@@ -977,6 +977,7 @@ def batch_resolve_ingredient_reviews(payload: dict[str, Any]) -> dict[str, Any]:
     failed: list[dict[str, Any]] = []
     resumed: list[str] = []
     done: set[str] = set()
+    affected_formulas: set[int] = set()
     for _round in range(3):
         remaining = {k: v for k, v in wanted.items() if k not in done}
         if not remaining:
@@ -1003,7 +1004,7 @@ def batch_resolve_ingredient_reviews(payload: dict[str, Any]) -> dict[str, Any]:
                 continue
             seen.add(name)
             try:
-                result = resolve_ingredient_review(int(row["item_id"]), {
+                resolve_ingredient_review(int(row["item_id"]), {
                     "action": "alias",
                     "standard_ingredient_id": remaining[name],
                     "reviewer": reviewer,
@@ -1013,11 +1014,12 @@ def batch_resolve_ingredient_reviews(payload: dict[str, Any]) -> dict[str, Any]:
                 failed.append({"raw_name": name, "formula_id": row["formula_id"], "error": str(exc)})
                 continue
             done.add(name)
+            affected_formulas.update(int(item['formula_id']) for item in rows if item['raw_name'] == name)
             applied.append({"raw_name": name, "standard_ingredient_id": remaining[name],
                             "formula_id": row["formula_id"]})
-            for task_id in result.get("resumed_task_ids") or []:
-                if task_id not in resumed:
-                    resumed.append(task_id)
+    if affected_formulas:
+        from services.orchestrator_service import resume_ingredient_tasks_for_formula_ids
+        resumed = resume_ingredient_tasks_for_formula_ids(sorted(affected_formulas))
     return {"ok": True, "applied": applied, "failed": failed,
             "resumed_task_ids": resumed,
             "pending": sorted(set(wanted) - done)}

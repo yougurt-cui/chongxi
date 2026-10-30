@@ -99,6 +99,27 @@ def _defer(job, response):
             conn.commit()
 
 
+def _wait_for_formal_review(task_id, node_code, reason, *, claim_token=None):
+    from services.pipeline_recalculation_service import request
+    with jobs._connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute('SELECT task_status FROM pipeline_task WHERE id=%s FOR UPDATE', (task_id,))
+            task = cur.fetchone()
+            if not task or task['task_status'] == jobs.TASK_CANCELLED:
+                return False
+            cur.execute('SELECT node_status,claim_token FROM pipeline_task_node WHERE task_id=%s AND node_code=%s FOR UPDATE',
+                        (task_id, node_code))
+            node = cur.fetchone() or {}
+            if (claim_token is not None and node.get('claim_token') != claim_token
+                    or claim_token is None and node.get('node_status') != jobs.NODE_READY):
+                return False
+        jobs._set_node_status(conn, task_id, node_code, jobs.NODE_NEED_REVIEW, reason)
+        jobs._set_task_status(conn, task_id, jobs.TASK_NEED_REVIEW, reason)
+        conn.commit()
+    request(task_id, reason=reason)
+    return True
+
+
 def _execute_task(app, task_id):
     with app.app_context(), jobs._connect() as owner, ExitStack() as calculations_scope:
         with owner.cursor() as cur:
@@ -134,6 +155,18 @@ def _execute_task(app, task_id):
                         if not calculations_scope.enter_context(formula_lock(formula_id)):
                             break  # Leave the durable ready node unclaimed for a later sweep.
                         locked_formula = int(formula_id)
+                    # Identity metadata may need rebuilding after brand review.
+                    # Gate BEFORE creating a new calculation run, then recheck
+                    # before science/scoring in case another review arrived.
+                    formal_boundary = next((n['node_code'] for n in task.get('nodes', [])
+                                            if n['node_status'] == 'ready' and n['node_code'] in
+                                            {'formula_input_build', 'science_feature_materialize'}), None)
+                    if task.get('payload', {}).get('formal_calculation') and formula_id and formal_boundary:
+                        from services import pipeline_recalculation_service as requests
+                        blocker = requests.formal_gate(int(formula_id), refresh=formal_boundary == 'formula_input_build')
+                        if blocker:
+                            _wait_for_formal_review(task_id, formal_boundary, blocker)
+                            break
                     ready = jobs.claim_ready_dispatch_jobs(task_id=task_id, limit=1, claim_prefix="worker:")
                     if not ready["jobs"]:
                         break
@@ -147,6 +180,11 @@ def _execute_task(app, task_id):
                     log.info("pipeline_node_finished task=%s node=%s seconds=%.3f ok=%s",
                              task_id, job["node_code"], time.monotonic() - started, response["ok"])
                     if (response.get('data') or {}).get('code') == 'calculation_superseded' and stale_restarts < 1:
+                        from services import pipeline_recalculation_service as requests
+                        if task.get('payload', {}).get('formal_calculation') or requests.has_pending(task_id):
+                            _wait_for_formal_review(task_id, job['node_code'], '审核信息更新，等待正式门禁通过',
+                                                    claim_token=job['claim_token'])
+                            break
                         stale_restarts += 1
                         jobs.reset_node_for_reextract(task_id, 'formula_input_build', '输入或参考池更新，重新计算')
                         continue
@@ -191,6 +229,8 @@ def _loop(app, capacity, interval):
                     recover_interrupted()
                     from services.formula_calculation_service import reconcile_dependencies
                     reconcile_dependencies()
+                    from services.pipeline_recalculation_service import reconcile as reconcile_recalculations
+                    reconcile_recalculations()
                     pending = {k: v for k, v in pending.items() if not v.done()}
                     for task_id in _candidates(capacity * 4):
                         if len(pending) >= capacity:

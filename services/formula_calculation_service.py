@@ -500,7 +500,7 @@ def drain_market_once():
 def requeue_sources(source_ids, node='brand_standardize'):
     if not enabled() or not source_ids:
         return []
-    from services import orchestrator_service as jobs
+    from services import pipeline_recalculation_service as requests
     ids = sorted({int(v) for v in source_ids})
     with connect() as conn:
         with conn.cursor() as cur:
@@ -509,32 +509,30 @@ def requeue_sources(source_ids, node='brand_standardize'):
                 AND CAST(JSON_UNQUOTE(JSON_EXTRACT(o.output_json,'$.source_id')) AS UNSIGNED)
                 IN ({','.join(['%s']*len(ids))})''', ids)
             tasks = [r['id'] for r in cur.fetchall()]
-    for task_id in tasks:
-        jobs.reset_node_for_reextract(task_id, node, '审核信息更新，按有效输入决定复用或重算')
-    return tasks
+    return requests.request_many(tasks, node, '审核信息更新，等待当前流程结束及正式门禁通过')
 
 
 def requeue_formulas(formula_ids, *, invalidate=False):
     if not enabled() or not formula_ids:
         return []
-    from services import orchestrator_service as jobs
+    from services import pipeline_recalculation_service as requests
     ids = sorted({int(v) for v in formula_ids})
     marks = ','.join(['%s']*len(ids))
     with connect() as conn:
         with conn.cursor() as cur:
-            if invalidate:
-                cur.execute(f'UPDATE formula_calculation_current SET invalidated=1 WHERE formula_id IN ({marks})', ids)
             cur.execute(f'''SELECT DISTINCT t.id FROM pipeline_task t
                 JOIN formula_calculation_task b
                   ON CONVERT(b.task_id USING utf8mb4) COLLATE utf8mb4_unicode_ci
                    = CONVERT(t.id USING utf8mb4) COLLATE utf8mb4_unicode_ci
                 JOIN formula_calculation_run r ON r.id=b.run_id
-                WHERE t.task_status<>'cancelled' AND r.formula_id IN ({marks})''', ids)
+                WHERE t.task_status<>'cancelled' AND r.formula_id IN ({marks})
+                UNION SELECT DISTINCT t.id FROM pipeline_task t
+                JOIN pipeline_node_output o ON o.task_id=t.id
+                WHERE t.task_status<>'cancelled' AND o.node_code IN ('formula_standardize','formula_input_build')
+                AND CAST(JSON_UNQUOTE(JSON_EXTRACT(o.output_json,'$.formula_id')) AS UNSIGNED) IN ({marks})''', ids + ids)
             tasks = [r['id'] for r in cur.fetchall()]
-        conn.commit()
-    for task_id in tasks:
-        jobs.reset_node_for_reextract(task_id, 'formula_input_build', '原料或计算规则更新，重新核对输入版本')
-    return tasks
+    return requests.request_many(tasks, 'formula_input_build', '原料或计算规则更新，等待正式重算',
+                                 invalidate_formula_ids=ids if invalidate else ())
 
 
 _last_dependency_scan = 0.0
@@ -551,7 +549,8 @@ def reconcile_dependencies():
         with conn.cursor() as cur:
             cur.execute('''SELECT c.formula_id FROM formula_calculation_current c
                 JOIN formula_calculation_run r ON r.id=c.requested_run_id
-                WHERE r.dependency_fingerprint<>%s AND c.invalidated=0 LIMIT 20''', (dep,))
+                WHERE r.dependency_fingerprint<>%s AND c.invalidated=0
+                  AND r.status='published' LIMIT 20''', (dep,))
             ids = [r['formula_id'] for r in cur.fetchall()]
     requeue_formulas(ids, invalidate=True)
 

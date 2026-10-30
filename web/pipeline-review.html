@@ -1837,12 +1837,15 @@
         const row = document.createElement("tr");
         const coverage = `${(Number(item.coverage || 0) * 100).toFixed(1)}%`;
         const identityPending = (item.quality_flags || []).includes("formula_unconfirmed");
+        const phaseText = item.recalculation_pending ? "等待正式重算"
+          : item.task_status === "done" ? "初算完成 · 待转正式" : "当前流程尚未完成";
+        const reviewText = item.recalculation_message || `${identityPending ? "产品/配方身份待确认；" : ""}${item.unmatched_count ? `原料待确认 ${item.unmatched_count} 项` : "原料已确认，正式计算前将再次检查门禁"}`;
         row.innerHTML = `
           <td><div class="task-id">${escapeHtml(item.task_id)}</div><div class="muted">formula_id：${escapeHtml(item.formula_id)}</div></td>
           <td><span class="chip">catfood_image_analysis</span><div style="margin-top:7px;font-weight:800;">${escapeHtml(item.brand || "-")}｜${escapeHtml(item.product_name || "-")}</div></td>
           <td><div style="font-weight:800;color:#102236;">${escapeHtml(item.node_name)}</div><div class="muted">ingredient_extract</div></td>
-          <td><span class="status-badge">初算成功 · 待转正式</span><div class="muted" style="margin-top:6px;">标准化率 ${coverage}</div></td>
-          <td class="reason-cell">${identityPending ? "产品/配方身份待确认；" : ""}${item.unmatched_count ? `原料待确认 ${item.unmatched_count} 项` : "严格门禁已通过，可正式重算"}</td>
+          <td><span class="status-badge">${escapeHtml(phaseText)}</span><div class="muted" style="margin-top:6px;">标准化率 ${coverage}</div></td>
+          <td class="reason-cell">${escapeHtml(reviewText)}</td>
           <td class="payload-cell">${(item.unmatched_names || []).map(escapeHtml).join("<br>") || "原料已全部确认"}</td>
           <td class="muted">${escapeHtml(item.node_updated_at)}</td>
           <td><div class="row-actions">
@@ -1850,7 +1853,7 @@
             <button class="small-button secondary" data-action="formal-formula" type="button">确认配方</button>
             <button class="small-button secondary" data-action="formal-ingredients" type="button">审核原料</button>
             <button class="small-button secondary" data-action="formal-reextract" type="button">重新抽取</button>
-            <button class="small-button" data-action="formal-run" type="button" ${item.can_formalize ? "" : "disabled"}>正式重算</button>
+            <button class="small-button" data-action="formal-run" type="button" ${item.can_formalize ? "" : "disabled"}>${item.recalculation_pending ? "已登记重算" : "申请正式重算"}</button>
           </div></td>`;
         const productButton = row.querySelector('[data-action="formal-product"]');
         if (productButton) productButton.addEventListener("click", () => {
@@ -1885,7 +1888,7 @@
               method: "POST", headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ formula_id: item.formula_id }),
             });
-            showToast("正式重算已发起");
+            showToast("已登记，当前流程结束且审核通过后自动重算");
           });
         });
         rowsEl.appendChild(row);

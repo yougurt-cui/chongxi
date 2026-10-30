@@ -1377,6 +1377,16 @@ def _initialize_schema() -> None:
             }.items():
                 if name not in columns:
                     cursor.execute(f"ALTER TABLE pipeline_task_node ADD COLUMN {name} {definition}")
+            cursor.execute("""CREATE TABLE IF NOT EXISTS pipeline_recalculation_request (
+                task_id VARCHAR(64) PRIMARY KEY,
+                node_code VARCHAR(96) NOT NULL,
+                generation BIGINT NOT NULL DEFAULT 1,
+                reason TEXT,
+                waiting_reason TEXT,
+                next_check_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                KEY idx_recalculation_check (next_check_at)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci""")
         conn.commit()
 
 
@@ -1655,6 +1665,7 @@ def list_formula_formalization_items(limit: int = 100) -> dict[str, Any]:
                        f.confirmation_status AS formula_confirmation_status,
                        sp.standard_product_name, b.standard_brand_name,
                        inp.result_stage AS input_result_stage, inp.quality_flags_json,
+                       rq.task_id AS recalculation_task_id, rq.waiting_reason,
                        {published_select}
                        GROUP_CONCAT(DISTINCT CASE WHEN ii.match_status='unmatched' AND ii.is_ignored=0
                            THEN ii.raw_name END ORDER BY ii.position SEPARATOR '｜') AS unmatched_names,
@@ -1663,6 +1674,7 @@ def list_formula_formalization_items(limit: int = 100) -> dict[str, Any]:
                 JOIN pipeline_task_node n ON n.task_id=t.id AND n.node_code='ingredient_extract'
                 JOIN pipeline_node_output fi ON fi.task_id=t.id AND fi.node_code='formula_input_build'
                 LEFT JOIN pipeline_node_output po ON po.task_id=t.id AND po.node_code='product_standardize'
+                LEFT JOIN pipeline_recalculation_request rq ON rq.task_id=t.id
                 JOIN catfood_formula_feature_profile p
                   ON p.formula_id=CAST(JSON_UNQUOTE(JSON_EXTRACT(fi.output_json,'$.formula_id')) AS UNSIGNED)
                 JOIN catfood_standard_formula f ON f.formula_id=p.formula_id
@@ -1672,12 +1684,14 @@ def list_formula_formalization_items(limit: int = 100) -> dict[str, Any]:
                 {published_joins}
                 LEFT JOIN catfood_formula_ingredient_item ii ON ii.formula_id=p.formula_id
                 WHERE n.node_status='success'
-                  AND (p.overall_status='provisional_ready' {published_condition})
+                  AND t.task_status<>'cancelled'
+                  AND (p.overall_status='provisional_ready' {published_condition} OR rq.task_id IS NOT NULL)
                 GROUP BY t.id, t.task_status, t.payload_json, n.node_status, n.updated_at,
                          p.formula_id, p.standardization_coverage, p.unmatched_ingredient_count,
                          p.overall_status, p.quality_metrics_json, f.confirmation_status,
                          sp.standard_product_name, b.standard_brand_name, inp.result_stage,
-                         inp.quality_flags_json {published_group}, product_review_candidate_id
+                         inp.quality_flags_json {published_group}, product_review_candidate_id,
+                         rq.task_id, rq.waiting_reason
                 ORDER BY n.updated_at DESC
                 LIMIT %s
                 """,
@@ -1709,38 +1723,23 @@ def list_formula_formalization_items(limit: int = 100) -> dict[str, Any]:
             "quality_flags": flags,
             "formula_confirmation_status": row.get("formula_confirmation_status"),
             "product_review_candidate_id": _coerce_int(row.get("product_review_candidate_id")),
-            "can_formalize": row.get("overall_status") == "ready_for_rebuild"
-                and row.get("input_result_stage") == "official",
+            "recalculation_pending": bool(row.get('recalculation_task_id')),
+            "recalculation_message": row.get('waiting_reason') or (
+                '等待当前流程结束及正式门禁通过' if row.get('recalculation_task_id') else ''),
+            "can_formalize": not row.get('recalculation_task_id'),
         })
     return {"ok": True, "items": items, "count": len(items)}
 
 
 def start_formula_formalization(task_id: str, formula_id: int) -> dict[str, Any]:
-    """Strictly requeue an already reviewed formula for an official publication."""
-    with _connect() as conn:
-        with conn.cursor() as cursor:
-            cursor.execute(
-                """SELECT p.overall_status,p.unmatched_ingredient_count,f.confirmation_status
-                   FROM catfood_formula_feature_profile p
-                   JOIN catfood_standard_formula f ON f.formula_id=p.formula_id
-                   WHERE p.formula_id=%s""",
-                (int(formula_id),),
-            )
-            row = cursor.fetchone()
-    if not row:
-        raise KeyError(f"formula_id 不存在: {formula_id}")
-    blockers = []
-    if row.get("confirmation_status") == "provisional":
-        blockers.append("产品或配方身份尚未确认")
-    if int(row.get("unmatched_ingredient_count") or 0):
-        blockers.append(f"仍有 {int(row['unmatched_ingredient_count'])} 个原料待确认")
-    if row.get("overall_status") != "ready_for_rebuild":
-        blockers.append("严格原料门禁尚未通过")
-    if blockers:
-        raise ValueError("；".join(blockers))
-    reset_node_for_reextract(task_id, "formula_input_build", "人工审核完成，发起正式重算")
-    wake_dispatcher()
-    return {"ok": True, "task_id": task_id, "formula_id": int(formula_id), "status": "queued"}
+    """Persist intent; the dispatcher alone checks gates and starts another round."""
+    from services import pipeline_recalculation_service as requests
+    task = get_task(task_id)
+    if not task or requests.task_formula_id(task) != int(formula_id):
+        raise ValueError("任务与配方不匹配")
+    requests.request(task_id, "formula_input_build", "人工申请正式重算")
+    return {"ok": True, "task_id": task_id, "formula_id": int(formula_id),
+            "status": "waiting", "message": "已登记，当前流程结束且正式门禁通过后自动重算"}
 
 
 def _set_task_status(
@@ -2523,33 +2522,30 @@ def reset_node_for_reextract(task_id: str, node_code: str, reason: str | None = 
         if parsed_check:
             raise ValueError(f"{parsed_check.reason}，请先重跑配料表 OCR 识别")
 
-    reset_codes = {node_code, *_downstream_node_codes(task["task_type"], node_code)}
-    nodes_by_code = _node_map(task)
-    target_def = definitions[node_code]
-    ready = True
-    for dep_code in target_def.depends_on:
-        dep_node = nodes_by_code.get(dep_code)
-        if not dep_node or dep_node["node_status"] not in {NODE_SUCCESS, NODE_SKIPPED}:
-            ready = False
-            break
-
     with _connect() as conn:
-        for reset_code in reset_codes:
-            _delete_node_output(conn, task_id, reset_code)
-            _set_node_status(
-                conn,
-                task_id,
-                reset_code,
-                NODE_READY if reset_code == node_code and ready else NODE_PENDING,
-                (reason or "人工触发重新抽取") if reset_code == node_code else None,
-            )
-            with conn.cursor() as cursor:
-                cursor.execute("UPDATE pipeline_task_node SET attempt_count=0 WHERE task_id=%s AND node_code=%s",
-                               (task_id, reset_code))
-        _set_task_status(conn, task_id, TASK_PROCESSING, None)
+        _reset_task_nodes(conn, task, node_code, reason)
         conn.commit()
     wake_dispatcher()
     return get_task(task_id) or {"id": task_id}
+
+
+def _reset_task_nodes(conn, task, node_code, reason=None):
+    """Reset within the caller's transaction, including queue acknowledgement."""
+    task_id = task['id']
+    definition = {node.node_code: node for node in get_pipeline_definition(task['task_type'])}
+    nodes = _node_map(task)
+    ready = all(nodes.get(dep, {}).get('node_status') in {NODE_SUCCESS, NODE_SKIPPED}
+                for dep in definition[node_code].depends_on)
+    reset_codes = {node_code, *_downstream_node_codes(task['task_type'], node_code)}
+    for reset_code in reset_codes:
+        _delete_node_output(conn, task_id, reset_code)
+        _set_node_status(conn, task_id, reset_code,
+                         NODE_READY if reset_code == node_code and ready else NODE_PENDING,
+                         (reason or "人工触发重新抽取") if reset_code == node_code else None)
+        with conn.cursor() as cursor:
+            cursor.execute("UPDATE pipeline_task_node SET attempt_count=0 WHERE task_id=%s AND node_code=%s",
+                           (task_id, reset_code))
+    _set_task_status(conn, task_id, TASK_PROCESSING, None)
 
 
 def complete_duplicate_formula_tasks(source_ids: list[int]) -> list[str]:
