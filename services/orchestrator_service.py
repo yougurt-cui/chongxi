@@ -1686,19 +1686,20 @@ def list_formula_formalization_items(limit: int = 100) -> dict[str, Any]:
             rows = cursor.fetchall()
     items = []
     for row in rows:
+        task_payload = _json_loads(row.get("payload_json"), {})
         flags = _json_loads(row.get("quality_flags_json"), [])
         names = [value for value in str(row.get("unmatched_names") or "").split("｜") if value]
         items.append({
             "task_id": str(row["task_id"]),
             "task_status": row["task_status"],
-            "task_payload": _json_loads(row.get("payload_json"), {}),
+            "task_payload": task_payload,
             "node_code": "ingredient_extract",
             "node_name": "原料特征生成",
             "node_status": row["node_status"],
             "node_updated_at": str(row["node_updated_at"]),
             "formula_id": int(row["formula_id"]),
-            "brand": row.get("standard_brand_name"),
-            "product_name": row.get("standard_product_name"),
+            "brand": task_payload.get("brand_name") or row.get("standard_brand_name"),
+            "product_name": task_payload.get("product_name") or row.get("standard_product_name"),
             "coverage": float(row.get("standardization_coverage") or 0),
             "unmatched_count": int(row.get("unmatched_ingredient_count") or 0),
             "unmatched_names": names,
