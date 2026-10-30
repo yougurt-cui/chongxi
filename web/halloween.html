@@ -1,73 +1,175 @@
 <!doctype html>
 <html lang="zh-CN">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
-  <meta name="theme-color" content="#281439" />
-  <title>万圣节萌宠变装｜宠析 × aibubu</title>
-  <meta name="description" content="宠析 × aibubu 万圣节萌宠变装活动说明与兑换指引。" />
-  <style>
-    :root { --night:#281439; --night2:#3b2050; --orange:#ff9d38; --cream:#fff5e8; --ink:#2b1b32; --lavender:#d9c4ff; --muted:#766b79; }
-    * { box-sizing:border-box; }
-    body { margin:0; color:#fff; background:radial-gradient(circle at 85% 8%,#58316d 0,transparent 26%),linear-gradient(155deg,var(--night2),var(--night) 50%,#170d20); font-family:"PingFang SC","Noto Sans SC",system-ui,sans-serif; }
-    a { color:inherit; }
-    .page { width:min(760px,100%); min-height:100vh; margin:auto; padding:24px clamp(20px,5vw,42px) 48px; }
-    header { display:flex; align-items:center; justify-content:space-between; gap:18px; }
-    .brand,.tag { display:inline-flex; align-items:center; width:max-content; padding:8px 16px; border-radius:999px; background:rgba(255,255,255,.12); font-size:13px; letter-spacing:.04em; }
-    .rules { color:#eadff1; font-size:14px; text-decoration:none; }
-    h1 { margin:34px 0 8px; font-size:clamp(38px,8vw,66px); line-height:1.12; letter-spacing:-.04em; }
-    h1 span { display:block; color:var(--orange); }
-    .lead { margin:18px 0 30px; color:#ded1e5; line-height:1.75; }
-    .scene { position:relative; min-height:230px; overflow:hidden; display:grid; place-items:center; border-radius:34px; background:linear-gradient(135deg,#6e3b7a,#31203f); box-shadow:0 26px 70px rgba(0,0,0,.24); }
-    .moon { position:absolute; top:26px; right:42px; width:92px; aspect-ratio:1; border-radius:50%; background:#ffdca6; box-shadow:0 0 40px rgba(255,220,166,.38); }
-    .cat { position:relative; z-index:1; font-size:96px; filter:drop-shadow(0 12px 16px rgba(0,0,0,.35)); transform:rotate(-4deg); }
-    .scene-label { position:absolute; left:22px; bottom:20px; padding:9px 15px; border-radius:999px; color:var(--ink); background:var(--cream); font-size:12px; font-weight:700; }
-    .card { margin-top:28px; padding:clamp(24px,5vw,38px); border-radius:34px; color:var(--ink); background:var(--cream); box-shadow:0 28px 80px rgba(0,0,0,.2); }
-    .card-top { display:flex; align-items:center; justify-content:space-between; gap:18px; }
-    .tag { color:var(--ink); background:var(--lavender); font-weight:700; }
-    .quota { margin:12px 0 22px; font-size:18px; font-weight:700; }
-    .quota strong { margin-right:8px; font-size:64px; line-height:1; }
-    .notice { padding:18px; border-radius:20px; background:#f1e7dc; line-height:1.7; }
-    .notice strong { display:block; margin-bottom:4px; }
-    .primary { display:flex; justify-content:center; width:100%; margin-top:20px; padding:16px 20px; border-radius:18px; color:var(--ink); background:var(--orange); font-weight:800; text-decoration:none; }
-    .section { padding:42px 4px 0; }
-    .section h2 { margin:0 0 22px; font-size:28px; }
-    .steps { display:grid; gap:14px; }
-    .step { display:grid; grid-template-columns:40px 1fr; gap:14px; padding:18px; border:1px solid rgba(255,255,255,.12); border-radius:20px; background:rgba(255,255,255,.06); }
-    .step b { display:grid; place-items:center; width:36px; height:36px; border-radius:50%; color:var(--ink); background:var(--lavender); }
-    .step strong { display:block; margin:2px 0 5px; }
-    .step p { margin:0; color:#d9cddd; font-size:14px; line-height:1.65; }
-    footer { padding-top:46px; color:#bbaec2; text-align:center; font-size:12px; }
-    @media (max-width:520px) { .page{padding-top:18px}.scene{min-height:190px}.cat{font-size:78px}.moon{width:72px}.quota strong{font-size:54px} }
-  </style>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#1c1028">
+<meta name="description" content="宠析万圣节：给毛孩子换个魔法造型，发帖赢生图口令。限量50个名额，先到先得。">
+<title>宠析 · 万圣节萌宠魔法造型</title>
+<link rel="preload" href="assets/halloween/title-font.ttf" as="font" type="font/ttf" crossorigin>
+<style>
+@font-face{font-family:HalloweenTitle;src:url('assets/halloween/title-font.ttf') format('truetype');font-weight:900;font-display:swap}
+:root{color-scheme:dark;--bg:#1c1028;--cream:#fff7ec;--muted:#d2c2dd;--ink:#24152f;--orange:#ff982f;--purple:#c99af8;--gutter:100px;--gap:48px;--info:500px;--art:100px}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--cream);font-family:'Noto Sans SC',-apple-system,BlinkMacSystemFont,'PingFang SC','Microsoft YaHei',sans-serif;line-height:1.45}p,h1,figure{margin:0}a{color:inherit;text-decoration:none}button,a{-webkit-tap-highlight-color:transparent}button{font:inherit}img{display:block}a:focus-visible,button:focus-visible{outline:3px solid var(--purple);outline-offset:5px}
+.page{max-width:1440px;margin:0 auto;padding:0 var(--gutter)}.brandbar{display:flex;justify-content:space-between;align-items:center;padding:24px 0}.brand{font-weight:700;font-size:22px}.edition{font-size:12px;color:#c7a0f5}
+.hero{display:flex;align-items:flex-start;gap:var(--gap);padding:24px 0 60px}.info{display:flex;flex:0 0 var(--info);min-width:0;flex-direction:column;align-items:flex-start;gap:18px}.intro{width:100%;display:flex;flex-direction:column;align-items:flex-start;gap:18px}
+.artwork{font-size:var(--art);width:5em;max-width:100%;padding:.1em .08em .08em;font-family:HalloweenTitle,'Noto Sans SC','Microsoft YaHei',sans-serif;font-weight:900}.headline{display:flex;flex-direction:column;align-items:flex-start;gap:.1em;font:inherit;line-height:1.1;white-space:nowrap}.title-row{display:flex;align-items:center;gap:.12em}.ghost{width:.64em;height:.84em;flex:none}.letter{paint-order:stroke fill;-webkit-text-stroke:.085em #100719;stroke-linejoin:round}.halloween{font-size:1.18em;color:var(--orange)}.pet-line{font-size:.67em}.magic-line{gap:.06em}.magic{font-size:.94em;color:var(--purple)}.makeover{font-size:.88em}.spark{font-size:.58em;color:#ffc85a}.ribbon{display:flex;width:max-content;align-items:center;margin-top:.357em;padding:.321em .857em;background:#bd8bef;color:var(--ink);border-radius:.679em;font-size:.28em;line-height:1.1;white-space:pre}.tagline{font-size:16px;color:var(--muted);width:100%}
+.gallery{display:flex;flex:1;min-width:0;flex-direction:column;gap:14px}.looks{display:flex;flex-wrap:wrap;align-items:flex-start;gap:14px}.look{display:flex;flex-direction:column;gap:8px;flex:0 0 calc((100% - 28px)/3);min-width:0}.photo{position:relative;width:100%;aspect-ratio:var(--ratio);overflow:hidden;border-radius:12px}.photo img{position:absolute;width:var(--iw);height:auto;max-width:none;left:var(--ix);top:var(--iy)}figcaption{text-align:center;font-size:12px;color:var(--muted)}.disclaimer{font-size:11px;color:var(--muted)}
+.claim{display:flex;align-items:center;gap:20px;padding:20px;border-radius:16px;background:var(--cream);color:var(--ink);width:100%}.qr{width:128px;height:128px;flex:none;border-radius:12px;object-fit:contain;user-select:auto;-webkit-touch-callout:default}.claim-copy{display:flex;flex-direction:column;gap:8px;min-width:0}.claim-title{font-size:18px;font-weight:700}.claim-detail{font-size:14px;color:#77667e}.mobile-label{display:none}.actions{display:flex;flex-direction:column;align-items:flex-start;gap:18px;width:100%}.action{display:flex;align-items:center;justify-content:center;gap:8px;min-height:52px;width:240px;max-width:100%;padding:12px 16px;border:0;border-radius:12px;background:var(--orange);color:var(--ink);font-size:16px;font-weight:700;cursor:pointer;transition:background .15s,transform .15s}.action:hover{background:#ffac55}.action:active{transform:translateY(1px)}.mini-entry[hidden]{display:none!important}.mini-entry{position:relative;width:240px;max-width:100%;min-height:52px}.mini-entry .action{width:100%}.mini-launch{position:absolute;inset:0;display:block;width:100%;height:100%;opacity:0;pointer-events:none}.mini-entry[data-state="ready"] .mini-launch{opacity:1;pointer-events:auto}.mini-entry[data-state="ready"] .mini-fallback{visibility:hidden}
+.notice{position:fixed;bottom:max(24px,env(safe-area-inset-bottom));left:50%;transform:translateX(-50%);max-width:calc(100% - 40px);width:max-content;padding:14px 20px;border:1px solid #c7a0f5;border-radius:12px;background:#352044;color:var(--cream);box-shadow:0 8px 32px #0006;z-index:10;font-size:14px}.notice:empty{display:none}
+@media (min-width:820px) and (max-width:1439px){:root{--gutter:40px;--info:360px;--art:72px}.claim{gap:16px}.claim-title{font-size:16px}.claim-detail{font-size:13px}}
+@media (min-width:820px) and (max-width:959px){:root{--gutter:24px;--gap:28px;--info:320px;--art:64px}.qr{width:104px;height:104px}.claim{padding:16px;gap:12px}.tagline{font-size:14px}}
+@media (max-width:819px){:root{--gutter:20px;--art:60px}.brandbar{padding:18px 0}.brand{font-size:18px}.hero{flex-direction:column;gap:18px;padding:4px 0 calc(28px + env(safe-area-inset-bottom))}.info{display:contents}.intro{order:0;align-items:flex-end;gap:12px}.tagline{text-align:right;font-size:12px}.gallery{order:1;width:100%;flex:auto;gap:8px}.looks{gap:8px}.look{flex-basis:calc((100% - 16px)/3);gap:5px}figcaption,.disclaimer{font-size:10px}.claim{order:2;padding:14px;gap:16px}.qr{width:100px;height:100px}.claim-title{font-size:14px}.claim-detail{font-size:12px}.desktop-label{display:none}.mobile-label{display:inline}.actions{order:3}.action{width:100%;min-height:48px}.mini-entry{width:100%;min-height:52px}}
+@media (max-width:359px){:root{--gutter:16px;--art:54px}.claim{gap:12px;padding:12px}.qr{width:88px;height:88px}.edition{font-size:11px}.tagline{font-size:11px}}
+@media (prefers-reduced-motion:reduce){.action{transition:none}}
+</style>
 </head>
 <body>
-  <main class="page">
-    <header><span class="brand">宠析 × aibubu</span><a class="rules" href="#rules">领取规则 ›</a></header>
-    <h1>万圣节，给毛孩子<span>换个魔法造型</span></h1>
-    <p class="lead">发布活动帖子，领取限量生图兑换码，为毛孩子制作一张专属万圣节大片。</p>
-    <div class="scene" aria-label="万圣节萌宠插画"><span class="moon"></span><span class="cat">🐈‍⬛🎃</span><span class="scene-label">HALLOWEEN PET PARTY</span></div>
-    <section class="card">
-      <div class="card-top"><span class="tag">联名限量福利</span><span>先到先得</span></div>
-      <div class="quota"><strong>50</strong>个名额</div>
-      <div class="notice"><strong>请在宠析小程序参与和领取</strong>活动资格、库存与兑换码均以小程序活动页的实时状态为准。</div>
-      <a class="primary" href="#guide">查看参与与使用方法</a>
-    </section>
-    <section class="section" id="guide">
-      <h2>使用方法</h2>
-      <div class="steps">
-        <div class="step"><b>1</b><div><strong>在宠析完成活动任务</strong><p>进入小程序活动页，按活动要求发布帖子并等待任务状态更新。</p></div></div>
-        <div class="step"><b>2</b><div><strong>领取并复制兑换码</strong><p>任务达标后在活动页领取；再次进入活动页也可以查看。</p></div></div>
-        <div class="step"><b>3</b><div><strong>前往 aibubu 兑换</strong><p>登录个人空间，找到 “Redeem event code” 并输入兑换码。</p></div></div>
-        <div class="step"><b>4</b><div><strong>开始萌宠创作</strong><p>兑换成功后上传宠物照片，创作专属万圣节造型。</p></div></div>
-      </div>
-      <a class="primary" href="https://aibubu.cn/en" target="_blank" rel="noopener noreferrer">打开 aibubu</a>
-    </section>
-    <section class="section" id="rules">
-      <h2>活动规则</h2>
-      <div class="notice" style="color:var(--ink)">活动限量 50 个名额，领完即止。每位用户的领取数量、帖子审核结果、兑换有效期和最终权益，以宠析小程序活动页及正式活动公告为准。</div>
-    </section>
-    <footer>宠析 × aibubu 联合呈现</footer>
-  </main>
+<div class="page">
+<header class="brandbar"><p class="brand">宠析 CHONGXI</p><p class="edition">万圣节限定</p></header>
+<main class="hero">
+<div class="info">
+<div class="intro">
+<div class="artwork">
+<h1 class="headline" aria-label="万圣节，给毛孩子换个魔法造型">
+<span class="title-row" aria-hidden="true"><img class="ghost" src="assets/halloween/ghost.svg" width="64" height="84" alt=""><span class="letter halloween">万圣节</span></span>
+<span class="letter pet-line" aria-hidden="true">给毛孩子换个</span>
+<span class="title-row magic-line" aria-hidden="true"><span class="letter magic">魔</span><span class="letter makeover">法造型</span><span class="letter spark">✦</span></span>
+</h1>
+<p class="ribbon">发帖赢生图口令  ✦</p>
+</div>
+<p class="tagline">用 AI 生成你家毛孩子的万圣节大片</p>
+</div>
+<section class="claim" aria-label="扫码领取生图口令">
+<img class="qr" id="mini-qr" src="assets/halloween/miniprogram.png" width="128" height="128" alt="宠析小程序码，可用微信扫码或长按识别">
+<div class="claim-copy"><p class="claim-title"><span class="desktop-label">微信扫码进入宠析</span><span class="mobile-label">长按识别小程序码</span></p><p class="claim-detail">发帖领取生图口令<br>限量 50 名，先到先得</p></div>
+</section>
+<div class="actions">
+<div class="mini-entry" id="mini-entry" hidden data-state="loading">
+<button class="action mini-fallback" id="mini-link" type="button">打开宠析小程序 <span aria-hidden="true">↗</span></button>
+<wx-open-launch-weapp class="mini-launch" id="mini-launch" username="gh_425032a71c56" aria-label="打开宠析小程序">
+<template>
+<style>button{box-sizing:border-box;display:flex;align-items:center;justify-content:center;gap:8px;width:100%;height:52px;margin:0;padding:12px 16px;border:0;border-radius:12px;background:#ff982f;color:#24152f;font:700 16px/1.5 -apple-system,BlinkMacSystemFont,'PingFang SC','Microsoft YaHei',sans-serif;cursor:pointer}button:active{background:#ffac55}button:focus-visible{outline:3px solid #c99af8;outline-offset:-3px}</style>
+<button type="button">打开宠析小程序 ↗</button>
+</template>
+</wx-open-launch-weapp>
+</div>
+<a class="action" id="generate-link" role="button" tabindex="0">已有口令，去生成 <span aria-hidden="true">↗</span></a>
+</div>
+</div>
+<section class="gallery" aria-label="万圣节 AI 生图效果展示">
+<div class="looks">
+<figure class="look"><div class="photo" style="--ratio:0.96146174;--iw:918.38565022%;--ix:-131.83856502%;--iy:-79.31034483%"><img src="assets/halloween/looks.png" alt="小红帽奇遇万圣节生成效果" decoding="async" width="3458" height="1396"></div><figcaption>小红帽奇遇</figcaption></figure>
+<figure class="look"><div class="photo" style="--ratio:0.96577323;--iw:914.28571429%;--ix:-241.51785714%;--iy:-79.31034483%"><img src="assets/halloween/looks.png" alt="南瓜亲子装万圣节生成效果" decoding="async" width="3458" height="1396"></div><figcaption>南瓜亲子装</figcaption></figure>
+<figure class="look"><div class="photo" style="--ratio:0.95715025;--iw:922.52252252%;--ix:-355.85585586%;--iy:-79.31034483%"><img src="assets/halloween/looks.png" alt="午夜魔法师万圣节生成效果" decoding="async" width="3458" height="1396"></div><figcaption>午夜魔法师</figcaption></figure>
+<figure class="look"><div class="photo" style="--ratio:0.96577323;--iw:914.28571429%;--ix:-683.92857143%;--iy:-79.31034483%"><img src="assets/halloween/looks.png" alt="幽灵搭档万圣节生成效果" decoding="async" width="3458" height="1396"></div><figcaption>幽灵搭档</figcaption></figure>
+<figure class="look"><div class="photo" style="--ratio:0.96146174;--iw:918.38565022%;--ix:-798.20627803%;--iy:-79.31034483%"><img src="assets/halloween/looks.png" alt="怪可爱搭档万圣节生成效果" decoding="async" width="3458" height="1396"></div><figcaption>怪可爱搭档</figcaption></figure>
+<figure class="look"><div class="photo" style="--ratio:0.96562391;--iw:918.38565022%;--ix:-576.23318386%;--iy:-228.13852814%"><img src="assets/halloween/looks.png" alt="木乃伊萌猫万圣节生成效果" decoding="async" width="3458" height="1396"></div><figcaption>木乃伊萌猫</figcaption></figure>
+</div>
+<p class="disclaimer">AI 生成效果示意</p>
+</section>
+</main>
+</div>
+<p class="notice" id="notice" role="status" aria-live="polite"></p>
+<script>
+/* 微信云开发静态网站免鉴权方案：
+   https://developers.weixin.qq.com/minigame/dev/wxcloud/guide/staticstorage/jump-miniprogram.html
+   前提：非个人主体且已认证的小程序；从「微信开发者工具 → 云开发 → 更多 → 静态网站」
+   开通托管并绑定自定义域名。任意普通托管域名或 file:// 不具备免鉴权能力。
+   wx.config 的任意签名值仅适用于上述托管环境；普通域名需另行接入真实 JSSDK 签名。
+   仅微信内显示开放标签，因此不需要文档中的外部浏览器 URL Scheme 云函数和 Cloud SDK。
+   miniProgramPath 留空打开首页；需要指定活动页时填写已发布的小程序页面路径。
+   generateUrl 为生图平台 HTTPS 地址；qrImageUrl 可替换正式小程序码图片。 */
+const CONFIG = {
+  miniProgramAppId: 'wxec9a56b911900aa0',
+  miniProgramOriginalId: 'gh_425032a71c56',
+  miniProgramPath: '',
+  generateUrl: '',
+  qrImageUrl: ''
+};
+(() => {
+  const notice = document.getElementById('notice');
+  let timer;
+  function tell(message) {
+    clearTimeout(timer);
+    notice.textContent = message;
+    timer = setTimeout(() => { notice.textContent = ''; }, 4500);
+  }
+  function isHttps(value) {
+    try { return new URL(value).protocol === 'https:'; } catch { return false; }
+  }
+  function connect(id, url, message) {
+    const link = document.getElementById(id);
+    if (isHttps(url)) {
+      link.href = url;
+      link.removeAttribute('role');
+      link.removeAttribute('tabindex');
+    } else {
+      link.addEventListener('click', () => tell(message));
+      link.addEventListener('keydown', event => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          link.click();
+        }
+      });
+    }
+  }
+  const miniEntry = document.getElementById('mini-entry');
+  const miniLink = document.getElementById('mini-link');
+  const launch = document.getElementById('mini-launch');
+  const isWeChat = /MicroMessenger/i.test(navigator.userAgent) && !/wxwork/i.test(navigator.userAgent);
+  launch.setAttribute('username', CONFIG.miniProgramOriginalId);
+  if (CONFIG.miniProgramPath) launch.setAttribute('path', CONFIG.miniProgramPath);
+  if (isWeChat) {
+    miniEntry.hidden = false;
+    let readyTimer;
+    let fallbackMessage = '小程序入口正在加载，请稍后再试，或长按识别上方小程序码。';
+    function failLaunch(message) {
+      clearTimeout(readyTimer);
+      miniEntry.dataset.state = 'error';
+      fallbackMessage = message;
+    }
+    miniLink.addEventListener('click', () => tell(fallbackMessage));
+    launch.addEventListener('ready', () => {
+      clearTimeout(readyTimer);
+      miniEntry.dataset.state = 'ready';
+    });
+    launch.addEventListener('launch', () => { notice.textContent = ''; });
+    launch.addEventListener('error', () => {
+      // A launch failure need not disable the valid tag: allow another user tap.
+      tell('暂时无法打开小程序，请重试或长按识别上方小程序码。');
+    });
+    if (location.protocol !== 'https:') {
+      failLaunch('请在正式活动链接中打开，或长按识别上方小程序码。');
+    } else {
+      readyTimer = setTimeout(() => failLaunch('小程序入口暂不可用，请长按识别上方小程序码。'), 12000);
+      const sdk = document.createElement('script');
+      sdk.src = 'https://res.wx.qq.com/open/js/jweixin-1.6.0.js';
+      sdk.async = true;
+      sdk.onerror = () => failLaunch('小程序入口加载失败，请长按识别上方小程序码。');
+      sdk.onload = () => {
+        try {
+          if (!window.wx || typeof window.wx.config !== 'function') throw new Error('WeChat SDK unavailable');
+          window.wx.error(() => failLaunch('小程序入口暂不可用，请长按识别上方小程序码。'));
+          // Official static-hosting exemption. No AppSecret belongs in this page.
+          window.wx.config({
+            appId: CONFIG.miniProgramAppId,
+            timestamp: 0,
+            nonceStr: 'nonceStr',
+            signature: 'signature',
+            jsApiList: ['chooseImage'],
+            openTagList: ['wx-open-launch-weapp']
+          });
+        } catch (_) {
+          failLaunch('小程序入口暂不可用，请长按识别上方小程序码。');
+        }
+      };
+      document.head.appendChild(sdk);
+    }
+  }
+  connect('generate-link', CONFIG.generateUrl, '生图入口暂未开放，请稍后再试。');
+  if (CONFIG.qrImageUrl) document.getElementById('mini-qr').src = CONFIG.qrImageUrl;
+})();
+</script>
 </body>
 </html>
