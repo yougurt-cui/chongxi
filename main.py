@@ -2117,6 +2117,10 @@ def create_app() -> Flask:
     def official_site_html():
         return send_from_directory(WEB_DIR, "official-site.html")
 
+    @flask_app.get("/halloween.html")
+    def halloween_html():
+        return send_from_directory(WEB_DIR, "halloween.html")
+
     @flask_app.get("/consumer-portal.html")
     def consumer_portal_html():
         if response := _workbench_login_required():
