@@ -1988,6 +1988,10 @@ def create_app() -> Flask:
     def vite_assets(filename: str):
         return send_from_directory(DIST_DIR / "assets", filename)
 
+    @flask_app.get("/assets/halloween/<path:filename>")
+    def halloween_assets(filename: str):
+        return send_from_directory(WEB_DIR / "assets" / "halloween", filename)
+
     @flask_app.get("/products/<path:filename>")
     def product_assets(filename: str):
         return send_from_directory(DIST_DIR / "products", filename)
