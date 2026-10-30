@@ -62,7 +62,6 @@ from services.miniprogram_moment_image_service import (
 )
 from services.miniprogram_pet_image_service import get_pet_image, upload_and_recognize_pet
 from services.miniprogram_content_review_service import handle_wechat_safety_callback
-from services.miniprogram_url_link_service import generate_url_link
 from services.miniprogram_moment_report_service import (
     create_moment_report,
     list_moment_reports,
@@ -248,19 +247,6 @@ def _verify_wechat_callback_signature() -> None:
     expected = hashlib.sha1("".join(sorted([token, timestamp, nonce])).encode("utf-8")).hexdigest()
     if signature != expected:
         raise PermissionError("微信回调签名校验失败")
-
-
-@miniprogram_api.post("/admin/url-links")
-def create_miniprogram_url_link_endpoint():
-    try:
-        _require_admin_token()
-        return jsonify(generate_url_link(_json_payload())), 200
-    except PermissionError as exc:
-        return jsonify({"ok": False, "error": str(exc)}), 403
-    except ValueError as exc:
-        return jsonify({"ok": False, "error": str(exc)}), 400
-    except Exception:
-        return jsonify({"ok": False, "error": "生成小程序 URL Link 失败"}), 502
 
 
 @miniprogram_api.get("/wechat-safety-callback")

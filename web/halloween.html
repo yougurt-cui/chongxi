@@ -205,7 +205,7 @@ const CONFIG = {
   }
   const miniEntry = document.getElementById('mini-entry');
   const isWeChat = /MicroMessenger/i.test(navigator.userAgent) && !/wxwork/i.test(navigator.userAgent);
-  if (isWeChat) {
+  if (isHttps(CONFIG.miniProgramUrl) || isWeChat) {
     miniEntry.hidden = false;
     connect('mini-link', CONFIG.miniProgramUrl, '请先长按识别上方小程序码，进入宠析领取口令。');
   }
