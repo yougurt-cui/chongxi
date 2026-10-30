@@ -28,6 +28,7 @@ ACTIVITY_TABLE = "miniprogram_activity"
 CODE_TABLE = "miniprogram_activity_code"
 CLAIM_TABLE = "miniprogram_activity_claim"
 POST_TABLE = "miniprogram_cat_moment_post"
+USER_TABLE = "miniprogram_user"
 
 # 业务状态（与小程序端约定，均为 HTTP 200 返回）
 STATUS_SUCCESS = "SUCCESS"
@@ -392,6 +393,108 @@ def _serialize_activity(activity: dict[str, Any] | None) -> dict[str, Any] | Non
     return serialized
 
 
+def list_user_activity_claims(
+    *,
+    user_id: Any = "",
+    openid: Any = "",
+    activity_id: Any = None,
+) -> dict[str, Any]:
+    """按用户查领取记录（运营/核销对账用）。
+
+    支持三种定位方式：内部 user_id、微信 openid（自动换算）、不指定用户时
+    列出某活动的全部领取记录。activity_id 可选，缺省查所有活动。
+    """
+    cleaned_user_id = _clean_text(user_id, 128)
+    cleaned_openid = _clean_text(openid, 128)
+    if not cleaned_user_id and not cleaned_openid:
+        raise ValueError("user_id 与 openid 至少提供一个")
+    cleaned_activity_id = (
+        _clean_positive_int(activity_id, "activity_id") if activity_id not in (None, "", 0, "0") else None
+    )
+
+    conn = _connect(autocommit=True)
+    try:
+        with conn.cursor() as cursor:
+            # openid 优先换算成内部 user_id；两者都给时以 user_id 为准，openid 仅作校验
+            user_row: dict[str, Any] | None = None
+            if cleaned_user_id:
+                cursor.execute(
+                    f"SELECT id, openid, unionid, nickname, phone_number FROM {USER_TABLE} WHERE id=%s LIMIT 1",
+                    (cleaned_user_id,),
+                )
+                user_row = cursor.fetchone()
+            else:
+                cursor.execute(
+                    f"SELECT id, openid, unionid, nickname, phone_number FROM {USER_TABLE} WHERE openid=%s LIMIT 1",
+                    (cleaned_openid,),
+                )
+                user_row = cursor.fetchone()
+                if not user_row:
+                    raise LookupError("openid 未找到对应用户")
+                cleaned_user_id = _clean_text(user_row.get("id"), 128)
+
+            filters = ["r.user_id=%s"]
+            params: list[Any] = [cleaned_user_id]
+            if cleaned_activity_id is not None:
+                filters.append("r.activity_id=%s")
+                params.append(cleaned_activity_id)
+
+            cursor.execute(
+                f"""
+                SELECT r.id, r.activity_id, r.user_id, r.post_id, r.claimed_at,
+                       c.code, c.batch, c.credits_per_code, c.redeem_ends_at, c.sequence_no
+                FROM {CLAIM_TABLE} r
+                JOIN {CODE_TABLE} c ON c.id = r.code_id
+                WHERE {' AND '.join(filters)}
+                ORDER BY r.claimed_at DESC, r.id DESC
+                """,
+                params,
+            )
+            rows = list(cursor.fetchall() or [])
+    finally:
+        conn.close()
+
+    claims = []
+    for row in rows:
+        claims.append(
+            {
+                "claim_id": row.get("id"),
+                "activity_id": row.get("activity_id"),
+                "post_id": row.get("post_id"),
+                "code": _clean_text(row.get("code")),
+                "batch": row.get("batch"),
+                "credits_per_code": float(row["credits_per_code"])
+                if isinstance(row.get("credits_per_code"), Decimal)
+                else row.get("credits_per_code"),
+                "redeem_ends_at": row["redeem_ends_at"].strftime("%Y-%m-%d %H:%M:%S")
+                if isinstance(row.get("redeem_ends_at"), datetime)
+                else row.get("redeem_ends_at"),
+                "sequence_no": row.get("sequence_no"),
+                "claimed_at": row["claimed_at"].strftime("%Y-%m-%d %H:%M:%S")
+                if isinstance(row.get("claimed_at"), datetime)
+                else row.get("claimed_at"),
+            }
+        )
+
+    user_info: dict[str, Any] | None = None
+    if user_row:
+        user_info = {
+            "user_id": _clean_text(user_row.get("id"), 128),
+            "openid": user_row.get("openid"),
+            "unionid": user_row.get("unionid"),
+            "nickname": user_row.get("nickname"),
+            "phone_number": user_row.get("phone_number"),
+        }
+
+    return {
+        "ok": True,
+        "user": user_info,
+        "activity_id": cleaned_activity_id,
+        "count": len(claims),
+        "claims": claims,
+    }
+
+
 def get_activity_stats(activity_id: Any) -> dict[str, Any]:
     """运营用库存统计。"""
     cleaned_activity_id = _clean_positive_int(activity_id, "activity_id")
@@ -616,6 +719,7 @@ __all__ = [
     "init_miniprogram_activity_tables",
     "claim_activity_code",
     "get_my_activity_code",
+    "list_user_activity_claims",
     "get_activity_stats",
     "upsert_activity",
     "import_activity_codes",

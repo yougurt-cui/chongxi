@@ -87,6 +87,17 @@ HTTP 状态码：`200` 业务结果；`400` 参数/活动不可用；`401` 未�
 - `GET /api/miniprogram/admin/activity/<activity_id>/stats`：总量 / 已领 / 剩余。
 - `POST /api/miniprogram/admin/activity/<activity_id>/codes`：补码，
   body `{"text": "每行一个码"}` 或 `{"codes": [...]}`，支持 `"dry_run": true`。
+- `GET /api/miniprogram/admin/activity/claims`：按用户查领取记录（核销对账用）。
+  查询参数 `user_id`（内部 32 位 ID）或 `openid`（自动换算）至少一个，
+  `activity_id` 可选；不指定 `activity_id` 时返回该用户所有活动的领取记录。
+  未知的 openid 返回 404。示例：
+
+  ```
+  GET /api/miniprogram/admin/activity/claims?user_id=4e8789c5428c880a713d385d640c0d40&activity_id=1001
+  GET /api/miniprogram/admin/activity/claims?openid=ov9oSxi3Fsnsya3p2Ib363EzbbYI
+  ```
+
+  返回 `{"ok":true,"user":{...},"activity_id":...,"count":n,"claims":[{claim_id, activity_id, post_id, code, batch, credits_per_code, redeem_ends_at, sequence_no, claimed_at}]}`。
 
 ## 4. 小程序端调用
 

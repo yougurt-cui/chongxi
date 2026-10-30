@@ -87,6 +87,7 @@ from services.miniprogram_activity_service import (
     get_activity_stats,
     get_my_activity_code,
     import_activity_codes,
+    list_user_activity_claims,
 )
 
 
@@ -1260,6 +1261,32 @@ def get_activity_stats_endpoint(activity_id: int):
         return jsonify({"ok": False, "error": str(exc)}), 400
     except Exception:
         return jsonify({"ok": False, "error": "活动码统计失败，请稍后重试"}), 500
+
+
+@miniprogram_api.get("/admin/activity/claims")
+def list_user_activity_claims_endpoint():
+    """运营用：按用户查领取记录。
+
+    查询参数（user_id / openid 至少一个；activity_id 可选）：
+      GET /api/miniprogram/admin/activity/claims?user_id=<32位内部ID>
+      GET /api/miniprogram/admin/activity/claims?openid=<微信openid>&activity_id=1001
+    """
+    try:
+        _require_admin_token()
+        result = list_user_activity_claims(
+            user_id=request.args.get("user_id") or "",
+            openid=request.args.get("openid") or "",
+            activity_id=request.args.get("activity_id") or None,
+        )
+        return jsonify(result), 200
+    except LookupError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 404
+    except PermissionError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 401
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    except Exception:
+        return jsonify({"ok": False, "error": "活动码记录查询失败，请稍后重试"}), 500
 
 
 @miniprogram_api.post("/admin/activity/<int:activity_id>/codes")
