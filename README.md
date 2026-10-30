@@ -248,3 +248,39 @@ POST  /api/exceptions/{id}/release
 ```bash
 python -m py_compile $(find . -name "*.py" -not -path "./__pycache__/*")
 ```
+
+### 小程序活动页 URL Link（手动生成）
+
+后台新增 `POST /api/miniprogram/admin/url-links`，使用现有 `X-Admin-Token`
+鉴权（环境变量 `MINIPROGRAM_ADMIN_TOKEN`）。不对活动页访客开放生成接口，
+也不在启动或定时任务中生成链接。无需数据库迁移或新增依赖。
+
+复用现有 `WECHAT_MINIPROGRAM_APPID` / `WECHAT_MINIPROGRAM_APP_SECRET`
+配置（兼容原有 `WX_MINIPROGRAM_*` 别名）。凭据只配置在服务器；不返回或记录
+AppSecret、access_token。获取 token 使用 `stable_token` 普通模式，不强制刷新，
+不修改已有登录、内容审核和订阅通知的 token 缓存。
+
+在项目根目录、后端现有 Python 环境中可直接运行，无需启动 Flask：
+
+```sh
+python scripts/generate_miniprogram_url_link.py --expire-days 30
+# 指定已发布页面时：
+python scripts/generate_miniprogram_url_link.py --path pages/your-page/index --query 'source=halloween' --expire-days 7
+```
+
+接口请求体示例：`{"path":"","query":"","expire_days":30}`。
+空 `path` 打开首页，固定生成正式版链接；`expire_days` 为 1–30 整数。
+成功返回 `url_link` 和 UTC 预估过期时间 `expires_at_estimate`。
+管理员鉴权失败返回 401，参数错误 400，凭据缺失 503，微信调用失败 502。
+外部请求每次超时 8 秒；失败不自动重复生成，以免消耗额度。
+
+将返回的 `url_link` 填入 `web/halloween.html` 的 `CONFIG.miniProgramUrl`，
+重新上传 HTML，然后在手机微信验证。活动页仅微信内显示跳转按钮，其他浏览器隐藏。
+该链接可多人访问；到期前手动重新生成并更新页面。首次生成需小程序已有发布版本，
+并满足微信接口主体权限、服务端 IP 白名单等要求。不要将管理员令牌写进活动页。
+
+测试（不连接真实微信或数据库）：
+
+```sh
+python -m pytest tests/test_miniprogram_url_link.py
+```
