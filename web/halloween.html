@@ -46,7 +46,7 @@
 </section>
 <div class="actions">
 <div class="mini-entry" id="mini-entry" hidden data-state="loading">
-<button class="action mini-fallback" id="mini-link" type="button">打开宠析小程序 <span aria-hidden="true">↗</span></button>
+<a class="action mini-fallback" id="mini-link" role="button" tabindex="0">打开宠析小程序 <span aria-hidden="true">↗</span></a>
 <wx-open-launch-weapp class="mini-launch" id="mini-launch" username="gh_425032a71c56" aria-label="打开宠析小程序">
 <template>
 <style>button{box-sizing:border-box;display:flex;align-items:center;justify-content:center;gap:8px;width:100%;height:52px;margin:0;padding:12px 16px;border:0;border-radius:12px;background:#ff982f;color:#24152f;font:700 16px/1.5 -apple-system,BlinkMacSystemFont,'PingFang SC','Microsoft YaHei',sans-serif;cursor:pointer}button:active{background:#ffac55}button:focus-visible{outline:3px solid #c99af8;outline-offset:-3px}</style>
@@ -83,7 +83,8 @@
 const CONFIG = {
   miniProgramAppId: 'wxec9a56b911900aa0',
   miniProgramOriginalId: 'gh_425032a71c56',
-  miniProgramPath: '',
+  miniProgramPath: 'pages/halloween/index.html',
+  miniProgramUrlLink: '',
   generateUrl: '',
   qrImageUrl: ''
 };
@@ -120,8 +121,9 @@ const CONFIG = {
   const isWeChat = /MicroMessenger/i.test(navigator.userAgent) && !/wxwork/i.test(navigator.userAgent);
   launch.setAttribute('username', CONFIG.miniProgramOriginalId);
   if (CONFIG.miniProgramPath) launch.setAttribute('path', CONFIG.miniProgramPath);
+  connect('mini-link', CONFIG.miniProgramUrlLink, '小程序入口暂不可用，请稍后再试。');
+  miniEntry.hidden = false;
   if (isWeChat) {
-    miniEntry.hidden = false;
     let readyTimer;
     let fallbackMessage = '小程序入口正在加载，请稍后再试，或长按识别上方小程序码。';
     function failLaunch(message) {
