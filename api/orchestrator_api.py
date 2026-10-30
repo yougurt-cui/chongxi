@@ -20,8 +20,10 @@ from services.orchestrator_service import (
     dispatch_scan,
     get_task,
     list_review_items,
+    list_formula_formalization_items,
     reset_node_for_reextract,
     run_task,
+    start_formula_formalization,
 )
 
 
@@ -120,6 +122,25 @@ def orchestrator_reviews():
             statuses=statuses or None,
         )
         return jsonify(result), 200
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+
+
+@orchestrator_api.get("/formalization-reviews")
+@admin_required
+def orchestrator_formalization_reviews():
+    try:
+        return jsonify(list_formula_formalization_items(int(request.args.get("limit") or 100))), 200
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+
+
+@orchestrator_api.post("/tasks/<task_id>/formalize")
+@admin_required
+def orchestrator_formalize(task_id: str):
+    try:
+        payload = request.get_json(silent=True) or {}
+        return jsonify(start_formula_formalization(task_id, int(payload.get("formula_id")))), 200
     except Exception as exc:
         return jsonify({"ok": False, "error": str(exc)}), 400
 

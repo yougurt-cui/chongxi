@@ -796,10 +796,14 @@
     <section id="nodeSection" class="section">
       <section class="toolbar">
         <div>
-          <div class="title">待处理节点列表</div>
+          <div class="title">节点任务列表</div>
           <div id="summary" class="muted">正在加载...</div>
         </div>
-        <button id="refresh" class="button secondary" type="button">刷新</button>
+        <div class="row-actions">
+          <button id="nodeExceptionFilter" class="button secondary" type="button">异常待处理</button>
+          <button id="nodeFormalizationFilter" class="button secondary" type="button">初算待转正式</button>
+          <button id="refresh" class="button secondary" type="button">刷新</button>
+        </div>
       </section>
 
       <section class="card">
@@ -1488,6 +1492,8 @@
     const identityEmptyEl = document.getElementById("identityEmpty");
     const identitySummaryEl = document.getElementById("identitySummary");
     const identityRefreshBtn = document.getElementById("identityRefresh");
+    const nodeExceptionFilter = document.getElementById("nodeExceptionFilter");
+    const nodeFormalizationFilter = document.getElementById("nodeFormalizationFilter");
     const brandIdentityTab = document.getElementById("brandIdentityTab");
     const productIdentityTab = document.getElementById("productIdentityTab");
     const formulaIdentityTab = document.getElementById("formulaIdentityTab");
@@ -1622,6 +1628,7 @@
     const ideaFormSubmitBtn = document.getElementById("ideaFormSubmit");
     let ideaCategories = [];
     let activeOcrItem = null;
+    let activeNodeView = "exceptions";
     let activeTab = "node";
     let activeEnterpriseView = "companies";
     let activeIdentityTab = "brand";
@@ -1817,6 +1824,66 @@
           });
         });
 
+        rowsEl.appendChild(row);
+      });
+    }
+
+    function renderFormalizationItems(items) {
+      summaryEl.textContent = `${items.length} 个初算任务待转正式`;
+      rowsEl.innerHTML = "";
+      emptyEl.style.display = items.length ? "none" : "block";
+      emptyEl.textContent = "暂无初算待转正式任务。";
+      items.forEach((item) => {
+        const row = document.createElement("tr");
+        const coverage = `${(Number(item.coverage || 0) * 100).toFixed(1)}%`;
+        const identityPending = (item.quality_flags || []).includes("formula_unconfirmed");
+        row.innerHTML = `
+          <td><div class="task-id">${escapeHtml(item.task_id)}</div><div class="muted">formula_id：${escapeHtml(item.formula_id)}</div></td>
+          <td><span class="chip">catfood_image_analysis</span><div style="margin-top:7px;font-weight:800;">${escapeHtml(item.brand || "-")}｜${escapeHtml(item.product_name || "-")}</div></td>
+          <td><div style="font-weight:800;color:#102236;">${escapeHtml(item.node_name)}</div><div class="muted">ingredient_extract</div></td>
+          <td><span class="status-badge">初算成功 · 待转正式</span><div class="muted" style="margin-top:6px;">标准化率 ${coverage}</div></td>
+          <td class="reason-cell">${identityPending ? "产品/配方身份待确认；" : ""}${item.unmatched_count ? `原料待确认 ${item.unmatched_count} 项` : "严格门禁已通过，可正式重算"}</td>
+          <td class="payload-cell">${(item.unmatched_names || []).map(escapeHtml).join("<br>") || "原料已全部确认"}</td>
+          <td class="muted">${escapeHtml(item.node_updated_at)}</td>
+          <td><div class="row-actions">
+            ${item.product_review_candidate_id ? '<button class="small-button secondary" data-action="formal-product" type="button">确认产品</button>' : ""}
+            <button class="small-button secondary" data-action="formal-formula" type="button">确认配方</button>
+            <button class="small-button secondary" data-action="formal-ingredients" type="button">审核原料</button>
+            <button class="small-button secondary" data-action="formal-reextract" type="button">重新抽取</button>
+            <button class="small-button" data-action="formal-run" type="button" ${item.can_formalize ? "" : "disabled"}>正式重算</button>
+          </div></td>`;
+        const productButton = row.querySelector('[data-action="formal-product"]');
+        if (productButton) productButton.addEventListener("click", () => {
+          focusedProductReview = { productId: String(item.product_review_candidate_id), taskId: item.task_id, nodeCode: "product_standardize" };
+          productStatusFilter.value = "needs_manual_review,pending";
+          switchTab("identity"); switchIdentityTab("product");
+        });
+        row.querySelector('[data-action="formal-formula"]').addEventListener("click", () => {
+          switchTab("identity"); switchIdentityTab("formula");
+          showToast(`请确认配方 ${item.formula_id}`);
+        });
+        row.querySelector('[data-action="formal-ingredients"]').addEventListener("click", () => {
+          ingredientFormulaFilter.value = String(item.formula_id);
+          switchTab("identity"); switchIdentityTab("ingredient");
+        });
+        row.querySelector('[data-action="formal-reextract"]').addEventListener("click", async () => {
+          await runAction(async () => {
+            await api(`/api/orchestrator/tasks/${item.task_id}/nodes/ingredient_extract/reextract`, {
+              method: "POST", headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ reason: "正式化审核发现原料粘连，重新抽取" }),
+            });
+            showToast("已重排原料抽取任务");
+          });
+        });
+        row.querySelector('[data-action="formal-run"]').addEventListener("click", async () => {
+          await runAction(async () => {
+            await api(`/api/orchestrator/tasks/${item.task_id}/formalize`, {
+              method: "POST", headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ formula_id: item.formula_id }),
+            });
+            showToast("正式重算已发起");
+          });
+        });
         rowsEl.appendChild(row);
       });
     }
@@ -2549,8 +2616,12 @@
       refreshBtn.disabled = true;
       summaryEl.textContent = "正在加载...";
       try {
-        const data = await api("/api/orchestrator/reviews?limit=100&statuses=need_review,failed");
-        renderItems(data.items || []);
+        const path = activeNodeView === "formalization"
+          ? "/api/orchestrator/formalization-reviews?limit=100"
+          : "/api/orchestrator/reviews?limit=100&statuses=need_review,failed";
+        const data = await api(path);
+        if (activeNodeView === "formalization") renderFormalizationItems(data.items || []);
+        else renderItems(data.items || []);
       } catch (error) {
         summaryEl.textContent = "加载失败";
         rowsEl.innerHTML = "";
@@ -3800,6 +3871,18 @@
     });
 
     refreshBtn.addEventListener("click", loadItems);
+    nodeExceptionFilter.addEventListener("click", () => {
+      activeNodeView = "exceptions";
+      nodeExceptionFilter.classList.remove("secondary");
+      nodeFormalizationFilter.classList.add("secondary");
+      loadItems();
+    });
+    nodeFormalizationFilter.addEventListener("click", () => {
+      activeNodeView = "formalization";
+      nodeFormalizationFilter.classList.remove("secondary");
+      nodeExceptionFilter.classList.add("secondary");
+      loadItems();
+    });
     identityRefreshBtn.addEventListener("click", loadIdentityItems);
     brandCandidateRefresh.addEventListener("click", () => loadBrandCandidates({ initialize: true }));
     productIdentityRefreshBtn.addEventListener("click", () => {

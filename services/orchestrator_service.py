@@ -1624,6 +1624,124 @@ def list_review_items(limit: int = 50, statuses: list[str] | None = None) -> dic
     return {"ok": True, "items": items}
 
 
+def list_formula_formalization_items(limit: int = 100) -> dict[str, Any]:
+    """List completed provisional calculations that still need formal review."""
+    init_db()
+    limit = max(1, min(int(limit or 100), 200))
+    with _connect() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute("SHOW TABLES LIKE 'formula_calculation_current'")
+            has_calculation_tables = bool(cursor.fetchone())
+            published_select = (
+                "published.result_stage AS published_result_stage,"
+                if has_calculation_tables else "NULL AS published_result_stage,"
+            )
+            published_joins = (
+                "LEFT JOIN formula_calculation_current current_calc ON current_calc.formula_id=p.formula_id "
+                "LEFT JOIN formula_calculation_run published ON published.id=current_calc.published_run_id"
+                if has_calculation_tables else ""
+            )
+            published_condition = (
+                "OR published.result_stage='provisional'" if has_calculation_tables else ""
+            )
+            published_group = ", published.result_stage" if has_calculation_tables else ""
+            cursor.execute(
+                f"""
+                SELECT t.id AS task_id, t.task_status, t.payload_json,
+                       n.node_status, n.updated_at AS node_updated_at,
+                       CAST(JSON_UNQUOTE(JSON_EXTRACT(fi.output_json,'$.formula_id')) AS UNSIGNED) AS formula_id,
+                       p.standardization_coverage, p.unmatched_ingredient_count,
+                       p.overall_status, p.quality_metrics_json,
+                       f.confirmation_status AS formula_confirmation_status,
+                       sp.standard_product_name, b.standard_brand_name,
+                       inp.result_stage AS input_result_stage, inp.quality_flags_json,
+                       {published_select}
+                       GROUP_CONCAT(DISTINCT CASE WHEN ii.match_status='unmatched' AND ii.is_ignored=0
+                           THEN ii.raw_name END ORDER BY ii.position SEPARATOR '｜') AS unmatched_names,
+                       JSON_UNQUOTE(JSON_EXTRACT(po.output_json,'$.review_candidate_id')) AS product_review_candidate_id
+                FROM pipeline_task t
+                JOIN pipeline_task_node n ON n.task_id=t.id AND n.node_code='ingredient_extract'
+                JOIN pipeline_node_output fi ON fi.task_id=t.id AND fi.node_code='formula_input_build'
+                LEFT JOIN pipeline_node_output po ON po.task_id=t.id AND po.node_code='product_standardize'
+                JOIN catfood_formula_feature_profile p
+                  ON p.formula_id=CAST(JSON_UNQUOTE(JSON_EXTRACT(fi.output_json,'$.formula_id')) AS UNSIGNED)
+                JOIN catfood_standard_formula f ON f.formula_id=p.formula_id
+                JOIN catfood_standard_product sp ON sp.product_id=f.product_id
+                JOIN catfood_standard_brand b ON b.brand_id=sp.brand_id
+                JOIN catfood_formula_feature_input inp ON inp.formula_id=p.formula_id
+                {published_joins}
+                LEFT JOIN catfood_formula_ingredient_item ii ON ii.formula_id=p.formula_id
+                WHERE n.node_status='success'
+                  AND (p.overall_status='provisional_ready' {published_condition})
+                GROUP BY t.id, t.task_status, t.payload_json, n.node_status, n.updated_at,
+                         p.formula_id, p.standardization_coverage, p.unmatched_ingredient_count,
+                         p.overall_status, p.quality_metrics_json, f.confirmation_status,
+                         sp.standard_product_name, b.standard_brand_name, inp.result_stage,
+                         inp.quality_flags_json {published_group}, product_review_candidate_id
+                ORDER BY n.updated_at DESC
+                LIMIT %s
+                """,
+                (limit,),
+            )
+            rows = cursor.fetchall()
+    items = []
+    for row in rows:
+        flags = _json_loads(row.get("quality_flags_json"), [])
+        names = [value for value in str(row.get("unmatched_names") or "").split("｜") if value]
+        items.append({
+            "task_id": str(row["task_id"]),
+            "task_status": row["task_status"],
+            "task_payload": _json_loads(row.get("payload_json"), {}),
+            "node_code": "ingredient_extract",
+            "node_name": "原料特征生成",
+            "node_status": row["node_status"],
+            "node_updated_at": str(row["node_updated_at"]),
+            "formula_id": int(row["formula_id"]),
+            "brand": row.get("standard_brand_name"),
+            "product_name": row.get("standard_product_name"),
+            "coverage": float(row.get("standardization_coverage") or 0),
+            "unmatched_count": int(row.get("unmatched_ingredient_count") or 0),
+            "unmatched_names": names,
+            "overall_status": row.get("overall_status"),
+            "result_stage": row.get("published_result_stage") or row.get("input_result_stage"),
+            "input_result_stage": row.get("input_result_stage"),
+            "quality_flags": flags,
+            "formula_confirmation_status": row.get("formula_confirmation_status"),
+            "product_review_candidate_id": _coerce_int(row.get("product_review_candidate_id")),
+            "can_formalize": row.get("overall_status") == "ready_for_rebuild"
+                and row.get("input_result_stage") == "official",
+        })
+    return {"ok": True, "items": items, "count": len(items)}
+
+
+def start_formula_formalization(task_id: str, formula_id: int) -> dict[str, Any]:
+    """Strictly requeue an already reviewed formula for an official publication."""
+    with _connect() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """SELECT p.overall_status,p.unmatched_ingredient_count,f.confirmation_status
+                   FROM catfood_formula_feature_profile p
+                   JOIN catfood_standard_formula f ON f.formula_id=p.formula_id
+                   WHERE p.formula_id=%s""",
+                (int(formula_id),),
+            )
+            row = cursor.fetchone()
+    if not row:
+        raise KeyError(f"formula_id 不存在: {formula_id}")
+    blockers = []
+    if row.get("confirmation_status") == "provisional":
+        blockers.append("产品或配方身份尚未确认")
+    if int(row.get("unmatched_ingredient_count") or 0):
+        blockers.append(f"仍有 {int(row['unmatched_ingredient_count'])} 个原料待确认")
+    if row.get("overall_status") != "ready_for_rebuild":
+        blockers.append("严格原料门禁尚未通过")
+    if blockers:
+        raise ValueError("；".join(blockers))
+    reset_node_for_reextract(task_id, "formula_input_build", "人工审核完成，发起正式重算")
+    wake_dispatcher()
+    return {"ok": True, "task_id": task_id, "formula_id": int(formula_id), "status": "queued"}
+
+
 def _set_task_status(
     conn: pymysql.connections.Connection,
     task_id: str,
