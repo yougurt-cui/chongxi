@@ -19,7 +19,7 @@
 
 后台“初算待转正式”列表显示是否已登记及等待原因。队列中的 `node_code`、`generation`、`waiting_reason`、`next_check_at` 可用于排查。接口原有 `resumed_task_ids` 字段为兼容保留，现在表示已登记调度的任务，不表示计算已经启动。
 
-本次仅在本地修改、验证，未部署生产。
+实现与本地验证完成后，于 2026-10-30 部署生产，见下方发布记录。
 
 ## 验证
 
@@ -43,3 +43,13 @@ CHONGXI_RECALC_MYSQL=1 CHONGXI_PIPELINE_WORKER=0 .venv/bin/python -m pytest -q t
 - 管理后台内联 JavaScript 语法检查和 `git diff --check` 通过。未进行浏览器视觉验收。
 - 测试身份与待重算记录清理后均为 0；未新增常驻进程，未部署生产。
 - 工作区验证日志：`local-dev/formalization-scheduling-tests.log` 和 `local-dev/formalization-scheduling-integration-tests.log`（位于后端仓库的上级工作区）。
+
+## 2026-10-30 生产发布记录
+
+- 修复提交 `ff276ce` 已推送 `fix/submission-formalization-scheduling`，快进合并并推送 `main`，服务器通过 Git 从 `dcc1bf9` 更新到该提交。
+- 发布前服务器工作区干净，执行中/待执行/等待异步回报的节点数均为 0。主库、特征库及运行配置备份到服务器私有目录 `/home/admin/backups/chongxi-release-20261030T115642Z`，数据库压缩备份约 176 MB。
+- 更新前停止旧 Flask 进程，更新后编译检查、幂等创建待重算队列表并重启后端；保留原配置及其他服务进程。新进程确认开启 `CHONGXI_PIPELINE_WORKER=1`、`CHONGXI_VERSIONED_CALCULATION=1`，并发 1、补扫间隔 60 秒。
+- 本机和公网 HTTPS 健康页、品牌接口均为 200；投稿状态接口与正式化管理接口匿名访问均为 401。
+- 创建仅用于验证的已取消任务，真实后台调度在 21.09 秒内自动消费对应待重算请求；验证未执行 OCR、评分或用户业务，任务及节点、输出、队列记录均已清理。
+- 检查发布后日志，调度扫描错误与重算准备错误均为 0。剩余 3 条历史请求的任务状态均为 `done`，等待原因为“产品、配方或原料身份尚未全部确认”，未提前重算。
+- 发布与验证记录位于上级工作区 `local-dev/formalization-scheduling-release/`。新增的生产验证证明后台消费与门禁等待状态；完整评分与正式发布链路已在本地真实 MySQL 测试覆盖。
