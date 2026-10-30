@@ -1144,3 +1144,28 @@ def user_device_endpoint(ident=None):
     except Exception:
         # Never interpolate exceptions: upstream payloads may contain credentials.
         return jsonify(ok=False, code='UNAVAILABLE', error='设备服务暂不可用'), 503
+
+
+@miniprogram_api.post("/admin/url-links")
+def generate_miniprogram_url_link_endpoint():
+    """Explicit administrator action only; never called by public page loads."""
+    from services.miniprogram_url_link_service import (
+        LinkConfigurationError, WeChatLinkError, generate_url_link,
+    )
+    try:
+        _require_admin_token()
+        result = generate_url_link(_json_payload())
+        status = 200
+    except PermissionError as exc:
+        result, status = {"ok": False, "error": str(exc)}, 401
+    except ValueError as exc:
+        result, status = {"ok": False, "error": str(exc)}, 400
+    except LinkConfigurationError as exc:
+        result, status = {"ok": False, "error": str(exc)}, 503
+    except WeChatLinkError as exc:
+        result, status = {"ok": False, "error": str(exc)}, 502
+    except Exception:
+        result, status = {"ok": False, "error": "小程序链接生成失败"}, 500
+    response = jsonify(result)
+    response.headers["Cache-Control"] = "no-store"
+    return response, status
