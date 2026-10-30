@@ -55,6 +55,28 @@ SYNC_TABLES = {
             "source_file", "ingest_ts",
         ],
     },
+    "douyin_raw_content": {
+        "watermark_col": "ingest_ts",
+        "key_cols": ["aweme_id"],
+        "select_cols": [
+            "aweme_id", "aweme_type", "title", "content", "create_time",
+            "user_id", "sec_uid", "short_user_id", "user_unique_id",
+            "user_signature", "nickname", "avatar", "liked_count",
+            "collected_count", "comment_count", "share_count", "ip_location",
+            "last_modify_ts", "aweme_url", "cover_url", "video_download_url",
+            "music_download_url", "note_download_url", "source_keyword",
+            "source_file", "ingest_ts",
+        ],
+        "insert_cols": [
+            "aweme_id", "aweme_type", "title", "content", "create_time",
+            "user_id", "sec_uid", "short_user_id", "user_unique_id",
+            "user_signature", "nickname", "avatar", "liked_count",
+            "collected_count", "comment_count", "share_count", "ip_location",
+            "last_modify_ts", "aweme_url", "cover_url", "video_download_url",
+            "music_download_url", "note_download_url", "source_keyword",
+            "source_file", "ingest_ts",
+        ],
+    },
     "xiaohongshu_raw_comments": {
         "watermark_col": "ingest_ts",
         "key_cols": ["external_id"],
@@ -420,7 +442,7 @@ def sync_tables(
     """Run append-only key-based sync for specified tables (or all).
 
     Args:
-        tables: list of table names to sync; None = all three.
+        tables: list of table names to sync; None = all configured tables.
         dry_run: if True, only report missing remote keys without writing.
 
     Returns:

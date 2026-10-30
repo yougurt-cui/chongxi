@@ -6,22 +6,30 @@ from api.enterprise_api import admin_required
 from services.db_sync_service import SYNC_TABLES, sync_tables
 
 db_sync_api = Blueprint("db_sync_api", __name__, url_prefix="/api/sync")
-RAW_COMMENT_TABLES = ("douyin_raw_comments", "xiaohongshu_raw_comments")
+
+# 本接口允许同步的表：两张原始评论表 + 抖音帖子表
+SYNCABLE_TABLES = (
+    "douyin_raw_comments",
+    "xiaohongshu_raw_comments",
+    "douyin_raw_content",
+)
+# 兼容旧引用（2026-10-26 前只有两张评论表）
+RAW_COMMENT_TABLES = SYNCABLE_TABLES
 
 
 def _normalize_raw_comment_tables(value):
-    """Only allow the two raw comment sources through this public endpoint."""
+    """Only allow the raw comment/content source tables through this endpoint."""
     if value in (None, []):
-        return list(RAW_COMMENT_TABLES)
+        return list(SYNCABLE_TABLES)
     if not isinstance(value, list):
         raise ValueError("tables 必须是数组")
     tables = list(dict.fromkeys(str(item).strip() for item in value if str(item).strip()))
     if not tables:
-        return list(RAW_COMMENT_TABLES)
-    unsupported = [table for table in tables if table not in RAW_COMMENT_TABLES]
+        return list(SYNCABLE_TABLES)
+    unsupported = [table for table in tables if table not in SYNCABLE_TABLES]
     if unsupported:
         raise ValueError(
-            "该接口只允许同步原始评论表: " + ", ".join(RAW_COMMENT_TABLES)
+            "该接口只允许同步原始数据表: " + ", ".join(SYNCABLE_TABLES)
         )
     return tables
 
@@ -29,7 +37,7 @@ def _normalize_raw_comment_tables(value):
 @db_sync_api.post("/db")
 @admin_required
 def sync_db():
-    """Incrementally sync raw Douyin/Xiaohongshu comments to the server.
+    """Incrementally sync raw Douyin/Xiaohongshu comments and Douyin posts.
 
     POST /api/sync/db
     Body (optional):
@@ -57,9 +65,9 @@ def sync_db():
 @db_sync_api.get("/db/tables")
 @admin_required
 def list_sync_tables():
-    """List raw comment tables accepted by this endpoint."""
+    """List raw source tables accepted by this endpoint."""
     tables = []
-    for name in RAW_COMMENT_TABLES:
+    for name in SYNCABLE_TABLES:
         spec = SYNC_TABLES[name]
         tables.append({
             "table": name,
