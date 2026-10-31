@@ -641,7 +641,9 @@ export default function RecommendationEnginePage() {
 
         {result?.status === "not_open" && (
           <section className="rounded-3xl border border-blue-100 bg-white px-5 py-14 text-center shadow-sm">
-            <div className="text-lg font-bold text-slate-950">{result.message || "暂未开放，敬请期待"}</div>
+            <div className="text-lg font-bold text-slate-950">
+              {result.message || "我已经了解你的选粮需求啦。个性化推荐还在完善中，暂时不能生成结果；你可以先让我分析当前猫粮或对比两款猫粮。"}
+            </div>
           </section>
         )}
 

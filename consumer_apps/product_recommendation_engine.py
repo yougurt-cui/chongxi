@@ -2071,7 +2071,7 @@ def render_page():
         st.info("填写基础信息、体质困扰和当前观察后，点击“生成推荐”。")
         return
 
-    st.info("暂未开放，敬请期待")
+    st.info("我已经了解你的选粮需求啦。个性化推荐还在完善中，暂时不能生成结果；你可以先让我分析当前猫粮或对比两款猫粮。")
     return
 
     selected_labels = [
