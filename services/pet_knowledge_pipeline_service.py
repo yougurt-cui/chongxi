@@ -57,6 +57,7 @@ RISK = ["低", "中", "高"]
 SOURCE_POST_TABLE = "douyin_raw_content"
 SOURCE_COMMENT_TABLE = "douyin_raw_comments"
 PIPELINE_VERSION = "knowledge-taxonomy-v3"
+LEGACY_FINGERPRINT_VERSIONS = ("knowledge-taxonomy-v2", PIPELINE_VERSION)
 EMBED_MODEL = "text-embedding-v3"
 CLEANING_VERSION = "comment-clean-v2"
 
@@ -176,10 +177,21 @@ def clean(s: Any):
     return re.sub(r"\s+", " ", s).strip()[:5000]
 
 
-def digest(title, body, comments):
-    # 提示词、分类体系变化时主动重抽，不能只看原帖内容是否变化。
-    raw = jd([PIPELINE_VERSION, title, body, [(str(c["cid"]), c["body"]) for c in comments]])
+def digest(title, body, comments, version: str | None = None):
+    """Return a source-content fingerprint, independent of prompt/taxonomy releases.
+
+    Reprocessing because a prompt or taxonomy changed must be an explicit, budgeted
+    operation.  The daily rotating scan uses this fingerprint only to detect source
+    post/comment changes.
+    """
+    source = [title, body, [(str(c["cid"]), c["body"]) for c in comments]]
+    raw = jd([version, *source] if version else source)
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def compatible_digests(title, body, comments):
+    """Fingerprints accepted during the no-cost migration from the old format."""
+    return {digest(title, body, comments, version) for version in LEGACY_FINGERPRINT_VERSIONS}
 
 
 def pick_comments(comments, max_comments=60):
@@ -473,15 +485,22 @@ def merge_items(session, post_id: str, items: list[dict]) -> list[int]:
     return merged
 
 
-def process_one(engine, post, extractor: str, model: str | None = None):
+def process_one(engine, post, extractor: str, model: str | None = None, force: bool = False):
     pid = str(post["pid"])
     with Session(engine) as db:
         comments = read_comments(db, pid)
         title, body = clean(post["title"]), clean(post["body"])
         signature = digest(title, body, comments)
         task = db.scalar(select(Task).where(Task.post_id == pid))
-        if task and task.content_hash == signature and task.status == "completed":
-            return "skipped", 0
+        if task and task.status == "completed" and not force:
+            if task.content_hash == signature:
+                return "skipped", 0
+            if task.content_hash in compatible_digests(title, body, comments):
+                # Upgrade the ledger lazily without calling the model.  A future
+                # content/comment change will still produce a different signature.
+                task.content_hash = signature
+                db.commit()
+                return "skipped", 0
         representative = pick_comments(comments)
         # 方案A：把同主题已有知识点喂给模型做语义对齐（措辞不同但同一观点 → same_as_id）
         predicted_topic = topic_router(title, body, representative)

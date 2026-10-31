@@ -20,6 +20,10 @@ def main():
     parser.add_argument('--chunk', type=int, default=20)
     parser.add_argument('--retries', type=int, default=1)
     parser.add_argument('--model')
+    parser.add_argument(
+        '--force-reprocess', action='store_true',
+        help='Explicitly rerun post extraction even when source content is unchanged (may be costly).',
+    )
     args = parser.parse_args()
     if args.status:
         print(json.dumps(job.recent_runs(), ensure_ascii=False))
@@ -34,7 +38,8 @@ def main():
             return 0
         try:
             result = job.run(max_posts=args.max_posts, comment_batches=args.comment_batches,
-                             chunk=args.chunk, retries=args.retries, model=args.model)
+                             chunk=args.chunk, retries=args.retries, model=args.model,
+                             force_reprocess=args.force_reprocess)
             print(json.dumps(result, ensure_ascii=False), flush=True)
             return 1 if result.get('failures') else 0
         except Exception as exc:

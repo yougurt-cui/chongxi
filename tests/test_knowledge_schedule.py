@@ -84,6 +84,15 @@ class ScheduleTest(unittest.TestCase):
             with self.assertRaises(ValueError):
                 job.run(engine=self.engine, **options)
 
+    def test_force_reprocess_is_explicitly_forwarded(self):
+        with patch.object(job.first, 'ensure_tables'), patch.object(job.first, 'read_posts', side_effect=self.read), \
+             patch.object(job.first, 'process_one', return_value=('skipped', 0)) as process, \
+             patch.object(job.first, 'run_comment_tasks', return_value={'batches': 0, 'batches_done': 0}), \
+             patch.object(job.first, 'verify_evidence', return_value={'failed_buckets': []}), \
+             patch.object(job.second, 'run_distill', return_value={'skipped': True}):
+            job.run(engine=self.engine, retries=0, force_reprocess=True)
+        process.assert_called_once_with(self.engine, {'pid': 1}, 'llm', None, force=True)
+
     def test_failed_verification_stays_pending_until_a_later_success(self):
         with patch.object(job.first, 'ensure_tables'), patch.object(job.first, 'read_posts', side_effect=self.read), \
              patch.object(job.first, 'process_one', return_value=('updated', 1)), \

@@ -12,6 +12,8 @@ from services.pet_knowledge_pipeline_service import (
     _comments_for_posts,
     _validate_comment_points,
     classify_comment,
+    compatible_digests,
+    digest,
     jd,
     merge_items,
     prepare_comment_tasks,
@@ -161,6 +163,45 @@ def test_extraction_task_ledger_incremental(monkeypatch):
         assert task[0].raw_json and "逐步增加新粮比例" in task[0].raw_json
         # demo 抽取在换粮场景产出 2 条知识（逐步过渡 + 短期消化不适）
         assert db.scalar(select(func.count()).select_from(Knowledge)) == 2
+
+
+def test_legacy_version_fingerprint_is_migrated_without_model_call(monkeypatch):
+    import services.pet_knowledge_pipeline_service as pipeline
+
+    engine = _engine_with_sources()
+    post = {"pid": 1, "title": "唯一养宠帖子", "body": "换粮要逐步过渡"}
+    comments = [{"cid": 11, "body": "突然换粮确实容易出现软便"}]
+    with engine.begin() as db:
+        db.execute(text("INSERT INTO douyin_raw_content VALUES (1,'唯一养宠帖子','换粮要逐步过渡')"))
+        db.execute(text("INSERT INTO douyin_raw_comments VALUES (11,'唯一养宠帖子','突然换粮确实容易出现软便')"))
+    with Session(engine) as db:
+        old_hash = digest(post["title"], post["body"], comments, "knowledge-taxonomy-v2")
+        assert old_hash in compatible_digests(post["title"], post["body"], comments)
+        db.add(Task(post_id="1", content_hash=old_hash, status="completed", attempts=1))
+        db.commit()
+
+    monkeypatch.setattr(pipeline, "extract_llm", lambda *args, **kwargs: (_ for _ in ()).throw(
+        AssertionError("legacy migration must not call the model")
+    ))
+    assert pipeline.process_one(engine, post, "llm") == ("skipped", 0)
+    with Session(engine) as db:
+        assert db.scalar(select(Task.content_hash)) == digest(post["title"], post["body"], comments)
+
+
+def test_force_reprocess_bypasses_matching_fingerprint(monkeypatch):
+    import services.pet_knowledge_pipeline_service as pipeline
+
+    engine = _engine_with_sources()
+    post = {"pid": 1, "title": "唯一养宠帖子", "body": "换粮要逐步过渡"}
+    with engine.begin() as db:
+        db.execute(text("INSERT INTO douyin_raw_content VALUES (1,'唯一养宠帖子','换粮要逐步过渡')"))
+    current_hash = digest(post["title"], post["body"], [])
+    with Session(engine) as db:
+        db.add(Task(post_id="1", content_hash=current_hash, status="completed", attempts=1))
+        db.commit()
+    monkeypatch.setattr(pipeline, "extract_llm", lambda *args, **kwargs: [])
+
+    assert pipeline.process_one(engine, post, "llm", force=True) == ("updated", 0)
 
 
 def test_evidence_votes_are_traceable_and_professional_status_is_preserved(monkeypatch):

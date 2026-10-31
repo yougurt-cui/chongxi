@@ -87,7 +87,8 @@ def _post_topics(engine, pid):
             {'pid': str(pid)}))
 
 
-def run(max_posts=500, comment_batches=4, chunk=20, retries=1, model=None, verify=True, engine=None):
+def run(max_posts=500, comment_batches=4, chunk=20, retries=1, model=None, verify=True,
+        force_reprocess=False, engine=None):
     """One production pass; unchanged source fingerprints and topic hashes skip model calls.
 
     Source posts are scanned in rotating ID order, including old posts: new/edited/deleted
@@ -128,7 +129,9 @@ def run(max_posts=500, comment_batches=4, chunk=20, retries=1, model=None, verif
                 pid = post['pid']
                 previous_topics = _post_topics(engine, pid)
                 try:
-                    status, _ = _retry(lambda: first.process_one(engine, post, 'llm', model), retries)
+                    status, _ = _retry(
+                        lambda: first.process_one(engine, post, 'llm', model, force=force_reprocess), retries
+                    )
                     comments = _retry(lambda: _checked(lambda: first.run_comment_tasks(str(pid), max_tasks=comment_batches, model=model)), retries)
                     topics = previous_topics | _post_topics(engine, pid)
                     if status == 'updated' or comments.get('batches_done', 0):
