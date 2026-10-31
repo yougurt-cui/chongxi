@@ -22,7 +22,8 @@ from services.miniprogram_food_change_service import (
 )
 from services.miniprogram_food_submission_service import get_food_submission, list_food_submissions
 from services.miniprogram_diet_history_service import list_diet_history, compact_diet_context, list_diet_references
-from services.guardian_recommendation_service import recommend_guardian_foods, explicit_preferences, recommendation_goal
+from services.guardian_recommendation_service import explicit_preferences, recommendation_goal
+from services.recommendation_availability import unavailable_recommendation
 from services.guardian_food_flow_service import handle_food_flow, STATE_KEY as FOOD_FLOW_STATE_KEY
 from services.guardian_food_goals import GOALS, goals_in_text, goal_options
 from services.guardian_food_analysis_service import recommendation_text
@@ -1200,9 +1201,9 @@ def _handle_context_message(user_id, conversation, message, state, source_messag
                         (state['slots'].get('_recommendation_exclude_ids') or []) + previous))
                 packet = context.get('guardian_context') or {}
                 state['slots']['_confirmed_history_text'] = (packet.get('facts') or {}).get('history_foods_reviewed') or ''
-                recommendation = recommend_guardian_foods(context.get("pet_profile") or {}, state["slots"], context.get('diet_reference_history', context['diet_history']))
-                if context.get('history_exclusion_status') == 'unavailable':
-                    recommendation = {'status': 'data_unavailable', 'items': [], 'note': '历史口粮暂时无法读取，为避免重复推荐已吃过的粮，请稍后再试。'}
+                # Keep the full requirement-collection flow, but do not compute or
+                # expose ranked products until the recommendation module opens.
+                recommendation = unavailable_recommendation()
                 context["recommendation"] = recommendation
                 context["food_candidates"] = recommendation["items"]
                 state['slots']['_recommendation_last_ids'] = [item['formula_id'] for item in recommendation['items']]

@@ -2739,25 +2739,19 @@ def create_app() -> Flask:
 
     @flask_app.post("/api/consumer/recommendation/run")
     def consumer_recommendation_run():
-        payload = request.get_json(silent=True) or {}
-        try:
-            return jsonify(_build_recommendation_response(payload))
-        except ValueError as exc:
-            return _json_error(str(exc))
-        except Exception as exc:
-            return _json_error(f"推荐计算失败：{exc}", 500)
+        from services.recommendation_availability import unavailable_recommendation
+
+        return jsonify(unavailable_recommendation())
 
     @flask_app.post("/api/consumer/recommendation/explanation")
     def consumer_recommendation_explanation():
-        payload = request.get_json(silent=True) or {}
-        context = payload.get("llm_context")
-        if not context:
-            return _json_error("缺少推荐解释上下文。")
-        try:
-            recommendation_app = _load_recommendation_app()
-            return jsonify({"explanation": recommendation_app.generate_qwen_recommendation_explanation(context)})
-        except Exception as exc:
-            return _json_error(f"通义千问解释生成失败：{exc}", 500)
+        from services.recommendation_availability import RECOMMENDATION_UNAVAILABLE_MESSAGE
+
+        return jsonify({
+            "status": "not_open",
+            "message": RECOMMENDATION_UNAVAILABLE_MESSAGE,
+            "explanation": RECOMMENDATION_UNAVAILABLE_MESSAGE,
+        })
 
     @flask_app.get("/consumer/recommendation-engine")
     @flask_app.get("/consumer/recommendation-engine/")

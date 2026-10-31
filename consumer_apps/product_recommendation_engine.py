@@ -2071,6 +2071,9 @@ def render_page():
         st.info("填写基础信息、体质困扰和当前观察后，点击“生成推荐”。")
         return
 
+    st.info("暂未开放，敬请期待")
+    return
+
     selected_labels = [
         *(long_term_problems or []),
         *(current_observations or []),

@@ -65,13 +65,15 @@ type HistoryContext = {
 };
 
 type RecommendationResult = {
-  symptom_label: string;
-  selected_signals: string[];
+  status?: string;
+  message?: string;
+  symptom_label?: string;
+  selected_signals?: string[];
   history_food_context?: HistoryContext | null;
-  adjusted_profiles: AdjustedProfile[];
-  recommendations: RecommendationRow[];
-  llm_context: unknown;
-  input_hash: string;
+  adjusted_profiles?: AdjustedProfile[];
+  recommendations?: RecommendationRow[];
+  llm_context?: unknown;
+  input_hash?: string;
 };
 
 type OptionsPayload = {
@@ -637,13 +639,19 @@ export default function RecommendationEnginePage() {
           {error && <div className="mt-4 rounded-2xl bg-rose-50 p-4 text-sm text-rose-700">{error}</div>}
         </section>
 
-        {result && (
+        {result?.status === "not_open" && (
+          <section className="rounded-3xl border border-blue-100 bg-white px-5 py-14 text-center shadow-sm">
+            <div className="text-lg font-bold text-slate-950">{result.message || "暂未开放，敬请期待"}</div>
+          </section>
+        )}
+
+        {result && result.status !== "not_open" && (
           <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
             <div className="mb-4 flex flex-col justify-between gap-3 md:flex-row md:items-start">
               <div>
                 <h2 className="text-lg font-bold text-slate-950">推荐结果</h2>
                 <p className="mt-1 text-sm font-medium text-slate-500">
-                  主问题：{result.symptom_label} · 推荐输入指纹：{result.input_hash.slice(0, 12)}
+                  主问题：{result.symptom_label} · 推荐输入指纹：{result.input_hash?.slice(0, 12)}
                 </p>
               </div>
               <button
@@ -661,7 +669,7 @@ export default function RecommendationEnginePage() {
                 <div className="rounded-2xl border border-slate-200 bg-white p-4">
                   <ModuleTitle marker="1" title="推荐目标画像" hint="由长期问题、当前观察和历史粮反馈微调" />
                   <div className="space-y-3">
-                    {result.adjusted_profiles.map((profile) => (
+                    {(result.adjusted_profiles || []).map((profile) => (
                       <div key={profile.profile_code || profile.profile_name} className="rounded-xl border border-slate-200 bg-slate-50 p-3">
                         <div className="text-sm font-bold text-slate-950">{profile.profile_name || profile.profile_code}</div>
                         {profile.mechanism && <div className="mt-1 text-xs leading-5 text-slate-500">{profile.mechanism}</div>}
@@ -694,10 +702,10 @@ export default function RecommendationEnginePage() {
               </aside>
 
               <div className="space-y-3">
-                {result.recommendations.map((row) => (
+                {(result.recommendations || []).map((row) => (
                   <RecommendationCard key={`${row.recommend_rank}-${row.product_name}`} row={row} />
                 ))}
-                {result.recommendations.length === 0 && (
+                {(result.recommendations || []).length === 0 && (
                   <div className="rounded-2xl bg-slate-50 px-4 py-10 text-center text-sm text-slate-500">暂无推荐结果。</div>
                 )}
               </div>
