@@ -80,8 +80,11 @@ def _select_chunks(engine, *, max_requests: int, batch_size: int,
             pipeline.CommentItem.is_noise == 0,
             pipeline.CommentItem.is_question == 0,
         ).distinct().order_by(pipeline.CommentItem.post_id)).all()
+        policy = pipeline.ingest_policy.load(db)
         chunks: list[dict[str, Any]] = []
         for post_id in posts:
+            if policy and int(post_id) <= policy["post_floor"]:
+                continue
             done_count = db.scalar(select(func.count()).select_from(pipeline.CommentItem).where(
                 pipeline.CommentItem.post_id == post_id,
                 pipeline.CommentItem.status == "done")) or 0

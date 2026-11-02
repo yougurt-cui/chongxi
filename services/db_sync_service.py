@@ -45,12 +45,12 @@ SYNC_TABLES = {
         "watermark_col": "ingest_ts",
         "key_cols": ["external_id"],
         "select_cols": [
-            "external_id", "post_title", "post_content", "post_like_count",
+            "external_id", "aweme_id", "post_title", "post_content", "post_like_count",
             "comment_text", "comment_date", "search_keyword", "comment_ip",
             "source_file", "ingest_ts",
         ],
         "insert_cols": [
-            "external_id", "post_title", "post_content", "post_like_count",
+            "external_id", "aweme_id", "post_title", "post_content", "post_like_count",
             "comment_text", "comment_date", "search_keyword", "comment_ip",
             "source_file", "ingest_ts",
         ],
@@ -274,6 +274,11 @@ def _ensure_remote_table(local_engine, remote_conn, table: str) -> None:
     try:
         cur.execute("SHOW TABLES LIKE %s", (table,))
         if cur.fetchone():
+            if table == 'douyin_raw_comments':
+                cur.execute("SHOW COLUMNS FROM douyin_raw_comments LIKE 'aweme_id'")
+                if not cur.fetchone():
+                    cur.execute("ALTER TABLE douyin_raw_comments ADD COLUMN aweme_id VARCHAR(64) NULL, ADD INDEX idx_comment_aweme_id (aweme_id)")
+                    remote_conn.commit()
             return
         with local_engine.connect() as local_conn:
             row = local_conn.execute(text(f"SHOW CREATE TABLE `{table}`")).fetchone()
@@ -351,6 +356,9 @@ def _sync_one_table(
     progress_callback=None,
 ) -> Dict[str, Any]:
     """Sync a single table by inserting remote-missing business keys."""
+    if table == 'douyin_raw_comments' and not dry_run:
+        from adapters.comment_data_adapter import ensure_douyin_raw_comments_table
+        ensure_douyin_raw_comments_table(local_engine, table_name=table)
     wm_col = spec["watermark_col"]
     key_cols = spec["key_cols"]
     select_cols = spec["select_cols"]

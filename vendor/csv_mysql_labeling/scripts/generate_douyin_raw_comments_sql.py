@@ -74,7 +74,12 @@ def load_records(data_dir: Path = DEFAULT_DATA_DIR) -> List[Dict[str, object]]:
                 keyword = _clean_text(row.get("检索词", ""))
                 comment_ip = _clean_text(row.get("评论IP地址", ""))
 
+                aweme_id = _clean_text(row.get('aweme_id') or row.get('帖子ID') or row.get('作品ID') or '')
+                if aweme_id and (not aweme_id.isdigit() or len(aweme_id) > 64):
+                    raise ValueError('aweme_id 必须是原始数字字符串，禁止浮点或科学计数法')
                 external_id = _hash_record(title, comment or content, comment_date, keyword, comment_ip)
+                if aweme_id:
+                    external_id = hashlib.md5((aweme_id + ':' + external_id).encode('utf-8')).hexdigest()
                 if external_id in seen:
                     continue
                 seen.add(external_id)
@@ -82,6 +87,7 @@ def load_records(data_dir: Path = DEFAULT_DATA_DIR) -> List[Dict[str, object]]:
                 records.append(
                     {
                         "external_id": external_id,
+                        "aweme_id": aweme_id or None,
                         "post_title": title,
                         "post_content": content,
                         "post_like_count": post_like_count,
@@ -98,6 +104,7 @@ def load_records(data_dir: Path = DEFAULT_DATA_DIR) -> List[Dict[str, object]]:
 def write_clean_csv(records: Iterable[Dict[str, object]], out_csv: Path = OUT_CSV) -> None:
     fieldnames = [
         "external_id",
+        "aweme_id",
         "post_title",
         "post_content",
         "post_like_count",
@@ -137,6 +144,7 @@ def write_sql(
             f"""CREATE TABLE IF NOT EXISTS {table_name} (
   id BIGINT PRIMARY KEY AUTO_INCREMENT,
   external_id CHAR(32) NOT NULL,
+  aweme_id VARCHAR(64) NULL,
   post_title TEXT NULL,
   post_content LONGTEXT NULL,
   post_like_count INT NULL,
@@ -154,6 +162,7 @@ def write_sql(
 
         cols = [
             "external_id",
+            "aweme_id",
             "post_title",
             "post_content",
             "post_like_count",

@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session, declarative_base
 
 from services import pet_knowledge_pipeline_service as first
 from services import knowledge_second_stage_service as second
+from services import knowledge_ingest_policy as ingest_policy
 from services.knowledge_llm_budget import BudgetExceeded, begin as begin_budget, snapshot as budget_snapshot
 
 Base = declarative_base()
@@ -115,7 +116,9 @@ def run(max_posts=500, comment_batches=1, chunk=20, retries=1, model=None, verif
             if state is None:
                 state = ScheduleState(name='default', post_cursor=0)
                 db.add(state)
-            cursor = state.post_cursor
+            policy = ingest_policy.load(db)
+            floor = policy["post_floor"] if policy else 0
+            cursor = max(state.post_cursor, floor)
             run_id = uuid.uuid4().hex
             db.add(ScheduleRun(id=run_id, started_at=now(), status='running', summary_json='{}'))
             db.commit()
@@ -125,9 +128,9 @@ def run(max_posts=500, comment_batches=1, chunk=20, retries=1, model=None, verif
         try:
             with Session(engine) as db:
                 posts = first.read_posts(db, cursor, max_posts)
-                if not posts and cursor:
-                    cursor = 0
-                    posts = first.read_posts(db, 0, max_posts)
+                if not posts and cursor > floor:
+                    cursor = floor
+                    posts = first.read_posts(db, floor, max_posts)
             for post in posts:
                 pid = post['pid']
                 previous_topics = _post_topics(engine, pid)
@@ -193,8 +196,10 @@ def run(max_posts=500, comment_batches=1, chunk=20, retries=1, model=None, verif
                         blocked.add((topic, subtopic))
             # Include old run keys so a topic whose sources were withdrawn is invalidated.
             with engine.connect() as conn:
-                groups = set(tuple(row) for row in conn.execute(text('''SELECT topic,subtopic FROM knowledge_base
-                    UNION SELECT topic,subtopic FROM kd_topic_runs''')))
+                groups = (set(tuple(row) for row in conn.execute(text(
+                    "SELECT topic,subtopic FROM knowledge_schedule_topics WHERE status IN ('pending','verified')")))
+                    if policy else set(tuple(row) for row in conn.execute(text('''SELECT topic,subtopic FROM knowledge_base
+                    UNION SELECT topic,subtopic FROM kd_topic_runs'''))))
             for topic, subtopic in sorted(groups - blocked):
                 try:
                     result = _retry(lambda: second.run_distill(topic, subtopic, chunk=chunk, model=model), retries)

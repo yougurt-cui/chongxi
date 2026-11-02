@@ -9,7 +9,7 @@
 - knowledge_comment_items  每条评论一行：清洗 / 分流提问 / 蒸馏消费状态 / 证据立场（votes_json）
 
 来源帖子：douyin_raw_content（支持 ingest_ts / source_keyword 过滤，id 游标分页）
-来源评论：douyin_raw_comments（无 post_id 外键，按 post_title 精确桥接）
+来源评论：douyin_raw_comments（切换后按 aweme_id 关联；历史兼容模式仅允许唯一标题）
 证据校验：评论互证 + 反证 -> evidence_status 流转（专业已验证保持人工专属）
 
 知识表与来源表同库（csv_labeling），便于 join；如需隔离可改 KNOWLEDGE_DB。
@@ -56,6 +56,8 @@ SUBTOPICS = {
 TYPES = ["事实知识", "原因解释", "操作建议", "用户经验", "风险提醒", "选择标准"]
 INTENTS = ["了解原因", "寻求建议", "选择产品", "风险确认", "经验分享", "其他"]
 RISK = ["低", "中", "高"]
+
+from services import knowledge_ingest_policy as ingest_policy
 
 SOURCE_POST_TABLE = "douyin_raw_content"
 SOURCE_COMMENT_TABLE = "douyin_raw_comments"
@@ -247,6 +249,9 @@ def classify_comment(value: str) -> dict:
 
 def read_posts(session: Session, after_id: int, size: int, ingest_after: str | None = None,
                keyword_pattern: str | None = None):
+    policy = ingest_policy.load(session)
+    if policy:
+        after_id = max(after_id, policy["post_floor"])
     where = ["id > :cursor"]
     params: dict[str, Any] = {"cursor": after_id, "n": size}
     if ingest_after:
@@ -262,6 +267,22 @@ def read_posts(session: Session, after_id: int, size: int, ingest_after: str | N
 
 def read_comments(session: Session, pid: str, strict_bridge: bool = False):
     """仅允许唯一、非空标题桥接；歧义来源宁可隔离，也不把评论串到错误帖子。"""
+    policy = ingest_policy.load(session)
+    if policy:
+        if int(pid) <= policy['post_floor']:
+            return []
+        aweme_id = session.execute(text(f"SELECT aweme_id FROM {SOURCE_POST_TABLE} WHERE id=:pid"),
+                                   {'pid': pid}).scalar()
+        if not aweme_id or not str(aweme_id).isdigit():
+            raise ValueError(f"帖子 {pid} 缺少真实抖音 aweme_id，已隔离评论关联")
+        count = session.execute(text(f"SELECT COUNT(*) FROM {SOURCE_POST_TABLE} WHERE aweme_id=:aid"),
+                                {'aid': aweme_id}).scalar()
+        if count != 1:
+            raise ValueError(f"帖子 {pid} aweme_id 不唯一，已隔离评论关联")
+        return session.execute(text(
+            f"SELECT id AS cid, comment_text AS body FROM {SOURCE_COMMENT_TABLE} "
+            "WHERE aweme_id=:aid AND id>:floor ORDER BY id"),
+            {'aid': aweme_id, 'floor': policy['comment_floor']}).mappings().all()
     row = session.execute(text(f"SELECT title FROM {SOURCE_POST_TABLE} WHERE id = :pid"),
                           {"pid": pid}).first()
     if not row:
@@ -492,6 +513,9 @@ def merge_items(session, post_id: str, items: list[dict]) -> list[int]:
 
 def process_one(engine, post, extractor: str, model: str | None = None, force: bool = False):
     pid = str(post["pid"])
+    policy = ingest_policy.for_engine(engine)
+    if policy and int(post['pid']) <= policy['post_floor']:
+        return 'skipped', 0
     with Session(engine) as db:
         comments = read_comments(db, pid)
         title, body = clean(post["title"]), clean(post["body"])
@@ -611,6 +635,9 @@ def prepare_comment_tasks(post_id: str, batch_size: int = 25, source_channel: st
         raise ValueError("第一版评论任务目前仅支持 douyin；小红书需先补稳定 source_post_key")
     engine = _engine()
     ensure_tables(engine)
+    policy = ingest_policy.for_engine(engine)
+    if policy and int(post_id) <= policy['post_floor']:
+        return {'post_id': str(post_id), 'status': 'legacy_skipped', 'items': 0, 'pending': 0}
     with Session(engine) as db:
         post = db.execute(text(
             f"SELECT id, title, content FROM {SOURCE_POST_TABLE} WHERE id=:pid"
@@ -802,6 +829,9 @@ def run_comment_tasks(post_id: str, batch_size: int = 25, max_tasks: int = 0,
     """清洗评论后按 pending 条目动态切批蒸馏；已 done 的评论自动跳过。"""
     engine = _engine()
     ensure_tables(engine)
+    policy = ingest_policy.for_engine(engine)
+    if policy and int(post_id) <= policy['post_floor']:
+        return {'status': 'legacy_skipped', 'batches': 0, 'batches_done': 0, 'results': []}
     q = _qwen()
     if not q["api_key"]:
         raise RuntimeError("缺少 LLM API key（config.yaml openai.qwen_api_key）")
@@ -850,6 +880,26 @@ def _evidence_for_posts(db: Session, post_ids: set[int], per_post: int) -> tuple
     """批量读取帖子和已唯一关联评论，保留两种证据粒度。"""
     if not post_ids:
         return [], {}
+    policy = ingest_policy.load(db)
+    if policy:
+        posts, result = [], {}
+        for pid in sorted(post_ids):
+            if pid <= policy['post_floor']:
+                continue
+            row = db.execute(text(f"SELECT title,content FROM {SOURCE_POST_TABLE} WHERE id=:pid"),
+                             {'pid': pid}).first()
+            if row is None:
+                continue
+            posts.append({'post_id': pid, 'evidence_scope': '帖子', 'evidence_id': f'post:{pid}',
+                          'text': clean(' '.join(str(v or '') for v in row))[:500]})
+            for comment in read_comments(db, str(pid), strict_bridge=True):
+                value = clean(comment['body'])[:150]
+                if len(value) < 8 or len(result.get(pid, [])) >= per_post:
+                    continue
+                cid = int(comment['cid'])
+                result.setdefault(pid, []).append({'post_id': pid, 'evidence_scope': '评论',
+                    'evidence_id': f'comment:{cid}', 'comment_id': cid, 'text': value})
+        return posts, result
     ids = sorted(post_ids)
     post_stmt = text(
         f"SELECT id, title, content FROM {SOURCE_POST_TABLE} WHERE id IN :ids"

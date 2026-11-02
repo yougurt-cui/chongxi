@@ -110,6 +110,7 @@ def ensure_douyin_raw_comments_table(engine: Engine, table_name: str = DEFAULT_D
                 CREATE TABLE IF NOT EXISTS `{table_name}` (
                   id BIGINT PRIMARY KEY AUTO_INCREMENT,
                   external_id CHAR(32) NOT NULL,
+                  aweme_id VARCHAR(64) NULL,
                   post_title TEXT NULL,
                   post_content LONGTEXT NULL,
                   post_like_count INT NULL,
@@ -124,6 +125,12 @@ def ensure_douyin_raw_comments_table(engine: Engine, table_name: str = DEFAULT_D
                 """
             )
         )
+        cols = _fetch_columns(conn, table_name)
+        if 'aweme_id' not in cols:
+            conn.execute(text(f"ALTER TABLE `{table_name}` ADD COLUMN aweme_id VARCHAR(64) NULL"))
+        indexes = conn.execute(text(f"SHOW INDEX FROM `{table_name}` WHERE Key_name='idx_comment_aweme_id'")).fetchall()
+        if not indexes:
+            conn.execute(text(f"ALTER TABLE `{table_name}` ADD INDEX idx_comment_aweme_id (aweme_id)"))
 
 
 def ensure_xhs_raw_comments_table(engine: Engine, table_name: str = DEFAULT_XHS_TABLE) -> None:
@@ -252,14 +259,17 @@ def ingest_douyin_comments(
             "archived_files": 0,
         }
 
+    missing = sum(not str(row.get('aweme_id') or '').isdigit() for row in records)
+    if missing:
+        raise ValueError(f"{missing} 条抖音评论缺少真实 aweme_id；请更新采集导出，文件未归档，未写入数据")
     insert_sql = text(
         f"""
         INSERT IGNORE INTO `{table_name}` (
-          external_id, post_title, post_content, post_like_count, comment_text,
+          external_id, aweme_id, post_title, post_content, post_like_count, comment_text,
           comment_date, search_keyword, comment_ip, source_file, ingest_ts
         )
         VALUES (
-          :external_id, :post_title, :post_content, :post_like_count, :comment_text,
+          :external_id, :aweme_id, :post_title, :post_content, :post_like_count, :comment_text,
           :comment_date, :search_keyword, :comment_ip, :source_file, NOW()
         )
         """
@@ -395,9 +405,8 @@ def load_content_records(data_dir: Path) -> List[Dict[str, Any]]:
                 title = _clean_cell(row.get("title"))
                 desc = _clean_cell(row.get("desc"))
                 create_time = _unix_to_dt(row.get("create_time"))
-                if not aweme_id:
-                    key = f"{title}|{desc}|{create_time}"
-                    aweme_id = hashlib.md5(key.encode("utf-8")).hexdigest()
+                if not aweme_id or not aweme_id.isdigit() or len(aweme_id) > 64:
+                    raise ValueError(f"{csv_path.name} 帖子缺少真实 aweme_id，禁止按标题生成替代ID")
                 if aweme_id in seen:
                     continue
                 seen.add(aweme_id)
