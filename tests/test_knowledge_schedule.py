@@ -54,9 +54,27 @@ class ScheduleTest(unittest.TestCase):
              patch.object(job.second, 'run_distill') as distill:
             result = job.run(engine=self.engine, retries=0)
         self.assertEqual('partial_failure', result['status'])
+        # Post extraction succeeded and must be counted as such; only the comment
+        # bridge failed and is recorded under its own stage.
+        self.assertEqual(1, result['updated'])
+        self.assertEqual([{'stage': 'comment_sync', 'post_id': '1', 'error_type': 'RuntimeError'}],
+                         result['failures'])
         distill.assert_not_called()
         with Session(self.engine) as db:
             self.assertEqual('partial_failure', db.get(job.ScheduleRun, result['run_id']).status)
+
+    def test_failed_post_extraction_skips_comment_sync_and_is_labeled(self):
+        with patch.object(job.first, 'ensure_tables'), patch.object(job.first, 'read_posts', side_effect=self.read), \
+             patch.object(job.first, 'process_one', side_effect=ValueError('boom')), \
+             patch.object(job.first, 'run_comment_tasks') as comments, \
+             patch.object(job.second, 'run_distill') as distill:
+            result = job.run(engine=self.engine, retries=0)
+        self.assertEqual('partial_failure', result['status'])
+        self.assertEqual([{'stage': 'post_extract', 'post_id': '1', 'error_type': 'ValueError'}],
+                         result['failures'])
+        self.assertEqual(0, result['updated'] + result['skipped'])
+        comments.assert_not_called()
+        distill.assert_not_called()
 
     def test_lock_contention_skips_before_any_schema_or_model_work(self):
         @contextmanager

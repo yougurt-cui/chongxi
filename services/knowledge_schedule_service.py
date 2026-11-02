@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session, declarative_base
 
 from services import pet_knowledge_pipeline_service as first
 from services import knowledge_second_stage_service as second
+from services.knowledge_llm_budget import BudgetExceeded, begin as begin_budget, snapshot as budget_snapshot
 
 Base = declarative_base()
 LOCK_NAME = 'chongxi:knowledge-production:v1'
@@ -87,8 +88,9 @@ def _post_topics(engine, pid):
             {'pid': str(pid)}))
 
 
-def run(max_posts=500, comment_batches=4, chunk=20, retries=1, model=None, verify=True,
-        force_reprocess=False, engine=None):
+def run(max_posts=500, comment_batches=1, chunk=20, retries=1, model=None, verify=True,
+        force_reprocess=False, comment_sample_cap=50, max_llm_calls=300,
+        max_llm_tokens=1_000_000, usage_audit_path="var/knowledge-llm-usage.jsonl", engine=None):
     """One production pass; unchanged source fingerprints and topic hashes skip model calls.
 
     Source posts are scanned in rotating ID order, including old posts: new/edited/deleted
@@ -98,6 +100,7 @@ def run(max_posts=500, comment_batches=4, chunk=20, retries=1, model=None, verif
     if not 1 <= max_posts <= 10000 or not 1 <= comment_batches <= 100 or not 0 <= retries <= 3:
         raise ValueError('Invalid knowledge job limits')
     engine = engine or first._engine()
+    begin_budget(max_calls=max_llm_calls, max_tokens=max_llm_tokens, audit_path=usage_audit_path)
     with job_lock(engine) as acquired:
         if not acquired:
             return {'status': 'skipped_locked'}
@@ -128,13 +131,35 @@ def run(max_posts=500, comment_batches=4, chunk=20, retries=1, model=None, verif
             for post in posts:
                 pid = post['pid']
                 previous_topics = _post_topics(engine, pid)
+                status, comments = None, None
                 try:
                     status, _ = _retry(
                         lambda: first.process_one(engine, post, 'llm', model, force=force_reprocess), retries
                     )
-                    comments = _retry(lambda: _checked(lambda: first.run_comment_tasks(str(pid), max_tasks=comment_batches, model=model)), retries)
+                except BudgetExceeded:
+                    raise
+                except Exception as exc:
+                    # Do not log credentials, request bodies, or source comments in operational output.
+                    summary['failures'].append({'stage': 'post_extract', 'post_id': str(pid),
+                                                'error_type': type(exc).__name__})
+                    blocked.update(previous_topics | _post_topics(engine, pid))
+                if status is not None:
+                    # Comment sync is tracked separately: post knowledge is already committed
+                    # and must not be reported lost when the comment bridge fails.
+                    try:
+                        comments = _retry(lambda: _checked(lambda: first.run_comment_tasks(
+                            str(pid), max_tasks=comment_batches, model=model,
+                            sample_cap=comment_sample_cap)), retries)
+                    except BudgetExceeded:
+                        raise
+                    except Exception as exc:
+                        summary['failures'].append({'stage': 'comment_sync', 'post_id': str(pid),
+                                                    'error_type': type(exc).__name__})
+                        # Keep the conservative publication gate: a topic whose comment
+                        # evidence is missing stays blocked until comments sync cleanly.
+                        blocked.update(previous_topics | _post_topics(engine, pid))
                     topics = previous_topics | _post_topics(engine, pid)
-                    if status == 'updated' or comments.get('batches_done', 0):
+                    if comments is not None and (status == 'updated' or comments.get('batches_done', 0)):
                         changed.update(topics)
                         with Session(engine) as db:
                             for topic, subtopic in topics:
@@ -145,10 +170,6 @@ def run(max_posts=500, comment_batches=4, chunk=20, retries=1, model=None, verif
                                     pending.status = 'pending'
                             db.commit()
                     summary['updated' if status == 'updated' else 'skipped'] += 1
-                except Exception as exc:
-                    # Do not log credentials, request bodies, or source comments in operational output.
-                    summary['failures'].append({'stage': 'first', 'post_id': str(pid), 'error_type': type(exc).__name__})
-                    blocked.update(previous_topics | _post_topics(engine, pid))
                 summary['scanned'] += 1
                 summary['post_cursor'] = int(pid)
                 with Session(engine) as db:
@@ -164,6 +185,8 @@ def run(max_posts=500, comment_batches=4, chunk=20, retries=1, model=None, verif
                         with Session(engine) as db:
                             db.get(PendingTopic, (topic, subtopic)).status = 'verified'
                             db.commit()
+                    except BudgetExceeded:
+                        raise
                     except Exception as exc:
                         summary['failures'].append({'stage': 'verify', 'topic': topic, 'subtopic': subtopic,
                                                     'error_type': type(exc).__name__})
@@ -176,14 +199,18 @@ def run(max_posts=500, comment_batches=4, chunk=20, retries=1, model=None, verif
                 try:
                     result = _retry(lambda: second.run_distill(topic, subtopic, chunk=chunk, model=model), retries)
                     summary['topics_skipped' if result['skipped'] else 'topics_updated'] += 1
+                except BudgetExceeded:
+                    raise
                 except Exception as exc:
                     summary['failures'].append({'stage': 'second', 'topic': topic, 'subtopic': subtopic,
                                                 'error_type': type(exc).__name__})
                 _save(engine, run_id, summary, 'running')
             summary['status'] = 'partial_failure' if summary['failures'] else 'completed'
+            summary['llm_usage'] = budget_snapshot()
         except Exception as exc:
             summary['status'] = 'failed'
             summary['failures'].append({'stage': 'job', 'error_type': type(exc).__name__})
+            summary['llm_usage'] = budget_snapshot()
             _save(engine, run_id, summary, 'failed', finished=True)
             raise
         _save(engine, run_id, summary, summary['status'], finished=True)

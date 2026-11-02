@@ -29,6 +29,7 @@ from sqlalchemy import (Column, DateTime, Integer, String, Text, UniqueConstrain
 from sqlalchemy.orm import Session, declarative_base
 
 from app_config import get_mysql_config, get_qwen_config
+from services.knowledge_llm_budget import chat_post_with_retry, fallback_models
 
 Base = declarative_base()
 
@@ -142,13 +143,16 @@ def _llm(cfg: dict, system: str, payload: dict) -> dict:
     last_exc: Exception | None = None
     for attempt in range(3):
         try:
-            resp = requests.post(
-                url, headers={"Authorization": "Bearer " + cfg["api_key"]}, json=data, timeout=120,
+            # HTTP-layer retries (jittered backoff, Retry-After, model fallback)
+            # live in chat_post_with_retry; this loop only retries output parsing.
+            resp = chat_post_with_retry(
+                requests.post, url, stage="second_stage",
+                fallback_models=fallback_models(cfg["model"]),
+                headers={"Authorization": "Bearer " + cfg["api_key"]}, json=data, timeout=120,
             )
-            resp.raise_for_status()
             out = resp.json()["choices"][0]["message"]["content"]
             return json.loads(re.sub(r"^```(?:json)?\s*|\s*```$", "", out.strip()))
-        except (requests.RequestException, ValueError, KeyError, json.JSONDecodeError) as exc:
+        except (ValueError, KeyError) as exc:
             last_exc = exc
             if attempt == 2:
                 raise

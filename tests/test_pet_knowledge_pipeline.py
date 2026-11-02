@@ -18,6 +18,7 @@ from services.pet_knowledge_pipeline_service import (
     merge_items,
     prepare_comment_tasks,
     read_comments,
+    run_comment_tasks,
     unlink_post,
     validate_items,
     verify_evidence,
@@ -112,6 +113,36 @@ def test_prepare_comment_tasks_separates_questions_and_noise(monkeypatch):
         # 幂等：重复执行不产生新行
         prepare_comment_tasks("1", batch_size=25)
         assert db.scalar(select(func.count()).select_from(CommentItem)) == 5
+
+
+def test_scheduled_comment_sample_cap_counts_already_processed_items(monkeypatch):
+    import services.pet_knowledge_pipeline_service as pipeline
+
+    engine = _engine_with_sources()
+    with engine.begin() as db:
+        db.execute(text("INSERT INTO douyin_raw_content VALUES (1,'唯一养宠帖子','正文')"))
+        for idx in range(1, 81):
+            db.execute(text("INSERT INTO douyin_raw_comments VALUES (:id,'唯一养宠帖子',:body)"),
+                       {"id": idx, "body": f"这是第{idx}条包含具体养宠经验的有效评论"})
+    monkeypatch.setattr(pipeline, "_engine", lambda: engine)
+    monkeypatch.setattr(pipeline, "_qwen", lambda: {
+        "base_url": "https://example.invalid/v1", "api_key": "test", "model": "test-model"})
+
+    chunks = []
+    def fake_chunk(_engine, _post_id, chunk, _model=None):
+        chunks.append(len(chunk))
+        with Session(engine) as db:
+            for item in db.scalars(select(CommentItem).where(
+                    CommentItem.id.in_([row.id for row in chunk]))):
+                item.status = "done"
+            db.commit()
+        return {"status": "completed"}
+    monkeypatch.setattr(pipeline, "_process_comment_chunk", fake_chunk)
+
+    result = run_comment_tasks("1", batch_size=25, max_tasks=4, sample_cap=50)
+    assert result["batches_done"] == 2
+    assert chunks == [25, 25]
+    assert run_comment_tasks("1", batch_size=25, max_tasks=4, sample_cap=50)["batches"] == 0
 
 
 def test_reprocessing_reuses_orphaned_identical_knowledge():

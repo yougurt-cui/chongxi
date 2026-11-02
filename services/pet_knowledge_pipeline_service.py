@@ -31,6 +31,9 @@ from sqlalchemy import (Column, DateTime, Integer, String, Text, UniqueConstrain
 from sqlalchemy.orm import Session, declarative_base
 
 from app_config import get_mysql_config, get_qwen_config
+from services.knowledge_llm_budget import (
+    BudgetExceeded, chat_post_with_retry, fallback_models,
+)
 
 Base = declarative_base()
 
@@ -326,12 +329,14 @@ def extract_llm(title, body, comments, model: str | None = None, existing: list[
             "\n已有知识点：\n" + "\n".join(f"- id={e['id']}：{e['content'][:120]}" for e in existing)
         )
     user = jd({"title": title, "body": body, "comments": comments, "output_example": schema_hint})
-    r = requests.post(endpoint, headers={"Authorization": f"Bearer {key}"},
-                      json={"model": used_model, "temperature": 0,
-                            "response_format": {"type": "json_object"},
-                            "messages": [{"role": "system", "content": system},
-                                         {"role": "user", "content": user}]}, timeout=180)
-    r.raise_for_status()
+    r = chat_post_with_retry(
+        requests.post, endpoint, stage="post_extract",
+        fallback_models=fallback_models(used_model),
+        headers={"Authorization": f"Bearer {key}"},
+        json={"model": used_model, "temperature": 0,
+              "response_format": {"type": "json_object"},
+              "messages": [{"role": "system", "content": system},
+                           {"role": "user", "content": user}]}, timeout=180)
     return json.loads(r.json()["choices"][0]["message"]["content"])["items"]
 
 
@@ -750,8 +755,9 @@ def _process_comment_chunk(engine, post_id: str, chunk: list[CommentItem],
             "allowed_topics": TOPICS, "allowed_subtopics": SUBTOPICS,
         }
         try:
-            response = requests.post(
-                q["base_url"] + "/chat/completions",
+            response = chat_post_with_retry(
+                requests.post, q["base_url"] + "/chat/completions", stage="comment_distill",
+                fallback_models=fallback_models(used_model),
                 headers={"Authorization": f"Bearer {q['api_key']}"},
                 json={"model": used_model, "temperature": 0,
                       "response_format": {"type": "json_object"},
@@ -775,6 +781,9 @@ def _process_comment_chunk(engine, post_id: str, chunk: list[CommentItem],
             db.commit()
             return {"post_id": str(post_id), "comments": len(chunk), "status": "completed",
                     "candidates": len(valid), "rejected": rejected}
+        except BudgetExceeded:
+            db.rollback()
+            raise
         except Exception as exc:
             db.rollback()
             with Session(engine) as db2:
@@ -789,7 +798,7 @@ def _process_comment_chunk(engine, post_id: str, chunk: list[CommentItem],
 
 
 def run_comment_tasks(post_id: str, batch_size: int = 25, max_tasks: int = 0,
-                      model: str | None = None) -> dict:
+                      model: str | None = None, sample_cap: int = 0) -> dict:
     """清洗评论后按 pending 条目动态切批蒸馏；已 done 的评论自动跳过。"""
     engine = _engine()
     ensure_tables(engine)
@@ -799,11 +808,15 @@ def run_comment_tasks(post_id: str, batch_size: int = 25, max_tasks: int = 0,
     batch_size = max(5, min(int(batch_size), 50))
     prepared = prepare_comment_tasks(post_id=post_id)
     with Session(engine) as db:
+        done_count = db.scalar(select(func.count()).select_from(CommentItem).where(
+            CommentItem.post_id == str(post_id), CommentItem.status == "done")) or 0
         pending = db.scalars(select(CommentItem).where(
             CommentItem.post_id == str(post_id),
             CommentItem.is_noise == 0, CommentItem.is_question == 0,
             CommentItem.status.in_(["pending", "failed"]),
         ).order_by(CommentItem.id)).all()
+    if sample_cap:
+        pending = pending[:max(0, int(sample_cap) - int(done_count))]
     chunks = list(_chunks(pending, batch_size))
     if max_tasks:
         chunks = chunks[:max(0, int(max_tasks))]
@@ -953,15 +966,19 @@ def verify_evidence(model: str | None = None, claim_batch: int = 8,
                 for evidence_part in _chunks(evidence, comment_batch):
                     user = json.dumps({"claims": claims, "evidence": evidence_part}, ensure_ascii=False)
                     try:
-                        r = requests.post(q["base_url"] + "/chat/completions",
-                                          headers={"Authorization": f"Bearer {q['api_key']}"},
-                                          json={"model": used_model, "temperature": 0,
-                                                "response_format": {"type": "json_object"},
-                                                "messages": [{"role": "system", "content": VERIFY_SYSTEM},
-                                                             {"role": "user", "content": user}]}, timeout=180)
-                        r.raise_for_status()
+                        r = chat_post_with_retry(
+                            requests.post, q["base_url"] + "/chat/completions",
+                            stage="evidence_verify",
+                            fallback_models=fallback_models(used_model),
+                            headers={"Authorization": f"Bearer {q['api_key']}"},
+                            json={"model": used_model, "temperature": 0,
+                                  "response_format": {"type": "json_object"},
+                                  "messages": [{"role": "system", "content": VERIFY_SYSTEM},
+                                               {"role": "user", "content": user}]}, timeout=180)
                         out = json.loads(r.json()["choices"][0]["message"]["content"])["items"]
                         calls += 1
+                    except BudgetExceeded:
+                        raise
                     except Exception:
                         bucket_failed = True
                         break
@@ -1186,13 +1203,15 @@ def dedup_knowledge(min_sim: float = 0.85, max_pairs: int = 200, dry_run: bool =
                                   "b": {"content": b["content"], "risk": b["risk"],
                                         "conditions": jl(b["conditions_json"], {})}}
                                  for idx, (_s, a, b) in enumerate(part, 1)]}
-            r = requests.post(q["base_url"] + "/chat/completions",
-                              headers={"Authorization": f"Bearer {q['api_key']}"},
-                              json={"model": used_model, "temperature": 0,
-                                    "response_format": {"type": "json_object"},
-                                    "messages": [{"role": "system", "content": DEDUP_SYSTEM},
-                                                 {"role": "user", "content": jd(payload)}]}, timeout=120)
-            r.raise_for_status()
+            r = chat_post_with_retry(
+                requests.post, q["base_url"] + "/chat/completions",
+                stage="semantic_dedup",
+                fallback_models=fallback_models(used_model),
+                headers={"Authorization": f"Bearer {q['api_key']}"},
+                json={"model": used_model, "temperature": 0,
+                      "response_format": {"type": "json_object"},
+                      "messages": [{"role": "system", "content": DEDUP_SYSTEM},
+                                   {"role": "user", "content": jd(payload)}]}, timeout=120)
             out = json.loads(r.json()["choices"][0]["message"]["content"]).get("pairs", [])
             for item in out if isinstance(out, list) else []:
                 try:
