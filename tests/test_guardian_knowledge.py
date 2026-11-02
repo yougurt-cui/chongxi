@@ -197,7 +197,7 @@ class RoutingTest(unittest.TestCase):
                 state['slots'][chat.health_flow.STATE_KEY] = {'stage': 'current'}
                 message = '这些关注点是什么意思'
             general = MagicMock(); general.handle.return_value = {'reply': 'old', 'result': {}}
-            with patch.object(chat, '_get_conversation', return_value={'id': 'c', 'pet_id': 'owned'}), \
+            with patch.object(chat, '_get_conversation', return_value={'id': 'c', 'pet_id': 'owned', 'profile_species': 'cat'}), \
                  patch.object(chat, '_load_state', return_value=state), patch.object(chat, '_save_state'), \
                  patch.object(chat, '_save_message', side_effect=lambda **kw: {'id': 'm', **kw}), \
                  patch.object(chat, '_connect', return_value=MagicMock()), \

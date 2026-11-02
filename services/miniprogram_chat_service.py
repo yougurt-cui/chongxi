@@ -37,6 +37,8 @@ from services import guardian_daily_status_service as daily_status
 from services.miniprogram_daily_record_service import normalize_client_records
 from services.guardian_recommendation_presentation import alternatives_requested
 from services import guardian_knowledge_service as knowledge_qa
+from services import guardian_subject_service as subjects
+from services.miniprogram_cat_profile_service import TABLE_NAME as PROFILE_TABLE
 
 
 CONVERSATION_TABLE = "miniprogram_chat_conversation"
@@ -214,6 +216,14 @@ def init_chat_tables() -> None:
                     KEY idx_chat_message_conversation(conversation_id,created_at),KEY idx_chat_message_user(user_id,created_at)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
             """)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS miniprogram_chat_knowledge_gap (
+                    user_message_id CHAR(32) NOT NULL PRIMARY KEY, reason VARCHAR(32) NOT NULL,
+                    species VARCHAR(16) NULL, topics_json TEXT NOT NULL, candidate_ids_json TEXT NOT NULL,
+                    outcome VARCHAR(32) NOT NULL, created_at DATETIME NOT NULL,
+                    KEY idx_gap_reason_date(reason,created_at)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+            """)
         conn.commit()
 
 
@@ -227,7 +237,10 @@ def _get_conversation(user_id: str, conversation_id: str) -> dict[str, Any]:
     init_chat_tables()
     with _connect(autocommit=True) as conn:
         with conn.cursor() as cursor:
-            cursor.execute(f"SELECT * FROM {CONVERSATION_TABLE} WHERE id=%s AND user_id=%s AND status='active' LIMIT 1", (conversation_id, user_id))
+            cursor.execute(f"""SELECT c.*,p.name AS profile_name,p.animal_type AS profile_species,p.age_months AS profile_age
+                            FROM {CONVERSATION_TABLE} c LEFT JOIN {PROFILE_TABLE} p
+                            ON p.id=c.pet_id AND p.user_id=c.user_id AND p.status='active'
+                            WHERE c.id=%s AND c.user_id=%s AND c.status='active' LIMIT 1""", (conversation_id, user_id))
             row = cursor.fetchone()
     if not row:
         raise LookupError("会话不存在")
@@ -280,6 +293,13 @@ def _save_message(*, conversation_id: str, user_id: str, role: str, content: str
                  _json_dumps(interaction) if interaction is not None else None,
                  _json_dumps(attachments) if attachments is not None else None,
                  _json_dumps(result) if result is not None else None, model_name, PROMPT_VERSION, now))
+            gap = (result or {}).get('knowledge_qa') or {}
+            if role == 'assistant' and gap.get('gap_message_id'):
+                cursor.execute("""INSERT INTO miniprogram_chat_knowledge_gap
+                    (user_message_id,reason,species,topics_json,candidate_ids_json,outcome,created_at)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s) ON DUPLICATE KEY UPDATE outcome=VALUES(outcome)""",
+                    (gap['gap_message_id'], gap['status'], gap['species'], _json_dumps(gap['topics']),
+                     _json_dumps(gap['candidate_guide_ids']), gap['generation_source'], now))
             cursor.execute(f"UPDATE {CONVERSATION_TABLE} SET last_message_at=%s,updated_at=%s WHERE id=%s AND user_id=%s", (now, now, conversation_id, user_id))
         conn.commit()
     return {"id": message_id, "conversation_id": conversation_id, "role": role, "content": content,
@@ -1372,48 +1392,84 @@ def handle_message(user_id: Any, conversation_id: Any, payload: dict[str, Any]) 
     if not message and not interaction and not attachments:
         raise ValueError("message、interaction、attachments 至少提供一项")
     state = _load_state(conversation_id)
+    slots = state['slots']
+    previous_subject = slots.get('_external_subject')
+    external_subject = subjects.resolve(message, conversation, previous_subject)
+    pending = slots.pop('_subject_scope_question', None)
     subject_choice = interaction and interaction.get('slot') == SUBJECT_SCOPE_SLOT
+    question_message_id = None
     if subject_choice:
-        pending = state.get('slots', {}).pop('_subject_scope_question', '')
-        value = interaction.get('value')
-        if value == 'general_kitten' and pending:
-            message, interaction = pending, None
-        elif value == 'profile_pet':
-            message, interaction = '请针对我档案里的成年猫给出日常喂养建议。', None
+        # Accept already-issued kitten choices from conversations created before this change.
+        if isinstance(pending, str):
+            pending = {'message': pending, 'species': 'cat'}
+        if not pending or state.get('current_step') != SUBJECT_SCOPE_SLOT:
+            raise ValueError('这个选择已经失效，请重新提问')
+        choice = interaction.get('value')
+        suffix = ':' + pending['message_id'] if pending.get('message_id') else ''
+        if choice == 'profile_pet' + suffix:
+            external_subject = None
+        elif pending['species'] == 'both' and choice in ('cat' + suffix, 'dog' + suffix):
+            external_subject = choice.split(':')[0]
+        elif choice == 'other_pet' + suffix or (not suffix and choice == 'general_kitten'):
+            external_subject = pending['species']
         else:
             raise ValueError('请选择要咨询的宠物')
+        message, interaction = pending['message'], None
+        if not external_subject and pending.get('kitten_conflict', not suffix):
+            message = message.replace('幼猫', '成年猫')
+        question_message_id = pending.get('message_id')
         state['current_step'] = None
-    scope_conflict = False
-    if message and not interaction and not attachments and not subject_choice and '幼猫' in message:
-        try:
-            pet = get_cat_profile(user_id, conversation['pet_id']) if conversation.get('pet_id') else None
-        except (pymysql.MySQLError, LookupError):
-            pet = None
-        scope_conflict = _life_stage_conflict(message, pet)
+    kitten_conflict = (not external_subject and conversation.get('profile_species') == 'cat'
+                       and _life_stage_conflict(message, {'age_months': conversation.get('profile_age')}))
+    ambiguous = (not subject_choice and not interaction and not attachments and
+                 (kitten_conflict or (previous_subject and external_subject == previous_subject
+                  and not subjects.species_in(message)
+                  and (subjects.PERSONAL.search(message) or (previous_subject == 'both' and '它' in message)))))
+    if previous_subject != external_subject and not ambiguous:
+        # A new animal cannot continue or confirm another animal's pending workflow.
+        state = {**_default_state(conversation_id), 'turn_count': state['turn_count']}
+    if external_subject:
+        state['slots']['_external_subject'] = external_subject
     diet_entry = ((client_context.get('entry_point') == 'diet_advice'
                    or bool(re.search(r'(?:饮食|喂养|喂食)(?:建议|分析)|日常(?:饮食|喂养)', message))
                    and not re.search(r'换粮|软便|呕吐|腹泻|便血', message))
                   and not interaction and not attachments and bool(message))
-    if not diet_entry and not interaction and not attachments:
+    if not ambiguous and not external_subject and not diet_entry and not interaction and not attachments:
         interaction = health_flow.confirmation_interaction(message, state)
     user_message = _save_message(conversation_id=conversation_id,user_id=user_id,role="user",content=recorded_message,
                   interaction=recorded_interaction,attachments=attachments,
                   result={"turn_no": state["turn_count"] + 1, "sequence_no": 0})
-    if scope_conflict:
-        state['slots']['_subject_scope_question'] = message
+    question_message_id = question_message_id or user_message['id']
+    if ambiguous:
+        other_species = 'cat' if kitten_conflict else external_subject
+        state['slots']['_subject_scope_question'] = {'message': message, 'species': other_species,
+                                                    'message_id': question_message_id, 'kitten_conflict': kitten_conflict}
+        other_label = '其他幼猫' if kitten_conflict else '刚才讨论的宠物'
+        profile_label = conversation.get('profile_name') or '当前宠物'
+        suffix = ':' + question_message_id
+        options = ([{'label': '问猫（通用）', 'value': 'cat' + suffix}, {'label': '问狗（通用）', 'value': 'dog' + suffix}]
+                   if other_species == 'both' else [{'label': other_label, 'value': 'other_pet' + suffix}])
+        options.append({'label': profile_label, 'value': 'profile_pet' + suffix})
         state.update(primary_intent='general_pet_qa', secondary_intent=None,
                      current_step=SUBJECT_SCOPE_SLOT, missing_slots=[], followup_count=0)
         state['turn_count'] += 1
         reply = {
             'response_type': 'single_select',
-            'reply': '档案里的猫已经是成年猫。你是想了解其他幼猫，还是想咨询当前这只成年猫？',
-            'interaction': {'slot': SUBJECT_SCOPE_SLOT, 'options': [
-                {'label': '了解其他幼猫', 'value': 'general_kitten'},
-                {'label': '咨询当前猫咪', 'value': 'profile_pet'},
-            ]},
+            'reply': '刚才聊到了猫和狗，这次想问哪只？' if other_species == 'both' else f'这次想问的是{other_label}，还是档案里的{profile_label}？',
+            'interaction': {'slot': SUBJECT_SCOPE_SLOT, 'options': options},
             'result': {'intent': 'general_pet_qa', 'status': 'subject_scope_needed',
                        'turn_no': state['turn_count'], 'sequence_no': 1},
         }
+    elif external_subject:
+        boundary = subjects.external_boundary(message, interaction, attachments)
+        if boundary:
+            status, text = boundary
+            state['turn_count'] += 1
+            reply = {'response_type': 'risk_alert' if status == 'risk_alert' else 'text', 'reply': text,
+                     'result': {'status': status, 'turn_no': state['turn_count'], 'sequence_no': 1}}
+        else:
+            reply = knowledge_qa.handle_question(user_id, conversation, message, state,
+                                                 external_subject=external_subject, message_id=question_message_id)
     else:
         reply = _handle_diet_advice_entry(user_id, conversation, state, user_message['id'], client_context) if diet_entry else None
     if reply is None:
@@ -1434,9 +1490,9 @@ def handle_message(user_id: Any, conversation_id: Any, payload: dict[str, Any]) 
                 snapshot['stage'] = 'superseded'
             _pause_soft_stool(state)
             if diet_entry:
-                reply = knowledge_qa.handle_question(user_id, conversation, message, state, report_scene='diet_advice')
+                reply = knowledge_qa.handle_question(user_id, conversation, message, state, report_scene='diet_advice', message_id=question_message_id)
             else:
-                reply = knowledge_qa.handle_question(user_id, conversation, message, state)
+                reply = knowledge_qa.handle_question(user_id, conversation, message, state, message_id=question_message_id)
         else:
             reply = strategy.handle(user_id, conversation, message, state, user_message["id"],
                                     interaction=interaction, attachments=attachments,
