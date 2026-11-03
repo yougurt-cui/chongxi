@@ -69,11 +69,15 @@ def resolve(message, conversation, previous):
     return previous
 
 
-def external_boundary(message, interaction, attachments):
-    from services.guardian_workflow import requested_flow
+def urgent_message(message):
     from soft_stool_assistant.llm import _extract_rule_info
     from soft_stool_assistant.policy import urgent_risk
-    if URGENT.search(message) or urgent_risk(_extract_rule_info(message, {})):
+    return bool(URGENT.search(message) or urgent_risk(_extract_rule_info(message, {})))
+
+
+def external_boundary(message, interaction, attachments):
+    from services.guardian_workflow import requested_flow
+    if urgent_message(message):
         return 'risk_alert', '这只宠物出现了需要优先评估的情况，请尽快联系宠物医院并说明症状。'
     if (interaction or attachments or requested_flow(message) == 'reminder'
             or re.search(r'帮.{0,5}记录|历史口粮|吃粮记录|状态解读|(?:最近|之前|以前)吃的粮', message)):

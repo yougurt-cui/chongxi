@@ -38,6 +38,7 @@ from services.miniprogram_daily_record_service import normalize_client_records
 from services.guardian_recommendation_presentation import alternatives_requested
 from services import guardian_knowledge_service as knowledge_qa
 from services import guardian_subject_service as subjects
+from services import guardian_ingredient_guide as ingredient_guide
 from services.miniprogram_cat_profile_service import TABLE_NAME as PROFILE_TABLE
 
 
@@ -1053,7 +1054,17 @@ def _handle_context_message(user_id, conversation, message, state, source_messag
             )
             context["food_analysis"] = analysis
             context['food_analysis_scope'] = 'catalog'
-    _prepare_saved_food_analysis(message, state, context)
+    # A named comparison must resolve both sides. A mention of the current
+    # diet alone must not silently substitute it for an unknown target.
+    query = health_flow.named_request(message) or ''
+    parts = re.split(r'\s*(?:和|与| versus | vs\.? | VS |、)\s*', query)
+    mixed_current = (len(parts) == 2 and any(CURRENT_FOOD_ANALYSIS_RE.fullmatch(p) for p in parts)
+                     and not HISTORY_FOOD_ANALYSIS_RE.search(query))
+    if mixed_current and state.get('primary_intent') == 'food_analysis' and not attachments:
+        state['slots'].pop('catalog_key', None)
+        context['comparison_current_reference'] = next(p for p in parts if CURRENT_FOOD_ANALYSIS_RE.fullmatch(p))
+    else:
+        _prepare_saved_food_analysis(message, state, context)
     analysis_followup = (state.get('primary_intent') == 'food_analysis'
                          and bool(state['slots'].get(health_flow.STATE_KEY))
                          and not attachments and not interaction and bool(message)
@@ -1138,6 +1149,8 @@ def _handle_context_message(user_id, conversation, message, state, source_messag
                                       'label': ' '.join(filter(None, [current.get('brand'), current.get('product_name')])) or '当前粮',
                                       'roles': ['current']})
         attach_report(reply, context, report_subjects, scene='ingredient_analysis')
+    elif submission and submission.get('failure_node'):
+        reply = ingredient_guide.start(submission, state, conversation.get('pet_id'), source_message_id)
     elif submission and submission.get("recognition_status") in {"pending","processing"}:
         reply = {"response_type":"processing","reply":submission.get("recognition_message") or "配料表正在识别，请稍后刷新投稿后再交给我分析。",
                  "result":{"resource":"food_submission","id":submission["id"],"interval_ms":2000}}
@@ -1149,6 +1162,8 @@ def _handle_context_message(user_id, conversation, message, state, source_messag
                  "result": {"resource": "food_submission", "id": submission["id"],
                             "recognition_status": submission.get("recognition_status"),
                             "can_reupload": submission.get("can_reupload", False)}}
+    elif analysis_reply and (missing_product := analysis_reply.get('result', {}).get('unverified_product')):
+        reply = ingredient_guide.catalog_entry(missing_product, message, state, conversation.get('pet_id'), source_message_id)
     elif analysis_followup:
         text, model_name = _generate_answer(message, state, context, False)
         state['current_step'] = None
@@ -1393,8 +1408,21 @@ def handle_message(user_id: Any, conversation_id: Any, payload: dict[str, Any]) 
         raise ValueError("message、interaction、attachments 至少提供一项")
     state = _load_state(conversation_id)
     slots = state['slots']
+    guide = slots.get(ingredient_guide.SLOT)
+    supplied_name = (guide and guide.get('failure_node') == 'catalog_missing' and not interaction and not attachments
+                     and re.fullmatch(r'(?:完整(?:产品)?名(?:称)?|产品名(?:称)?|品名|全名)(?:是|叫|为|[：:])\s*(.{1,80})', message))
+    if supplied_name:
+        message = '分析一下' + supplied_name.group(1)
+    guide_choice = bool(interaction and interaction.get('slot') == ingredient_guide.SLOT)
+    if guide_choice:
+        if attachments:
+            raise ValueError('请单独选择引导问题')
+        message = ingredient_guide.selected_question(guide, conversation.get('pet_id'), interaction.get('value'))
+        recorded_message = message
     previous_subject = slots.get('_external_subject')
-    external_subject = subjects.resolve(message, conversation, previous_subject)
+    # The saved guide options refer to this upload; their wording (e.g. 猫粮)
+    # must not switch the subject to a different animal.
+    external_subject = previous_subject if guide_choice else subjects.resolve(message, conversation, previous_subject)
     pending = slots.pop('_subject_scope_question', None)
     subject_choice = interaction and interaction.get('slot') == SUBJECT_SCOPE_SLOT
     question_message_id = None
@@ -1434,7 +1462,19 @@ def handle_message(user_id: Any, conversation_id: Any, payload: dict[str, Any]) 
                    or bool(re.search(r'(?:饮食|喂养|喂食)(?:建议|分析)|日常(?:饮食|喂养)', message))
                    and not re.search(r'换粮|软便|呕吐|腹泻|便血', message))
                   and not interaction and not attachments and bool(message))
-    if not ambiguous and not external_subject and not diet_entry and not interaction and not attachments:
+    # A typed follow-up may refer to the previous card ("那怎么看？"). Explicit
+    # workflow changes, other animals and urgent symptoms keep their usual routes.
+    typed_guide = (not interaction and not attachments and not diet_entry and not client_context.get('entry_point')
+                   and guide and message and not supplied_name and not requested_flow(message) and not SOFT_STOOL_PAUSE_RE.search(message)
+                   and not daily_status.requested(message, state) and not _should_route_soft_stool(message, state)
+                   and not (guide.get('failure_node') == 'catalog_missing' and health_flow.named_request(message)
+                            and re.search(r'对比|比较|该不该买|值得买吗', message)))
+    guide_active = ((guide_choice or typed_guide) and not ambiguous and not external_subject
+                    and guide['pet_id'] == conversation.get('pet_id'))
+    guide_urgent = guide_active and subjects.urgent_message(message)
+    if not guide_active or guide_urgent:
+        state['slots'].pop(ingredient_guide.SLOT, None)
+    if not ambiguous and not external_subject and not diet_entry and not guide_active and not interaction and not attachments:
         interaction = health_flow.confirmation_interaction(message, state)
     user_message = _save_message(conversation_id=conversation_id,user_id=user_id,role="user",content=recorded_message,
                   interaction=recorded_interaction,attachments=attachments,
@@ -1460,6 +1500,19 @@ def handle_message(user_id: Any, conversation_id: Any, payload: dict[str, Any]) 
             'result': {'intent': 'general_pet_qa', 'status': 'subject_scope_needed',
                        'turn_no': state['turn_count'], 'sequence_no': 1},
         }
+    elif guide_active:
+        if guide_urgent:
+            state['risk_level'] = 'high'
+            reply = {'response_type': 'risk_alert', 'reply': '现在需要优先评估这些症状，请尽快联系宠物医院。', 'result': {}}
+        else:
+            context = (_build_context(user_id, conversation, state, [], client_context)
+                       if conversation.get('profile_species') == 'cat' else {})
+            reply = ingredient_guide.advance(guide, message, context, question_message_id, allow_handoff=not guide_choice)
+        if reply is None:
+            state['slots'].pop(ingredient_guide.SLOT, None)
+        else:
+            state['turn_count'] += 1
+            reply['result'].update(turn_no=state['turn_count'], sequence_no=1, intent=state['primary_intent'])
     elif external_subject:
         boundary = subjects.external_boundary(message, interaction, attachments)
         if boundary:

@@ -97,8 +97,16 @@ def named_request(message):
     text = str(message or '').strip()
     if re.search(r'^(?:帮我|请|麻烦)?(?:分析|对比|比较)(?:一下)?', text):
         query = re.sub(r'^(?:帮我|请|麻烦)?(?:分析|对比|比较)(?:一下)?\s*', '', text)
+    elif (re.search(r'粮|猫条|配方|罐头|零食', text)
+          and (compare := re.fullmatch(r'(?:请|帮我)?(?:把|拿)?(.+?(?:和|与| vs ).+?)(?:对比|比较)(?:一下)?[？?。]*', text))):
+        query = compare.group(1)
     elif re.search(r'(?:这款|当前|现在|历史|以前|之前).{0,10}粮.*(?:怎么样|适合|特点|分析|对比)', text):
         query = text
+    elif (re.search(r'猫条|零食|猫粮|罐头|主粮', text)
+          and (buy := re.fullmatch(r'(?:我|请问|我想问)?(?:该不该买|要不要买|能不能买|该买|要买)(.+?)[吗呢？?。]*', text))):
+        query = buy.group(1)
+    elif (buy := re.fullmatch(r'(.{1,60}(?:猫条|零食|猫粮|罐头|主粮).{0,20}?)(?:值不值得买|值得买吗|该不该买|要不要买)[？?。]*', text)):
+        query = buy.group(1)
     else:
         return None
     if not query or re.search(r'症状|病情|便血|精神|怎么治', query):
@@ -126,6 +134,13 @@ def prepare_named_analysis(message, state, context, load_analysis):
                 'result': {'intent': 'food_analysis', 'food_candidates': []}}
     subjects = []
     for name in parts:
+        if name == context.get('comparison_current_reference'):
+            current = context.get('current_food') or {}
+            if not current.get('formula_id'):
+                return {'result': {'unverified_product': name}}
+            subjects.append({'label': current.get('product_name') or name,
+                             'food_analysis': load_analysis(current['formula_id'])})
+            continue
         try:
             options = list_standardized_product_options(q=name, compare_available=True, limit=50).get('items') or []
             # The catalogue q searches brand/name separately; users commonly
@@ -135,7 +150,10 @@ def prepare_named_analysis(message, state, context, load_analysis):
         except pymysql.MySQLError:
             return {'response_type': 'text', 'reply': '食品目录暂时无法读取，请稍后重试。',
                     'result': {'intent': 'food_analysis', 'food_candidates': []}}
-        matches = resolve_target(name, options)
+        generic = re.fullmatch(r'(?:这款|这个|那款|那个|这根|这袋|这包)?(?:猫条|猫粮|罐头|零食|主粮)', name)
+        matches = [] if generic else resolve_target(name, options)
+        if not matches:
+            return {'result': {'unverified_product': name}}
         if len(matches) != 1:
             state['slots']['_food_analysis_choices'] = [row['catalog_key'] for row in matches[:10]]
             state['current_step'] = CHOICE_SLOT
@@ -144,8 +162,8 @@ def prepare_named_analysis(message, state, context, load_analysis):
                 state['slots'].pop('_food_analysis_choices', None)
                 return {'response_type': 'text', 'reply': f'“{name}”还不能唯一定位到具体配方，请补充各款粮的完整名称或版本，再进行对比。',
                         'result': {'intent': 'food_analysis', 'food_candidates': []}}
-            return {'response_type': 'food_select', 'reply': f'请确认要分析的具体粮款和版本：{name}。' if matches else f'暂未找到“{name}”的可核验配方，请补充完整名称或上传配料表。',
-                    'interaction': {'slot': CHOICE_SLOT, 'options': [{'value': row['catalog_key'], 'label': row.get('label') or row['product_name']} for row in matches[:10]]} if matches else None,
+            return {'response_type': 'food_select', 'reply': f'请确认要分析的具体粮款和版本：{name}。',
+                    'interaction': {'slot': CHOICE_SLOT, 'options': [{'value': row['catalog_key'], 'label': row.get('label') or row['product_name']} for row in matches[:10]]},
                     'result': {'intent': 'food_analysis', 'food_candidates': []}}
         item = matches[0]
         subjects.append({'label': item.get('label') or item['product_name'],
