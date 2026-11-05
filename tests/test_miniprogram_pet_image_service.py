@@ -1,5 +1,7 @@
 import io
 import unittest
+from types import SimpleNamespace
+from unittest.mock import patch
 
 from PIL import Image
 from werkzeug.datastructures import FileStorage
@@ -37,6 +39,26 @@ class MiniProgramPetImageServiceTest(unittest.TestCase):
         self.assertEqual(result["animal_type"]["confidence"], 1.0)
         self.assertTrue(result["age"]["requires_confirmation"])
         self.assertTrue(result["weight"]["requires_manual_input"])
+
+    def test_recognition_prompt_uses_catalog_and_separate_appearance(self):
+        client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace()))
+        response = SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content='''{
+            "animal_type":{"value":"cat","confidence":0.9},
+            "breed":{"value":"Persian","confidence":0.8},
+            "appearance":{"pattern":{"value":"calico","confidence":0.9}}
+        }'''))])
+        with patch.object(service, 'get_qwen_config', return_value={
+                'api_key': 'test', 'base_url': 'https://example.test/v1', 'model': 'qwen3-vl-plus'}), \
+             patch.object(service, 'OpenAI', return_value=client), \
+             patch.object(client.chat.completions, 'create', create=True, return_value=response) as create:
+            result, model = service.recognize_pet(b'test-image')
+        self.assertEqual(model, 'qwen3-vl-plus')
+        self.assertEqual(result['breed']['value'], '波斯猫')
+        self.assertEqual(result['appearance']['pattern']['value'], '三花')
+        prompt = create.call_args.kwargs['messages'][0]['content'][1]['text']
+        self.assertIn('中华田园猫', prompt)
+        self.assertIn('马尔济斯犬', prompt)
+        self.assertIn('三花、橘猫、奶牛花色、玳瑁属于花色', prompt)
 
 
 if __name__ == "__main__":

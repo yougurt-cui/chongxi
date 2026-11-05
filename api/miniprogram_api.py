@@ -754,6 +754,13 @@ def get_moment_image_endpoint(file_id: str):
         return jsonify({"ok": False, "error": str(exc)}), 500
 
 
+@miniprogram_api.get("/pet-breeds")
+def pet_breed_catalog_endpoint():
+    """Shared, non-personal breed and appearance vocabulary for the editor."""
+    from services.pet_breed_catalog import catalog
+    return jsonify({"ok": True, **catalog()})
+
+
 @miniprogram_api.post("/pet-images/recognize")
 def recognize_pet_image_endpoint():
     """Store one private pet photo and return AI suggestions for profile fields."""

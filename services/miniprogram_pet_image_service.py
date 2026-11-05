@@ -19,6 +19,7 @@ from PIL import Image, ImageOps
 from werkzeug.datastructures import FileStorage
 
 from app_config import get_mysql_config, get_qwen_config
+from services.pet_breed_catalog import catalog, normalize_identity
 
 
 BASE_DIR = Path(__file__).resolve().parents[1]
@@ -28,7 +29,7 @@ TABLE_NAME = "miniprogram_pet_image_upload"
 MAX_IMAGE_SIZE = 10 * 1024 * 1024
 MAX_IMAGE_PIXELS = 30_000_000
 MAX_IMAGE_EDGE = 2048
-PROMPT_VERSION = "pet-profile-recognition-v1"
+PROMPT_VERSION = "pet-profile-recognition-v2"
 
 
 def _now() -> str:
@@ -190,26 +191,10 @@ def _confidence(value: Any) -> float:
 
 
 def _normalize_recognition(data: dict[str, Any]) -> dict[str, Any]:
-    animal = data.get("animal_type") if isinstance(data.get("animal_type"), dict) else {}
-    breed = data.get("breed") if isinstance(data.get("breed"), dict) else {}
     age = data.get("age") if isinstance(data.get("age"), dict) else {}
     weight = data.get("weight") if isinstance(data.get("weight"), dict) else {}
     health = data.get("visible_health") if isinstance(data.get("visible_health"), dict) else {}
-    candidates = []
-    for item in breed.get("candidates") or []:
-        if isinstance(item, dict) and _clean(item.get("value"), 64):
-            candidates.append({"value": _clean(item.get("value"), 64), "confidence": _confidence(item.get("confidence"))})
-    return {
-        "animal_type": {
-            "value": _clean(animal.get("value"), 16) or "unknown",
-            "label": _clean(animal.get("label"), 32),
-            "confidence": _confidence(animal.get("confidence")),
-        },
-        "breed": {
-            "value": _clean(breed.get("value"), 64),
-            "confidence": _confidence(breed.get("confidence")),
-            "candidates": candidates[:5],
-        },
+    result = {
         "age": {
             "stage": _clean(age.get("stage"), 32),
             "label": _clean(age.get("label"), 64),
@@ -233,22 +218,33 @@ def _normalize_recognition(data: dict[str, Any]) -> dict[str, Any]:
             "observations": [_clean(item, 128) for item in (health.get("observations") or []) if _clean(item)][:10],
         },
     }
+    result.update(normalize_identity(data))
+    return result
 
 
 def recognize_pet(content: bytes) -> tuple[dict[str, Any], str]:
-    cfg = get_qwen_config({"model": os.getenv("QWEN_VISION_MODEL") or "qwen-vl-plus"})
+    cfg = get_qwen_config({"model": os.getenv("QWEN_VISION_MODEL") or "qwen3-vl-plus"})
     if not cfg["api_key"]:
         raise RuntimeError("未配置通义千问 API Key")
     schema = {
         "animal_type": {"value": "cat|dog|unknown", "label": "猫咪", "confidence": 0.0},
         "breed": {"value": "品种或空字符串", "confidence": 0.0, "candidates": [{"value": "候选品种", "confidence": 0.0}]},
+        "appearance": {key: {"value": "", "confidence": 0.0} for key in ("color", "pattern", "length")},
         "age": {"stage": "juvenile|adult|senior|unknown", "label": "成年", "estimated_years": None, "minimum_years": None, "maximum_years": None, "confidence": 0.0},
         "weight": {"estimated_kg": None, "minimum_kg": None, "maximum_kg": None, "confidence": 0.0},
         "visible_health": {"status": "unknown", "label": "仅描述可见外观", "confidence": 0.0, "observations": []},
     }
     prompt = (
         "分析照片中的主要宠物，为建档表单提供保守建议。只描述图像中可见内容，不诊断疾病；"
-        "年龄和体重无法可靠判断时必须降低 confidence 并可返回 null。只返回合法 JSON，结构为："
+        "品种只能从下方对应猫或狗的中文品种库中选择，必须使用中文标准名称。"
+        "三花、橘猫、奶牛花色、玳瑁属于花色，不是品种；花色和毛长分别填写 appearance。"
+        "例如三花短毛家猫可返回品种普通短毛家猫、color黑白橘、pattern三花、length短毛；"
+        "花色不能作为确认中华田园猫、波斯猫等品种或血统的依据。"
+        "无法判断具体品种时使用猫品种待确认或犬种待确认，提供最多3个库内中文候选供主人确认；"
+        "不要把无法判断自动等同于混种。只能描述外观上的品种相似性，不能证明血统。"
+        "外观字段只选下方appearance词表；无法看清留空，不按候选品种反推外观。"
+        "年龄和体重无法可靠判断时必须降低 confidence 并可返回 null。"
+        "词表：" + _json_dumps(catalog()) + "。只返回合法 JSON，结构为："
         + _json_dumps(schema)
     )
     image_url = "data:image/jpeg;base64," + base64.b64encode(content).decode("ascii")
@@ -288,7 +284,7 @@ def upload_and_recognize_pet(image_file: FileStorage, *, user_id: Any) -> dict[s
         suggestions, model = recognize_pet(content)
         recognition_status, error = "success", None
     except Exception as exc:
-        suggestions, model = {}, os.getenv("QWEN_VISION_MODEL") or "qwen-vl-plus"
+        suggestions, model = {}, os.getenv("QWEN_VISION_MODEL") or "qwen3-vl-plus"
         recognition_status, error = "failed", _clean(exc, 1000)
     with _connect() as conn:
         with conn.cursor() as cursor:
