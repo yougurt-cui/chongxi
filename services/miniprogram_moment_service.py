@@ -239,6 +239,8 @@ def _serialize(row: dict[str, Any]) -> dict[str, Any]:
         "title": row.get("title") or "",
         "content": row.get("content") or "",
         "images": _json_loads(row.get("images_json"), []),
+        "post_type": "product" if row.get("products") or row.get("category_code") == "PRODUCT" else "normal",
+        "products": row.get("products") or [],
         "visibility": visibility,
         "breed": row.get("breed") or "",
         "age_text": row.get("age_text") or "",
@@ -570,6 +572,8 @@ def list_moments(
                 params,
             )
             rows = list(cursor.fetchall() or [])
+    from services.merchant_product_service import attach_products_to_moments
+    attach_products_to_moments(rows)
     return {"ok": True, "count": len(rows), "items": [_serialize(row) for row in rows]}
 
 
@@ -627,6 +631,8 @@ def get_moment(post_id: Any, *, viewer_user_id: Any = "") -> dict[str, Any]:
         raise LookupError("瞬间不存在")
     row["comments"] = comments
     row["liked"] = liked
+    from services.merchant_product_service import attach_products_to_moments
+    attach_products_to_moments([row])
     return _serialize(row)
 
 

@@ -788,6 +788,7 @@
       <button id="contentOperationsTab" class="tab" type="button" data-tab="content-operations">内容运营</button>
       <button id="reportReviewTab" class="tab" type="button" data-tab="report">举报审核</button>
       <button id="ideaTab" class="tab" type="button" data-tab="idea">创意管理</button>
+      <button id="merchantTab" class="tab" type="button" data-tab="merchant">商家认证</button>
       <button id="enterpriseAdminTab" class="tab" type="button" data-tab="enterprise-admin">企业后台</button>
     </section>
 
@@ -1268,6 +1269,39 @@
 
       <div id="ideaCardContainer" class="idea-grid"></div>
       <div id="ideaEmpty" class="empty" style="display:none;">暂无创意内容，点击"新增创意"开始吧。</div>
+    </section>
+
+    <section id="merchantSection" class="section" hidden>
+      <section class="toolbar">
+        <div><div class="title">商家认证</div><div class="muted">录入商家与店铺资料，保存后标记为已认证。</div></div>
+        <button id="merchantRefresh" class="button secondary" type="button">刷新列表</button>
+      </section>
+      <section class="card" style="padding:20px;margin-bottom:20px;">
+        <div class="title" id="merchantFormTitle" style="margin-bottom:16px;">新增商家认证</div>
+        <form id="merchantForm">
+          <div class="filters" style="padding:0;box-shadow:none;border:0;">
+            <div style="grid-column:1/-1;">
+              <label for="merchantUserQuery"><span class="field-label">按微信昵称查找用户</span></label>
+              <div style="display:flex;gap:8px;flex-wrap:wrap;"><input id="merchantUserQuery" maxlength="128" placeholder="输入小程序内保存的昵称、手机号或 OpenID" style="flex:1;min-width:180px;" autocomplete="off" /><button id="merchantUserSearch" class="button secondary" type="button">查找用户</button></div>
+              <div id="merchantUserHint" class="muted" role="status" style="margin-top:6px;">仅能查找已登录过本小程序的用户；同名用户请核对后选择，选择后自动回填 OpenID。</div>
+              <div id="merchantUserResults" style="max-height:240px;overflow:auto;margin-top:8px;"></div>
+            </div>
+            <label><span class="field-label">用户微信 ID *</span><input id="merchantWechat" name="wechat_id" required maxlength="128" placeholder="填写微信号或用户 OpenID" autocomplete="off" /></label>
+            <label><span class="field-label">用户手机号 *</span><input id="merchantPhone" name="phone" type="tel" required maxlength="32" placeholder="11位手机号，支持 +86" autocomplete="off" /></label>
+            <label><span class="field-label">商家类型 *</span><input id="merchantType" name="merchant_type" list="merchantTypeOptions" required maxlength="80" placeholder="选择或输入商家类型" /><datalist id="merchantTypeOptions"><option value="品牌商"></option><option value="经销商"></option><option value="零售商"></option><option value="宠物门店"></option><option value="其他"></option></datalist></label>
+            <label><span class="field-label">店铺跳转方式 *</span><select id="merchantJump" name="jump_type" required><option value="web">网页链接</option><option value="mini_program">微信小程序</option><option value="other">其他方式</option></select></label>
+            <label style="grid-column:1/-1;"><span class="field-label">店铺链接 *</span><input id="merchantLink" name="shop_link" required maxlength="2048" placeholder="https://…" /><span id="merchantLinkHint" class="muted">填写完整的 http:// 或 https:// 店铺地址。</span></label>
+          </div>
+          <div class="row-actions" style="margin-top:16px;"><button id="merchantSave" class="button" type="submit">保存并认证</button><button id="merchantCancel" class="button secondary" type="button" hidden>取消编辑</button><span id="merchantFormMessage" role="status" aria-live="polite" class="muted"></span></div>
+        </form>
+      </section>
+      <section class="filters" aria-label="商家认证筛选">
+        <label><span class="field-label">搜索</span><input id="merchantQuery" placeholder="微信 ID / 手机号 / 商家类型" maxlength="128" /></label>
+        <label><span class="field-label">认证状态</span><select id="merchantStatus"><option value="">全部状态</option><option value="active">已认证</option><option value="disabled">已停用</option></select></label>
+        <div class="row-actions"><button id="merchantSearch" class="button" type="button">查询</button></div>
+      </section>
+      <section class="card"><div class="table-wrap"><table style="min-width:1060px;"><thead><tr><th>编号</th><th>用户微信 ID</th><th>手机号</th><th>商家类型</th><th>跳转方式</th><th>店铺链接</th><th>状态</th><th>更新时间</th><th>操作</th></tr></thead><tbody id="merchantRows"></tbody></table></div><div id="merchantEmpty" class="empty">正在加载商家认证…</div></section>
+      <div class="toolbar" style="margin-top:12px;"><span id="merchantPageInfo" class="muted"></span><div class="row-actions"><button id="merchantPrev" type="button" class="small-button secondary">上一页</button><button id="merchantNext" type="button" class="small-button secondary">下一页</button></div></div>
     </section>
 
     <section id="enterpriseAdminSection" class="section" hidden>
@@ -3816,6 +3850,7 @@
       contentOperationsTab.classList.toggle("active", tab === "content-operations");
       reportReviewTab.classList.toggle("active", tab === "report");
       ideaTab.classList.toggle("active", tab === "idea");
+      document.getElementById("merchantTab").classList.toggle("active", tab === "merchant");
       enterpriseAdminTab.classList.toggle("active", tab === "enterprise-admin");
       nodeSection.hidden = tab !== "node";
       identitySection.hidden = tab !== "identity";
@@ -3825,6 +3860,7 @@
       contentOperationsSection.hidden = tab !== "content-operations";
       reportReviewSection.hidden = tab !== "report";
       ideaSection.hidden = tab !== "idea";
+      document.getElementById("merchantSection").hidden = tab !== "merchant";
       enterpriseAdminSection.hidden = tab !== "enterprise-admin";
       if (tab === "identity" && !identityRowsEl.children.length) {
         if (activeIdentityTab === "product") {
@@ -3858,6 +3894,7 @@
       if (tab === "idea" && !ideaCardContainer.children.length) {
         loadIdeaCategories().then(() => loadIdeas());
       }
+      if (tab === "merchant") loadMerchantCertifications();
       if (tab === "enterprise-admin") loadEnterpriseAdmin();
     }
 
@@ -4046,7 +4083,139 @@
         }
       } catch (error) { showToast(error.message, "error"); }
     });
-    loadItems();
+    const merchantFields = { wechat_id: "merchantWechat", phone: "merchantPhone", merchant_type: "merchantType", jump_type: "merchantJump", shop_link: "merchantLink" };
+    const merchantJumpLabels = {web:"网页链接",mini_program:"微信小程序",other:"其他方式"};
+    let merchantPage = 1, merchantEditingId = null, merchantItems = [], merchantLoadId = 0;
+    let merchantUserLoadId = 0, merchantUserItems = [], merchantSelectedUserId = null;
+    function merchantLinkHint() {
+      const mode = document.getElementById("merchantJump").value;
+      document.getElementById("merchantLink").placeholder = mode === "web" ? "https://…" : mode === "mini_program" ? "粘贴小程序链接或页面路径" : "填写店铺跳转地址";
+      document.getElementById("merchantLinkHint").textContent = mode === "web" ? "填写完整的 http:// 或 https:// 店铺地址。" : "保存跳转资料供后续使用；本页面不执行跳转。";
+    }
+    function resetMerchantForm() {
+      merchantEditingId = null;
+      clearMerchantUserSelection();
+      document.getElementById("merchantForm").reset();
+      document.getElementById("merchantFormTitle").textContent = "新增商家认证";
+      document.getElementById("merchantSave").textContent = "保存并认证";
+      document.getElementById("merchantCancel").hidden = true;
+      merchantLinkHint();
+    }
+    async function loadMerchantCertifications() {
+      const loadId = ++merchantLoadId;
+      const rows = document.getElementById("merchantRows"), empty = document.getElementById("merchantEmpty");
+      const params = new URLSearchParams({page:String(merchantPage),q:document.getElementById("merchantQuery").value.trim(),status:document.getElementById("merchantStatus").value});
+      empty.textContent = "正在加载…"; empty.style.display = "block";
+      try {
+        const data = await api(`/api/admin/merchant-certifications?${params}`);
+        if (loadId !== merchantLoadId) return;
+        if (!data.items.length && data.total && merchantPage > 1) { merchantPage--; return loadMerchantCertifications(); }
+        merchantItems = data.items || [];
+        rows.innerHTML = merchantItems.map(item => `<tr><td>${escapeHtml(item.id)}</td><td>${escapeHtml(item.wechat_id)}</td><td>${escapeHtml(item.phone)}</td><td>${escapeHtml(item.merchant_type)}</td><td>${escapeHtml(merchantJumpLabels[item.jump_type] || item.jump_type)}</td><td style="max-width:280px;overflow-wrap:anywhere;white-space:normal;">${escapeHtml(item.shop_link)}</td><td><span class="chip ${item.status === "active" ? "chip-auto" : "chip-muted"}">${item.status === "active" ? "已认证" : "已停用"}</span></td><td>${escapeHtml(item.updated_at)}</td><td><div class="row-actions"><button type="button" class="small-button" data-merchant-edit="${item.id}">编辑</button><button type="button" class="small-button secondary" data-merchant-status="${item.id}">${item.status === "active" ? "停用认证" : "恢复认证"}</button></div></td></tr>`).join("");
+        empty.style.display = merchantItems.length ? "none" : "block";
+        empty.textContent = "暂无符合条件的商家认证。";
+        document.getElementById("merchantPageInfo").textContent = `共 ${data.total} 条 · 第 ${data.page} / ${Math.max(1,Math.ceil(data.total / data.page_size))} 页`;
+        document.getElementById("merchantPrev").disabled = merchantPage <= 1;
+        document.getElementById("merchantNext").disabled = merchantPage * data.page_size >= data.total;
+      } catch (error) {
+        if (loadId !== merchantLoadId) return;
+        rows.innerHTML = ""; empty.textContent = error.message || "加载失败，请重试";
+        document.getElementById("merchantPrev").disabled = true;
+        document.getElementById("merchantNext").disabled = true;
+        document.getElementById("merchantPageInfo").textContent = "加载失败";
+      }
+    }
+    function clearMerchantUserSelection() {
+      merchantUserLoadId++;
+      merchantSelectedUserId=null; merchantUserItems=[];
+      document.getElementById("merchantUserQuery").value="";
+      document.getElementById("merchantUserResults").innerHTML="";
+      document.getElementById("merchantUserHint").textContent="仅能查找已登录过本小程序的用户；同名用户请核对后选择，选择后自动回填 OpenID。";
+    }
+    async function searchMerchantUsers() {
+      const loadId=++merchantUserLoadId;
+      const query=document.getElementById("merchantUserQuery").value.trim();
+      const hint=document.getElementById("merchantUserHint"), results=document.getElementById("merchantUserResults");
+      results.innerHTML=""; merchantUserItems=[];
+      if (!query) { hint.textContent="请先输入微信昵称、手机号或 OpenID。"; return; }
+      hint.textContent="正在查找用户…";
+      try {
+        const data=await api(`/api/admin/merchant-certifications/users?${new URLSearchParams({q:query})}`);
+        if (loadId !== merchantUserLoadId) return;
+        merchantUserItems=data.items || [];
+        hint.textContent=merchantUserItems.length ? `找到 ${merchantUserItems.length} 位用户，请核对并选择${data.has_more ? "；结果较多，请输入更完整的昵称或手机号" : ""}。` : "未找到用户。请确认用户已登录小程序并保存昵称，也可继续手动填写微信 ID。";
+        results.innerHTML=merchantUserItems.map((user,index) => `<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;border:1px solid #e1e6ee;border-radius:8px;padding:10px;margin-bottom:6px;"><div style="min-width:0;overflow-wrap:anywhere;"><strong>${escapeHtml(user.nickname || "未设置昵称")}</strong><div class="muted">OpenID：${escapeHtml(user.openid)}</div><div class="muted">手机号：${escapeHtml(user.phone_number || "未提供")} · 最近登录：${escapeHtml(user.last_login_at || "-")}</div></div><button type="button" class="small-button" data-merchant-user="${index}">选择</button></div>`).join("");
+      } catch (error) { if (loadId === merchantUserLoadId) hint.textContent=error.message || "查找失败，请重试"; }
+    }
+    document.getElementById("merchantUserSearch").addEventListener("click",searchMerchantUsers);
+    document.getElementById("merchantUserQuery").addEventListener("keydown",event => { if (event.key === "Enter") { event.preventDefault(); searchMerchantUsers(); } });
+    document.getElementById("merchantUserQuery").addEventListener("input",() => { merchantUserLoadId++; document.getElementById("merchantUserResults").innerHTML=""; });
+    document.getElementById("merchantWechat").addEventListener("input",() => {
+      merchantSelectedUserId=null;
+      document.getElementById("merchantUserHint").textContent="微信 ID 已手动修改；可重新查找用户进行绑定。";
+    });
+    document.getElementById("merchantUserResults").addEventListener("click",event => {
+      const button=event.target.closest('[data-merchant-user]');
+      if (!button) return;
+      const user=merchantUserItems[Number(button.dataset.merchantUser)];
+      if (!user) return;
+      merchantSelectedUserId=user.id;
+      document.getElementById("merchantWechat").value=user.openid;
+      if (user.phone_number) document.getElementById("merchantPhone").value=user.phone_number;
+      document.getElementById("merchantUserHint").textContent=`已选择：${user.nickname || "未设置昵称"}，OpenID：${user.openid}。保存后按此 OpenID 绑定商家身份。`;
+      document.getElementById("merchantUserResults").innerHTML="";
+    });
+    document.getElementById("merchantTab").addEventListener("click", () => switchTab("merchant"));
+    document.getElementById("merchantJump").addEventListener("change", merchantLinkHint);
+    document.getElementById("merchantCancel").addEventListener("click", () => { resetMerchantForm(); document.getElementById("merchantFormMessage").textContent = ""; });
+    document.getElementById("merchantRefresh").addEventListener("click", loadMerchantCertifications);
+    document.getElementById("merchantSearch").addEventListener("click", () => { merchantPage=1; loadMerchantCertifications(); });
+    document.getElementById("merchantStatus").addEventListener("change", () => { merchantPage=1; loadMerchantCertifications(); });
+    document.getElementById("merchantQuery").addEventListener("keydown", event => { if (event.key === "Enter") { merchantPage=1; loadMerchantCertifications(); } });
+    document.getElementById("merchantPrev").addEventListener("click", () => { if (merchantPage > 1) { merchantPage--; loadMerchantCertifications(); } });
+    document.getElementById("merchantNext").addEventListener("click", () => { merchantPage++; loadMerchantCertifications(); });
+    document.getElementById("merchantForm").addEventListener("submit", async event => {
+      event.preventDefault();
+      const button = document.getElementById("merchantSave"), message = document.getElementById("merchantFormMessage");
+      const payload = Object.fromEntries(Object.entries(merchantFields).map(([key,id]) => [key,document.getElementById(id).value.trim()]));
+      if (merchantSelectedUserId) payload.selected_user_id = merchantSelectedUserId;
+      const editing = merchantEditingId;
+      button.disabled = true; message.textContent = "正在保存…";
+      try {
+        await api(`/api/admin/merchant-certifications${editing ? `/${editing}` : ""}`, {method:editing ? "PUT" : "POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});
+        resetMerchantForm(); message.textContent = editing ? "修改已保存。" : "商家认证已新增。";
+        merchantPage=1; await loadMerchantCertifications();
+      } catch (error) { message.textContent = error.message || "保存失败，请重试"; }
+      finally { button.disabled=false; }
+    });
+    document.getElementById("merchantRows").addEventListener("click", async event => {
+      const button = event.target.closest("button");
+      if (!button) return;
+      const id=Number(button.dataset.merchantEdit || button.dataset.merchantStatus), item=merchantItems.find(entry => entry.id === id);
+      if (!item) return;
+      if (button.dataset.merchantEdit) {
+        merchantEditingId=id;
+        clearMerchantUserSelection();
+        Object.entries(merchantFields).forEach(([key,elementId]) => { document.getElementById(elementId).value=item[key] || ""; });
+        document.getElementById("merchantFormTitle").textContent=`编辑商家认证 #${id}`;
+        document.getElementById("merchantSave").textContent="保存修改";
+        document.getElementById("merchantCancel").hidden=false;
+        document.getElementById("merchantFormMessage").textContent="";
+        merchantLinkHint(); document.getElementById("merchantForm").scrollIntoView({behavior:"smooth",block:"center"});
+        document.getElementById("merchantWechat").focus(); return;
+      }
+      const status=item.status === "active" ? "disabled" : "active";
+      if (!window.confirm(`确认${status === "disabled" ? "停用" : "恢复"}该商家的认证？`)) return;
+      button.disabled=true;
+      try {
+        await api(`/api/admin/merchant-certifications/${id}/status`, {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({status})});
+        await loadMerchantCertifications();
+      } catch (error) { showToast(error.message || "操作失败", "error"); }
+      finally { button.disabled=false; }
+    });
+
+    if (window.location.hash === "#merchant") switchTab("merchant");
+    else loadItems();
   </script>
 </body>
 </html>

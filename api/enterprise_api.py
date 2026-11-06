@@ -276,3 +276,67 @@ def list_corporate():
 @admin_required
 def list_companies():
     return jsonify({"ok": True, "companies": svc.list_companies()}), 200
+
+
+# 商家认证与企业订阅独立管理，沿用工作台管理员权限。
+def _merchant_actor():
+    user = session.get('workbench_user') or {}
+    return str(user.get('username') or user.get('name') or user.get('id') or 'admin-token')
+
+
+def _merchant_result(operation):
+    try:
+        return jsonify(operation()), 200
+    except KeyError:
+        return jsonify({'ok': False, 'message': '商家认证记录不存在'}), 404
+    except ValueError as exc:
+        return jsonify({'ok': False, 'message': str(exc)}), 400
+    except Exception:
+        from flask import current_app
+        current_app.logger.exception('merchant_certification_operation_failed')
+        return jsonify({'ok': False, 'message': '保存或读取失败，请稍后重试'}), 500
+
+
+@enterprise_api.get('/admin/merchant-certifications')
+@admin_required
+def list_merchant_certifications():
+    from services import merchant_certification_service as merchants
+    return _merchant_result(lambda: merchants.list_certifications(
+        query=request.args.get('q', ''), status=request.args.get('status', ''),
+        page=request.args.get('page', '1')))
+
+
+@enterprise_api.post('/admin/merchant-certifications')
+@admin_required
+def create_merchant_certification():
+    from services import merchant_certification_service as merchants
+    return _merchant_result(lambda: merchants.save_certification(request.get_json(silent=True), actor=_merchant_actor()))
+
+
+@enterprise_api.put('/admin/merchant-certifications/<int:record_id>')
+@admin_required
+def update_merchant_certification(record_id):
+    from services import merchant_certification_service as merchants
+    return _merchant_result(lambda: merchants.save_certification(request.get_json(silent=True), actor=_merchant_actor(), record_id=record_id))
+
+
+@enterprise_api.post('/admin/merchant-certifications/<int:record_id>/status')
+@admin_required
+def change_merchant_certification_status(record_id):
+    from services import merchant_certification_service as merchants
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return jsonify({'ok': False, 'message': '提交内容必须是对象'}), 400
+    return _merchant_result(lambda: merchants.set_status(record_id, payload.get('status'), actor=_merchant_actor()))
+
+
+@enterprise_api.get('/admin/merchant-certifications/users')
+@admin_required
+def search_merchant_wechat_users():
+    from services import merchant_certification_service as merchants
+    return _merchant_result(lambda: merchants.search_wechat_users(request.args.get('q', '')))
+
+
+# Parent blueprint owns /api, so the publishing package needs no separate server.
+from api.merchant_publish_api import merchant_publish_api
+enterprise_api.register_blueprint(merchant_publish_api)
