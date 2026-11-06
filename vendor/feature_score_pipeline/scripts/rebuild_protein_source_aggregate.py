@@ -34,7 +34,7 @@ INGREDIENT_GROUP_MARKERS = (
 # Premix category headers that group sub-ingredients (exact match only).
 # e.g. "维生素(维生素E补充剂、硝酸硫胺、...)" should expand sub-items,
 # but "维生素E补充剂(来源说明)" should NOT be treated as a group header.
-PREMIX_GROUP_HEADERS = frozenset(("维生素", "矿物质"))
+PREMIX_GROUP_HEADERS = frozenset(("维生素", "矿物质", "冻干生骨肉"))
 TRADITIONAL_TO_SIMPLIFIED = OpenCC("t2s")
 BRACKET_OPENERS = frozenset("(（[［【{｛〔〈《「『")
 BRACKET_CLOSERS = frozenset(")）]］】}｝〕〉》」』")
@@ -233,18 +233,35 @@ def _split_top_level_ingredient_tokens(value: Any) -> list[str]:
     return tokens
 
 
+def _strip_ingredient_annotations(value: str) -> str:
+    """Remove full annotation spans, including nested Chinese/ASCII brackets."""
+    result: list[str] = []
+    depth = 0
+    for char in value:
+        if char in "(（[【":
+            depth += 1
+        elif char in ")）]】":
+            depth = max(0, depth - 1)
+        elif depth == 0:
+            result.append(char)
+    return "".join(result)
+
+
 def _expand_grouped_ingredient_token(token: str) -> list[str]:
-    match = re.match(r"^\s*(?P<header>[^()（）]+?)(?:\d+(?:\.\d+)?\s*[%％])?\s*[（(](?P<inner>.*)[）)]\s*$", token)
+    match = re.match(r"^\s*(?P<header>[^()（）]+?)(?:\d+(?:\.\d+)?\s*[%％])?\s*[（(](?P<inner>.*)[）)]\s*(?:\d+(?:\.\d+)?\s*[%％])?\s*$", token)
     if match and _is_ingredient_group_header(match.group("header")):
         return [
             item
             for part in _split_top_level_ingredient_tokens(match.group("inner"))
             for item in _expand_grouped_ingredient_token(part)
         ]
+    if match and re.sub(r"\d+(?:\.\d+)?\s*[%％]", "", match.group("header")).strip() in {"鱼", "虾"}:
+        return [item for part in _split_top_level_ingredient_tokens(match.group("inner"))
+                for item in _expand_grouped_ingredient_token(part)]
     if _is_ingredient_group_header(token) and re.search(r"\d+(?:\.\d+)?\s*[%％]", str(token or "")):
         return []
     cleaned = _clean_ingredient_token(token)
-    cleaned = re.sub(r"\([^)]*\)|（[^）]*）", "", cleaned).strip(" \t\r\n。.()（）[]【】")
+    cleaned = _strip_ingredient_annotations(cleaned).strip(" \t\r\n。.()（）[]【】")
     return [cleaned] if cleaned else []
 
 

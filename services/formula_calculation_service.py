@@ -566,11 +566,12 @@ def submission_reply(submission, current_formula_id=None):
     if provisional:
         lines.append('基于当前上传资料计算，核对后可能更新；暂不据此认定商品身份。')
     current = load_product_portraits([current_formula_id]).get(int(current_formula_id)) if current_formula_id else None
-    comparison = compare_portraits(current, target)
+    comparison = compare_portraits(current, target) if current_formula_id else None
     if current_formula_id and comparison['status'] == 'unavailable':
         if queue_formula_refresh(current_formula_id):
             comparison['note'] = '当前口粮的同版本画像正在更新，完成后再次分析即可比较；本次先展示上传粮的结果。'
-    lines.append(portrait_comparison_text(comparison) if current_formula_id else '尚未记录当前口粮，补充后可比较共同特点与差异。')
+    if current_formula_id:
+        lines.append(portrait_comparison_text(comparison))
     return {'response_type': 'result_card', 'reply': '\n\n'.join(lines),
             'result': {'intent': 'food_analysis', 'status': 'ready', 'result_id': bundle['result_id'],
                        'result_stage': bundle['result_stage'], 'portrait_comparison': comparison,

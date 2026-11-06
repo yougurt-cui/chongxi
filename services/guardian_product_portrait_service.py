@@ -110,7 +110,16 @@ def _published_or_legacy(formula_ids, field, legacy):
     ids = sorted({int(i) for i in formula_ids if i})
     versions = published(ids)
     result = legacy([i for i in ids if i not in versions])
-    result.update({i: value[field] for i, value in versions.items() if value.get(field)})
+    for formula_id, value in versions.items():
+        if not value.get(field):
+            continue
+        item = value[field]
+        if field == 'portrait':
+            # Keep publication identity with its scores through every analysis entry.
+            item = {**item, 'result_stage': value.get('result_stage'),
+                    'result_id': value.get('result_id'),
+                    'quality_flags': list(value.get('quality_flags') or [])}
+        result[formula_id] = item
     return result
 
 

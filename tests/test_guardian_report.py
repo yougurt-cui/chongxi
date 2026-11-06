@@ -82,6 +82,35 @@ class ReportTest(unittest.TestCase):
         self.assertNotIn('market_version', product['source'])
         self.assertIn('初算', product['note'])
 
+    def test_current_food_preserves_provisional_publication(self):
+        p = portrait()
+        p.update(result_stage='provisional', result_id='27', quality_flags=['formula_unconfirmed'])
+        context = {'food_analysis_scope': 'current',
+                   'current_food': {'formula_id': 1, 'brand': '测试牌', 'product_name': '鸡肉乳鸽'},
+                   'food_analysis': {'product': {'formula_id': 1}, 'product_portrait': p}}
+        with patch.object(flow, 'load_health_mappings', return_value=health_fixtures.knowledge()):
+            reply = flow.build_analysis_reply('u1', {'pet_id': None},
+                {'conversation_id': 'c1', 'slots': {}}, context)
+        product = reply['result']['guardian_report']['feeding']['products'][0]
+        self.assertEqual(product['status'], 'provisional')
+        self.assertEqual(product['result_id'], '27')
+        self.assertEqual(product['quality_flags'], ['formula_unconfirmed'])
+        self.assertEqual(product['source']['table'], 'calculation_result_snapshot')
+        self.assertTrue(product['dimensions'])
+        self.assertIn('初算结果', reply['reply'])
+
+    def test_portrait_loader_preserves_publication_metadata_without_mutating_snapshot(self):
+        from services import guardian_product_portrait_service as loader
+        p = portrait()
+        with patch('services.formula_calculation_service.published', return_value={
+                1: {'portrait': p, 'result_stage': 'provisional', 'result_id': '27',
+                    'quality_flags': ['formula_unconfirmed']}}), \
+             patch.object(loader, '_load_legacy_product_portraits', return_value={}):
+            result = loader.load_product_portraits([1])[1]
+        self.assertEqual(result['result_stage'], 'provisional')
+        self.assertEqual(result['result_id'], '27')
+        self.assertNotIn('result_stage', p)
+
     def test_model_rejects_unknown_evidence_and_times_out_to_fallback(self):
         client = MagicMock()
         client.chat.completions.create.return_value.choices[0].message.content = json.dumps({
@@ -158,7 +187,7 @@ class EntryPointTest(health_fixtures.HealthChatTest):
         self.assertEqual(response['result']['guardian_report']['scene'], 'ingredient_analysis')
         self.assertEqual(self.context['current_food']['formula_id'], 1)
 
-    def test_versioned_upload_keeps_initial_result_and_current_comparison(self):
+    def test_versioned_upload_keeps_initial_result_without_implicit_current_comparison(self):
         from services import guardian_product_portrait_service as portraits
         from services import formula_calculation_service as calculation
         self.context['food_submission'] = {'id': 'upload1', 'formula_id': 3, 'recognition_status': 'processing',
@@ -169,10 +198,12 @@ class EntryPointTest(health_fixtures.HealthChatTest):
             response = self.turn(attachments=[{'type': 'food_submission', 'submission_id': 'upload1'}])
         data = response['result']['guardian_report']
         self.assertEqual(data['scene'], 'ingredient_analysis')
-        self.assertEqual(len(data['feeding']['products']), 2)
-        self.assertEqual(data['feeding']['products'][0]['roles'], ['current'])
-        self.assertEqual(data['feeding']['products'][1]['result_id'], 8)
-        self.assertEqual(data['feeding']['products'][1]['status'], 'provisional')
+        self.assertEqual(len(data['feeding']['products']), 1)
+        self.assertEqual(data['feeding']['products'][0]['roles'], ['uploaded'])
+        self.assertEqual(data['feeding']['products'][0]['result_id'], 8)
+        self.assertEqual(data['feeding']['products'][0]['status'], 'provisional')
+        self.assertEqual(self.context['current_food']['formula_id'], 1)
+        self.assertIsNone(response['result']['portrait_comparison'])
         self.assertIn('初算', data['summary']['text'])
         self.assertEqual(response['result']['result_stage'], 'provisional')
 

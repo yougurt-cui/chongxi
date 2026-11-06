@@ -191,7 +191,10 @@ def build_analysis_reply(user_id, conversation, state, context):
                     subject['roles'].append(role)
                 return
         subjects.append({'label': label, 'formula_id': formula_id, 'portrait': portrait,
-                         'key': key, 'roles': [role]})
+                         'key': key, 'roles': [role],
+                         'result_stage': (portrait or {}).get('result_stage'),
+                         'result_id': (portrait or {}).get('result_id'),
+                         'quality_flags': list((portrait or {}).get('quality_flags') or [])})
     if scope in {'current', 'current_vs_history', 'catalog', 'saved_diet'}:
         current = context.get('current_food') or {}
         is_current = scope.startswith('current') or scope == 'saved_diet'
@@ -242,6 +245,8 @@ def build_analysis_reply(user_id, conversation, state, context):
         lines.append(f'**{item["left"]} 与 {item["right"]} · 对比**\n' + item['text'])
     ask_recommendation = confirm_slot == RECOMMEND_SLOT
     prompt = '是否需要根据上述内容推荐新粮？' if ask_recommendation else '你家猫已经在吃这款粮了吗？'
+    if any(item.get('result_stage') == 'provisional' for item in subjects):
+        lines.insert(0, '初算结果（待核对）：基于当前配方资料计算，核对后可能更新。')
     lines.append(prompt)
     reply = {'response_type': 'result_card', 'reply': '\n\n'.join(lines),
             'interaction': {'slot': confirm_slot, 'analysis_id': analysis_id, 'options': ([

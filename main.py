@@ -2121,6 +2121,14 @@ def create_app() -> Flask:
     def official_site_html():
         return send_from_directory(WEB_DIR, "official-site.html")
 
+    @flask_app.get("/halloween-report.html")
+    def halloween_report_html():
+        if response := _workbench_login_required():
+            return response
+        response = send_from_directory(WEB_DIR, "halloween-report.html")
+        response.headers["Cache-Control"] = "private, no-store"
+        return response
+
     @flask_app.get("/halloween.html")
     def halloween_html():
         return send_from_directory(WEB_DIR, "halloween.html")

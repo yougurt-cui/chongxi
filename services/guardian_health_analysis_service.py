@@ -34,7 +34,7 @@ FOCUS_GROUPS = {
 TAGS = {'attention': '重点观察', 'advantage': '配方优势参考', 'routine': '常规观察'}
 PRIORITY = {'attention': 0, 'advantage': 1, 'routine': 2}
 NOTE = '画像分数描述配方结构，不代表营养含量、患病概率或实际健康效果；请结合实际吃粮表现观察。'
-DISPLAY_NOTE = '这些是需要关注的表现，不代表这款粮会引起疾病。'
+DISPLAY_NOTE = ''
 DISPLAY_TITLES = {
     ('肌肉与体态维持', 'advantage'): '肌肉维持',
     ('便便状态', 'advantage'): '排便健康',
@@ -224,7 +224,8 @@ def report_text(label, report):
     if attentions:
         lines.append('⚠️ **2. 哪里需要留心？**')
         lines.extend(f'**{item["title"]}：** {item["summary"]}' for item in attentions)
-        lines.append(presentation.get('note') or DISPLAY_NOTE)
+        if presentation.get('note'):
+            lines.append(presentation['note'])
     if report['missing_dimensions']:
         lines.append('资料不足：' + '、'.join(report['missing_dimensions']))
     if report['unmapped_dimensions']:

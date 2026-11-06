@@ -2525,7 +2525,7 @@ INGREDIENT_GROUP_MARKERS = (
 # Premix category headers that group sub-ingredients (exact match only).
 # e.g. "维生素(维生素E补充剂、硝酸硫胺、...)" should expand sub-items,
 # but "维生素E补充剂(来源说明)" should NOT be treated as a group header.
-PREMIX_GROUP_HEADERS = frozenset(("维生素", "矿物质"))
+PREMIX_GROUP_HEADERS = frozenset(("维生素", "矿物质", "冻干生骨肉"))
 
 
 def _split_top_level_ingredient_tokens(value: Any) -> list[str]:
@@ -2564,7 +2564,7 @@ def _is_ingredient_group_header(value: str) -> bool:
 
 def _clean_ingredient_name_token(value: str) -> str:
     item = re.sub(r"\d+(?:\.\d+)?\s*[%％]", "", value)
-    item = re.sub(r"\([^)]*\)|（[^）]*）", "", item)
+    item = _strip_ingredient_annotations(item)
     item = _clean(item).strip(" :：()（）[]【】")
     for prefix in INGREDIENT_OCR_PREFIX_NOISE:
         if item.startswith(prefix):
@@ -2573,14 +2573,31 @@ def _clean_ingredient_name_token(value: str) -> str:
     return item
 
 
+def _strip_ingredient_annotations(value: str) -> str:
+    """Remove full annotation spans, including nested Chinese/ASCII brackets."""
+    result: list[str] = []
+    depth = 0
+    for char in value:
+        if char in "(（[【":
+            depth += 1
+        elif char in ")）]】":
+            depth = max(0, depth - 1)
+        elif depth == 0:
+            result.append(char)
+    return "".join(result)
+
+
 def _expand_grouped_ingredient_token(token: str) -> list[str]:
-    match = re.match(r"^\s*(?P<header>[^()（）]+?)(?:\d+(?:\.\d+)?\s*[%％])?\s*[（(](?P<inner>.*)[）)]\s*$", token)
+    match = re.match(r"^\s*(?P<header>[^()（）]+?)(?:\d+(?:\.\d+)?\s*[%％])?\s*[（(](?P<inner>.*)[）)]\s*(?:\d+(?:\.\d+)?\s*[%％])?\s*$", token)
     if match and _is_ingredient_group_header(match.group("header")):
         return [
             item
             for part in _split_top_level_ingredient_tokens(match.group("inner"))
             for item in _expand_grouped_ingredient_token(part)
         ]
+    if match and re.sub(r"\d+(?:\.\d+)?\s*[%％]", "", match.group("header")).strip() in {"鱼", "虾"}:
+        return [item for part in _split_top_level_ingredient_tokens(match.group("inner"))
+                for item in _expand_grouped_ingredient_token(part)]
     if _is_ingredient_group_header(token) and re.search(r"\d+(?:\.\d+)?\s*[%％]", token):
         return []
     item = _clean_ingredient_name_token(token)
@@ -3038,7 +3055,6 @@ def standardize_formula(payload: dict[str, Any]) -> dict[str, Any]:
             nutrition = _load_nutrition_signature(cursor, source_id)
             confidence: float | None = None
             conflict_candidates: list[dict[str, Any]] = []
-            created_provisional = False
             if not ingredients:
                 status = "pending"
                 match = None
@@ -3155,7 +3171,7 @@ def standardize_formula(payload: dict[str, Any]) -> dict[str, Any]:
                           ingredient_fingerprint, nutrition_json, is_current, status,
                           confirmation_status
                         ) VALUES(%s, %s, %s, %s, %s, %s, %s, 1, 'active',
-                          'provisional')
+                          'confirmed')
                         """,
                         (
                             mapping["product_id"],
@@ -3174,8 +3190,9 @@ def standardize_formula(payload: dict[str, Any]) -> dict[str, Any]:
                     )
                     match = cursor.fetchone()
                     confidence = 1.0
-                    created_provisional = True
-                status = "provisional" if created_provisional else "matched" if match else "conflict"
+                # Reusing an older draft does not constitute a new confirmation.
+                status = ("provisional" if match and match.get("confirmation_status") == "provisional"
+                          else "matched" if match else "conflict")
             overall = "matched" if status == "matched" else status
             cursor.execute(
                 f"""
@@ -3428,7 +3445,9 @@ def list_formula_conflict_items(*, limit: int = 200) -> dict[str, Any]:
                 FROM `{MAPPING_TABLE}` m
                 LEFT JOIN `{BRAND_TABLE}` b ON b.brand_id = m.brand_id
                 LEFT JOIN `{PRODUCT_TABLE}` p ON p.product_id = m.product_id
-                WHERE m.formula_status IN ('conflict', 'provisional')
+                LEFT JOIN `{FORMULA_TABLE}` f ON f.formula_id = m.formula_id
+                WHERE (m.formula_status IN ('conflict', 'provisional')
+                       OR (f.status = 'active' AND f.confirmation_status <> 'confirmed'))
                 ORDER BY m.updated_at DESC
                 LIMIT %s
                 """,

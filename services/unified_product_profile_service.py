@@ -165,7 +165,7 @@ def build_assessment(portrait: dict[str, Any], market: dict[str, Any]) -> tuple[
     for label in market.get("weaknesses") or []:
         if label not in covered:
             cautions.append({"dimension": None, "title": label,
-                             "summary": f"{label}在当前市场中不突出，不代表不达标或一定不适合",
+                             "summary": f"{label}在当前市场中不突出",
                              "basis": {"market_label": label, "market_percentile": rankings.get(label)}})
     return strengths, cautions, notes
 

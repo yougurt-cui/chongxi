@@ -53,8 +53,34 @@ def resolve_target(name, options):
         return []
     if str(name).startswith("formula:"):
         return [row for row in options if row.get("catalog_key") == name]
+    # Recognize a known brand followed by a generic category, not a SKU name.
+    # Exact phrases keep other brands and specific flavours out of this fallback.
+    def brand_of(row):
+        return compact(row.get('brand') or row.get('standard_brand_name'))
+    requested_brands = {brand_of(row) for row in options if brand_of(row) and
+                        any(value == brand_of(row) + suffix for suffix in
+                            ('', '的产品', '产品', '猫粮', '的猫粮', '主粮', '的主粮',
+                             '粮', '的粮', '系列产品', '的系列产品'))}
+    if requested_brands:
+        return [row for row in options if brand_of(row) in requested_brands]
     # Keep every matching version; exact base name must not hide a 2.0 variant.
-    return [row for row in options if any(value in compact(row.get(k)) for k in ("label", "product_name", "standard_product_name"))]
+    def matches(row):
+        names = [compact(row.get(k)) for k in ('label', 'product_name', 'standard_product_name')]
+        if any(value in name for name in names):
+            return True
+        # A Chinese shorthand may omit a leading Latin series mark (IGS小金条).
+        # Keep digits, flavour suffixes and all matching versions; never erase
+        # an explicit Latin series supplied by the user.
+        if re.search(r'[a-z]', value) or len(re.findall(r'[\u4e00-\u9fff]', value)) < 2:
+            return False
+        brand = compact(row.get('brand') or row.get('standard_brand_name'))
+        for key in ('product_name', 'standard_product_name'):
+            name = compact(row.get(key))
+            alias = re.sub(r'^[a-z]+(?=[\u4e00-\u9fff])', '', name)
+            if alias != name and (value in alias or brand and value in brand + alias):
+                return True
+        return False
+    return [row for row in options if matches(row)]
 
 
 def card(text, flow, **result):
