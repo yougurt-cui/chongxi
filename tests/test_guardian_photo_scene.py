@@ -97,3 +97,18 @@ def test_needs_require_user_evidence_or_verified_profile():
     history = [{'role': 'assistant', 'text': '是否有软便？'}, {'role': 'user', 'text': '我想让它瘦下来'}]
     assert photo.grounded_needs(proposed, '比较这两款', history, profile, True) == ['减重', '成猫', '品种-布偶猫']
     assert photo.grounded_needs(proposed, '比较这两款', history, profile, False) == ['成猫', '品种-布偶猫']
+
+
+def test_breed_recipient_and_normalized_goal_survive_partial_model_output():
+    message = '给布偶幼猫推荐主粮，希望改善软便、增重和美毛'
+    items = [{'label': label, 'quote': quote} for label, quote in (
+        ('幼猫', '幼猫'), ('改善软便', '希望改善软便'), ('增重', '增重'), ('美毛', '美毛'))]
+    needs = photo.grounded_needs(items, message, [], {'animal_type': 'cat'}, False)
+    assert set(needs) == {'品种-布偶猫', '幼猫', '软便', '增重', '美毛'}
+    assert photo.grounded_needs([], '我家英短需要换粮', [], {}, False) == ['品种-英国短毛猫']
+
+
+def test_negated_goal_is_not_supported_by_a_partial_quote():
+    items = [{'label': '改善软便', 'quote': '软便'}, {'label': '减重', 'quote': '减重'}]
+    assert photo.grounded_needs(items, '没有软便，也不需要减重', [], {}, False) == []
+    assert photo.grounded_needs([], '不是给布偶选粮，是给英短选粮', [], {}, False) == ['品种-英国短毛猫']
