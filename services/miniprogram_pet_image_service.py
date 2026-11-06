@@ -247,8 +247,13 @@ def recognize_pet(content: bytes) -> tuple[dict[str, Any], str]:
         "词表：" + _json_dumps(catalog()) + "。只返回合法 JSON，结构为："
         + _json_dumps(schema)
     )
+    data, model = vision_json(content, cfg, prompt, timeout=60.0)
+    return _normalize_recognition(data), model
+
+
+def vision_json(content, cfg, prompt, **options):
     image_url = "data:image/jpeg;base64," + base64.b64encode(content).decode("ascii")
-    client = OpenAI(api_key=cfg["api_key"], base_url=cfg["base_url"], timeout=60.0)
+    client = OpenAI(api_key=cfg["api_key"], base_url=cfg["base_url"], **options)
     response = client.chat.completions.create(
         model=cfg["model"],
         messages=[{"role": "user", "content": [
@@ -258,10 +263,34 @@ def recognize_pet(content: bytes) -> tuple[dict[str, Any], str]:
         temperature=0,
     )
     raw = response.choices[0].message.content or ""
-    return _normalize_recognition(_parse_json_object(raw)), cfg["model"]
+    return _parse_json_object(raw), cfg["model"]
 
 
 def upload_and_recognize_pet(image_file: FileStorage, *, user_id: Any) -> dict[str, Any]:
+    return upload_recognition(image_file, user_id, recognize_pet, 'recognition', PROMPT_VERSION)
+
+
+def chat_photo_facts(user_id, conversation_id, attachments):
+    if len(attachments) > 3:
+        raise ValueError("每次最多发送三张照片")
+    photos = []
+    with _connect(autocommit=True) as conn, conn.cursor() as cursor:
+        for item in attachments:
+            image_id = item.get("image_id")
+            if item.get("type") != "chat_image" or not re.fullmatch("[0-9a-f]{32}", str(image_id)):
+                raise ValueError("图片附件无效")
+            cursor.execute(f"""SELECT recognition_result_json FROM {TABLE_NAME}
+                WHERE id=%s AND user_id=%s AND image_usage='guardian_chat' AND status='active'""",
+                (image_id, user_id))
+            row = cursor.fetchone()
+            result = _json_loads((row or {}).get("recognition_result_json"), {})
+            if result.get("conversation_id") != conversation_id:
+                raise LookupError("会话图片不存在")
+            photos.append(result.get("facts") or {})
+    return photos
+
+
+def upload_recognition(image_file, user_id, recognize, usage, version, *, conversation_id=None):
     cleaned_user_id = _clean(user_id, 128)
     if not cleaned_user_id:
         raise ValueError("user_id 不能为空")
@@ -276,22 +305,24 @@ def upload_and_recognize_pet(image_file: FileStorage, *, user_id: Any) -> dict[s
                 f"""INSERT INTO {TABLE_NAME}
                 (id,user_id,image_usage,original_filename,storage_path,content_type,file_size,sha256,width,height,
                  recognition_status,status,created_at,updated_at)
-                VALUES (%s,%s,'recognition',%s,%s,'image/jpeg',%s,%s,%s,%s,'running','active',%s,%s)""",
-                (image_id, cleaned_user_id, _clean(image_file.filename, 512), storage_path, len(content), digest, width, height, now, now),
+                VALUES (%s,%s,%s,%s,%s,'image/jpeg',%s,%s,%s,%s,'running','active',%s,%s)""",
+                (image_id, cleaned_user_id, usage, _clean(image_file.filename, 512), storage_path, len(content), digest, width, height, now, now),
             )
         conn.commit()
     try:
-        suggestions, model = recognize_pet(content)
-        recognition_status, error = "success", None
+        suggestions, model = recognize(content)
+        recognition_status = "success" if suggestions else "failed"
+        error = None
     except Exception as exc:
         suggestions, model = {}, os.getenv("QWEN_VISION_MODEL") or "qwen3-vl-plus"
         recognition_status, error = "failed", _clean(exc, 1000)
+    stored = {"conversation_id": conversation_id, "facts": suggestions} if conversation_id else suggestions
     with _connect() as conn:
         with conn.cursor() as cursor:
             cursor.execute(
                 f"""UPDATE {TABLE_NAME} SET recognition_status=%s,recognition_result_json=%s,
                 recognition_model=%s,prompt_version=%s,recognition_error=%s,updated_at=%s WHERE id=%s""",
-                (recognition_status, _json_dumps(suggestions), model, PROMPT_VERSION, error, _now(), image_id),
+                (recognition_status, _json_dumps(stored), model, version, error, _now(), image_id),
             )
         conn.commit()
     return {

@@ -37,6 +37,8 @@ from services import guardian_daily_status_service as daily_status
 from services.miniprogram_daily_record_service import normalize_client_records
 from services.guardian_recommendation_presentation import alternatives_requested
 from services import guardian_knowledge_service as knowledge_qa
+from services import guardian_photo_scene as photo_scene
+from services.miniprogram_pet_image_service import chat_photo_facts
 from services import guardian_subject_service as subjects
 from services import guardian_ingredient_guide as ingredient_guide
 from services.miniprogram_cat_profile_service import TABLE_NAME as PROFILE_TABLE
@@ -1511,6 +1513,90 @@ GUARDIAN_STRATEGIES = (
 )
 
 
+def _scene_history(user_id, conversation_id):
+    # Fetch the latest turns, including from long conversations. UUIDs are not chronological.
+    with _connect(autocommit=True) as conn, conn.cursor() as cursor:
+        cursor.execute(f"""SELECT role,content FROM {MESSAGE_TABLE}
+            WHERE user_id=%s AND conversation_id=%s AND status='active'
+            ORDER BY created_at DESC,
+            CAST(IF(JSON_VALID(result_json), JSON_EXTRACT(result_json,'$.turn_no'), 0) AS UNSIGNED) DESC,
+            CAST(IF(JSON_VALID(result_json), JSON_EXTRACT(result_json,'$.sequence_no'), 0) AS UNSIGNED) DESC, id DESC LIMIT 8""",
+            (user_id, conversation_id))
+        return [{'role': r['role'], 'text': (r.get('content') or '')[:500]} for r in reversed(cursor.fetchall())]
+
+
+def _resolve_scene(user_id, conversation, state, message, photos, previous, subject, client_context, *, allow_text):
+    followup = (allow_text and previous.get('pet_id') == conversation.get('pet_id')
+                and previous.get('subject') == subject and previous.get('turn') == state['turn_count']
+                and bool(previous.get('photos')))
+    if not photos:
+        caps = client_context.get('capabilities') or {}
+        fresh_text = (allow_text and isinstance(caps, dict) and caps.get('scene_router_v1') is True
+                      and not state['current_step'] and state['primary_intent'] in (None, 'general_pet_qa')
+                      and not state['slots'].get(ingredient_guide.SLOT))
+        if (not (fresh_text or followup) or client_context.get('entry_point') or requested_flow(message) == 'reminder'
+                or daily_status.requested(message, state)):
+            return None, [], subject
+    if followup:
+        photos = previous['photos']
+    if subjects.urgent_message(message):
+        return {'task': 'health_consult', 'needs': [], 'related': True}, photos, subject
+    original_subject = subject
+    animals = {p.get('animal') for p in photos if p.get('animal') in ('dog', 'cat')}
+    if len(animals) == 1 and conversation.get('profile_species') not in animals:
+        subject = next(iter(animals))
+    profile = {} if subject or not conversation.get('pet_id') else get_cat_profile(user_id, conversation['pet_id'])
+    if photos and profile.get('food_formula_id'):
+        from services.guardian_food_analysis_service import load_nutrition
+        fid = int(profile['food_formula_id'])
+        try:
+            profile['verified_food_nutrition'] = load_nutrition([fid]).get(fid)
+        except pymysql.MySQLError:
+            pass  # The photo is still usable if catalog data is unavailable.
+    history = _scene_history(user_id, conversation['id'])
+    if previous.get('photos') and previous.get('subject') == subject and photos and not followup:
+        history.append({'role': 'previous_photos', 'observations': previous['photos']})
+    if photos and not any(photos) and not message:
+        scene = {'task': 'unclear', 'needs': [], 'related': True,
+                 'reply': '这张照片暂时看不清。可以再拍一张，或用文字告诉我你想了解什么？'}
+    else:
+        scene = photo_scene.decide(message, photos, history, profile, followup=followup)
+    if (followup and not scene['related']) or (not photos and scene.get('unavailable')):
+        return None, [], original_subject
+    return scene, photos, subject
+
+
+def _scene_reply(user_id, conversation, message, state, scene, photos, subject, message_id):
+    task = scene['task']
+    facts = '；'.join(' '.join(f.get(k, '') for k in ('subject', 'visible', 'label')).strip() for f in photos)
+    question = message or '请结合图片回答'
+    if facts:
+        question += '（照片可见信息，仅供参考：' + facts[:2400] + '）'
+    if subjects.urgent_message(message):
+        task = 'health_consult'
+        state['risk_level'] = 'high'
+        text = '这些症状需要尽快联系宠物医院。请告诉医生症状开始的时间和目前的精神、呼吸状态。'
+        kind = 'risk_alert'
+    elif task == 'pet_knowledge' or (task == 'product_recommend' and not scene.get('food')):
+        reply = knowledge_qa.handle_question(user_id, conversation, question, state,
+                                             external_subject=subject, message_id=message_id)
+        return reply
+    elif task == 'health_consult' and not subject and _should_route_soft_stool(message, state):
+        return _handle_soft_stool_message(user_id, conversation, question, state, message_id)
+    elif task == 'product_recommend' and scene.get('food'):
+        selection = {'primary_intent': 'food_switch', 'slots': {'target_requirement': '、'.join(scene['needs']) or message}}
+        if not subject:
+            return _handle_food_selection_message(user_id, conversation, question, state, message_id,
+                                                  intent_result=(selection, None))
+        text, kind = unavailable_recommendation()['message'], 'text'
+    else:
+        text, kind = scene['reply'], 'text'
+    intent = {'product_analysis': 'food_analysis', 'product_compare': 'food_analysis',
+              'health_consult': 'symptom_consult', 'product_recommend': 'food_switch'}.get(task, 'general_pet_qa')
+    state.update(primary_intent=intent, current_step=None, missing_slots=[], turn_count=state['turn_count'] + 1)
+    return {'reply': text, 'response_type': kind, 'result': {'intent': intent, 'turn_no': state['turn_count'], 'sequence_no': 1}}
+
+
 def handle_message(user_id: Any, conversation_id: Any, payload: dict[str, Any]) -> dict[str, Any]:
     user_id, conversation_id = _clean(user_id,128), _clean(conversation_id,32)
     conversation = _get_conversation(user_id, conversation_id)
@@ -1523,6 +1609,17 @@ def handle_message(user_id: Any, conversation_id: Any, payload: dict[str, Any]) 
         raise ValueError("message、interaction、attachments 至少提供一项")
     state = _load_state(conversation_id)
     slots = state['slots']
+    prior_photo = slots.pop(photo_scene.SLOT, None) or {}
+    if any(not isinstance(a, dict) for a in attachments):
+        raise ValueError("附件格式无效")
+    has_photo = any(a.get('type') == 'chat_image' for a in attachments)
+    if has_photo and interaction:
+        raise ValueError("请单独发送聊天图片")
+    photos = []
+    if has_photo:
+        photos = chat_photo_facts(user_id, conversation_id, attachments)
+        attachments = [{'type': 'chat_image', 'image_id': a['image_id']} for a in attachments]
+        recorded_message = message or f'发来{len(photos)}张照片'
     guide = slots.get(ingredient_guide.SLOT)
     supplied_name = (guide and guide.get('failure_node') == 'catalog_missing' and not interaction and not attachments
                      and re.fullmatch(r'(?:完整(?:产品)?名(?:称)?|产品名(?:称)?|品名|全名)(?:是|叫|为|[：:])\s*(.{1,80})', message))
@@ -1573,6 +1670,18 @@ def handle_message(user_id: Any, conversation_id: Any, payload: dict[str, Any]) 
         state = {**_default_state(conversation_id), 'turn_count': state['turn_count']}
     if external_subject:
         state['slots']['_external_subject'] = external_subject
+    scene, photos, photo_subject = _resolve_scene(user_id, conversation, state, message, photos, prior_photo,
+        external_subject, client_context, allow_text=not (attachments or interaction or ambiguous or subject_choice))
+    if scene and photos:
+        ambiguous = False
+        if has_photo or photo_subject != previous_subject:
+            state = {**_default_state(conversation_id), 'turn_count': state['turn_count']}
+        external_subject = photo_subject
+        if external_subject:
+            state['slots']['_external_subject'] = external_subject
+        guide = None
+    direct_scene = scene and (photos or scene['task'] in ('unclear', 'pet_identify', 'pet_knowledge', 'product_recommend')
+                              or subjects.urgent_message(message))
     diet_entry = ((client_context.get('entry_point') == 'diet_advice'
                    or bool(re.search(r'(?:饮食|喂养|喂食)(?:建议|分析)|日常(?:饮食|喂养)', message))
                    and not re.search(r'换粮|软便|呕吐|腹泻|便血', message))
@@ -1595,7 +1704,12 @@ def handle_message(user_id: Any, conversation_id: Any, payload: dict[str, Any]) 
                   interaction=recorded_interaction,attachments=attachments,
                   result={"turn_no": state["turn_count"] + 1, "sequence_no": 0})
     question_message_id = question_message_id or user_message['id']
-    if ambiguous:
+    if direct_scene:
+        reply = _scene_reply(user_id, conversation, message, state, scene, photos, external_subject, question_message_id)
+        if photos and not state.get('current_step') and not state['slots'].get(SOFT_STOOL_STATE_SLOT):
+            state['slots'][photo_scene.SLOT] = {'turn': state['turn_count'], 'pet_id': conversation.get('pet_id'),
+                                             'subject': external_subject, 'photos': photos}
+    elif ambiguous:
         other_species = 'cat' if kitten_conflict else external_subject
         state['slots']['_subject_scope_question'] = {'message': message, 'species': other_species,
                                                     'message_id': question_message_id, 'kitten_conflict': kitten_conflict}
@@ -1641,7 +1755,15 @@ def handle_message(user_id: Any, conversation_id: Any, payload: dict[str, Any]) 
     else:
         reply = _handle_diet_advice_entry(user_id, conversation, state, user_message['id'], client_context) if diet_entry else None
     if reply is None:
-        intent_result = _recognize_guardian_turn(message, state) if message and not interaction and not attachments else None
+        if scene and scene['task'] in ('product_analysis', 'product_compare'):
+            name = health_flow.named_request(message)
+            intent_result = ({'primary_intent': 'food_analysis', '_target_flow': 'general',
+                              'slots': {'food_name': name} if name else {}}, None)
+        elif scene and scene['task'] == 'health_consult' and not _should_route_soft_stool(message, state):
+            intent_result = ({'primary_intent': 'symptom_consult', '_target_flow': 'general',
+                              'slots': {'symptom': message}}, None)
+        else:
+            intent_result = _recognize_guardian_turn(message, state) if message and not interaction and not attachments else None
         routing_state = {**state, "_turn_decision": intent_result[0] if intent_result else ({'_target_flow': 'reminder'} if interaction and state.get('primary_intent') == 'reminder' else {})}
         strategy = select_strategy(message, routing_state, GUARDIAN_STRATEGIES)
         if strategy.name == "soft_stool" and not conversation.get("pet_id"):
@@ -1666,6 +1788,9 @@ def handle_message(user_id: Any, conversation_id: Any, payload: dict[str, Any]) 
             reply = strategy.handle(user_id, conversation, message, state, user_message["id"],
                                     interaction=interaction, attachments=attachments,
                                     client_context=client_context, intent_result=intent_result)
+    if scene:
+        for bubble in reply.get('messages') or [reply]:
+            bubble.setdefault('result', {})['scene'] = {'task': scene['task'], 'needs': scene['needs']}
     _save_state(state)
     with _connect() as conn:
         with conn.cursor() as cursor:

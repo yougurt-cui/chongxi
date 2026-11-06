@@ -423,6 +423,26 @@ def list_chat_conversations_endpoint():
         return jsonify({"ok": False, "error": str(exc)}), 500
 
 
+@miniprogram_api.post("/chat/conversations/<conversation_id>/images")
+def upload_chat_photo_endpoint(conversation_id: str):
+    from services.miniprogram_chat_service import _get_conversation
+    from services.miniprogram_pet_image_service import MAX_IMAGE_SIZE
+    from services.guardian_photo_scene import upload_chat_image
+
+    try:
+        user = _user_id_from_request(required=True)
+        _get_conversation(user, conversation_id)
+        if request.content_length and request.content_length > MAX_IMAGE_SIZE + 65536:
+            raise ValueError("图片大小不能超过 10MB")
+        return jsonify(upload_chat_image(request.files.get("image"), user, conversation_id)), 201
+    except PermissionError as exc:
+        return _auth_error_response(exc)
+    except LookupError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 404
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+
+
 @miniprogram_api.post("/chat/conversations/<conversation_id>/messages")
 def send_chat_message_endpoint(conversation_id: str):
     try:
