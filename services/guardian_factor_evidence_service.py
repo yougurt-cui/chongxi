@@ -17,7 +17,7 @@ differ between formulas:
                   so "close" is relative rather than an absolute band
 2. ``risk_tags``  reason tags emitted by the soft-stool / black-chin models,
                   split into structural causes and gut-function mechanisms
-3. ``community``  distilled comment evidence from ``kd_problem_guides``,
+3. ``community``  legacy distilled evidence, paused by requirement 49,
                   always labelled with its review status
 
 Evidence boundaries
@@ -254,18 +254,8 @@ def load_risk_tags(formula_ids):
 
 
 def load_community_evidence():
-    """All reviewable comment rows, indexed by problem text for in-memory matching."""
-    sql = '''SELECT id,topic,subtopic,problem,pairs_json,evidence_status
-        FROM kd_problem_guides
-        WHERE evidence_status IS NOT NULL'''
-    try:
-        with pymysql.connect(**get_mysql_config(), cursorclass=pymysql.cursors.DictCursor) as conn:
-            with conn.cursor() as cur:
-                cur.execute(sql)
-                return cur.fetchall()
-    except pymysql.MySQLError as error:
-        logger.warning('guardian_factor_community_unavailable error=%s', type(error).__name__)
-        return []
+    """Requirement 49 pauses legacy distilled knowledge, preserving profile facts."""
+    return []
 
 
 def _community_causes(pairs_json):

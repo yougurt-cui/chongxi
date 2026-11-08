@@ -561,6 +561,20 @@ def _handle_soft_stool_message(
             "reply": result["reply"],
             "result": result_meta,
         }]
+    if result.get('status') == 'answered' and state['risk_level'] != 'high':
+        # Keep the specialized question/assessment state and its turn number.
+        # Add grounded knowledge only after triage; never replace follow-up controls.
+        supplement = knowledge_qa.handle_question(
+            user_id, conversation, '软便咨询：' + message, deepcopy(state),
+            message_id=source_message_id, consultation='symptom_consult', allow_general=False)
+        meta = supplement['result']['knowledge_qa']
+        messages[-1]['result']['knowledge_qa'] = meta
+        result_meta['knowledge_qa'] = meta
+        if meta['generation_source'] == 'model_structured_answer':
+            messages.append({'response_type': 'text', 'reply': supplement['reply'],
+                             'result': {**supplement['result'], 'parent_pipeline': 'soft_stool',
+                                        'turn_no': state['turn_count'], 'sequence_no': len(messages) + 1,
+                                        'message_kind': 'knowledge_supplement'}})
     return {
         "response_type": messages[-1]["response_type"],
         "reply": result["reply"],
@@ -1583,6 +1597,9 @@ def _scene_reply(user_id, conversation, message, state, scene, photos, subject, 
         return reply
     elif task == 'health_consult' and not subject and _should_route_soft_stool(message, state):
         return _handle_soft_stool_message(user_id, conversation, question, state, message_id)
+    elif task == 'health_consult':
+        return knowledge_qa.handle_question(user_id, conversation, question, state,
+            external_subject=subject, message_id=message_id, consultation='symptom_consult', allow_general=False)
     elif task == 'product_recommend' and scene.get('food'):
         selection = {'primary_intent': 'food_switch', 'slots': {'target_requirement': '、'.join(scene['needs']) or message}}
         if not subject:
@@ -1773,9 +1790,9 @@ def handle_message(user_id: Any, conversation_id: Any, payload: dict[str, Any]) 
                              and state['slots'].get(health_flow.STATE_KEY)
                              and (re.search(r'这款粮|这个配方|蛋白|脂肪|纤维|益生元|碳水|肌肉|关注点|画像', message)
                                   or _uploaded_product_followup(message, state)))
-        if (strategy is GENERAL_STRATEGY and decision.get('primary_intent') == 'general_pet_qa'
+        if (strategy is GENERAL_STRATEGY and decision.get('primary_intent') in ('general_pet_qa', 'symptom_consult')
                 and not decision.get('_daily_status') and decision.get('dialogue_action') != 'pause'
-                and message and not interaction and not attachments and not analysis_followup and conversation.get('pet_id')):
+                and message and not interaction and not attachments and not analysis_followup):
             snapshot = state['slots'].get(health_flow.STATE_KEY) or {}
             if snapshot.get('stage') == 'pending':
                 snapshot['stage'] = 'superseded'
@@ -1783,7 +1800,10 @@ def handle_message(user_id: Any, conversation_id: Any, payload: dict[str, Any]) 
             if diet_entry:
                 reply = knowledge_qa.handle_question(user_id, conversation, message, state, report_scene='diet_advice', message_id=question_message_id)
             else:
-                reply = knowledge_qa.handle_question(user_id, conversation, message, state, message_id=question_message_id)
+                consultation = decision.get('primary_intent') or 'general_pet_qa'
+                reply = knowledge_qa.handle_question(user_id, conversation, message, state,
+                    message_id=question_message_id, consultation=consultation,
+                    allow_general=consultation != 'symptom_consult')
         else:
             reply = strategy.handle(user_id, conversation, message, state, user_message["id"],
                                     interaction=interaction, attachments=attachments,

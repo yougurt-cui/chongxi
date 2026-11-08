@@ -334,7 +334,9 @@ class RoutingTest(unittest.TestCase):
             {"response_type": "evidence_card", "reply": "事实"},
             {"response_type": "result_card", "reply": "建议"}], "rule_version": policy.RULE_VERSION}
         state = chat._default_state("c1")
-        with patch.object(chat, "handle_soft_stool_turn", return_value=result):
+        with patch.object(chat, "handle_soft_stool_turn", return_value=result), \
+             patch.object(chat.knowledge_qa, 'handle_question', return_value={
+                 'result': {'knowledge_qa': {'generation_source': 'scope_limited'}}}):
             reply = chat._handle_soft_stool_message("user-1", {"pet_id": "pet-1"}, "软便", state)
         self.assertEqual(state["slots"][chat.SOFT_STOOL_STATE_SLOT]["status"], "answered")
         self.assertEqual([x["result"]["sequence_no"] for x in reply["messages"]], [1, 2])

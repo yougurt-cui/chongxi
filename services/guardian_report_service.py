@@ -211,7 +211,7 @@ def community_evidence(pet, products):
             continue
         brand_cautions.setdefault(brand, []).extend(product.get('cautions') or [])
     brands = sorted(brand_cautions)[:10]
-    items, source_status = [], {'cat_disease_clues': 'no_match', 'kd_problem_guides': 'no_match'}
+    items, source_status = [], {'cat_disease_clues': 'no_match', 'kd_problem_guides': 'paused'}
     if brands and pet.get('animal_type') in (None, 'cat'):
         try:
             with _connect() as conn, conn.cursor() as cur:
@@ -238,33 +238,8 @@ def community_evidence(pet, products):
         except pymysql.MySQLError as error:
             source_status['cat_disease_clues'] = 'unavailable'
             logger.warning('guardian_report_clues_unavailable error=%s', type(error).__name__)
-    guide_seen, guide_failed = set(), False
-    for brand in brands:
-        plan = knowledge.plan_query(brand, pet)
-        plan.update(terms=[brand], anchors=[brand])
-        retrieval = knowledge.retrieve(plan)
-        guide_failed |= retrieval['status'] == 'unavailable'
-        for row in retrieval['items']:
-            # A mixed-brand guide is not evidence for every brand it mentions.
-            # Keep only fragments explicitly naming this brand and the focus topic.
-            fragments = re.split(r'[；;。\n]+', row.get('content') or '')
-            selected = [t.strip() for t in fragments if brand in t and
-                        (not brand_cautions[brand] or _community_matches(t, brand_cautions[brand]))]
-            if not selected or (brand, row['id']) in guide_seen:
-                continue
-            guide_seen.add((brand, row['id']))
-            text = '；'.join(dict.fromkeys(selected))
-            items.append({'id': f"community:guide:{row['id']}:{brand}",
-                'title': f'{brand} · 相关社区经验', 'text': text,
-                'matched_cautions': _community_matches(text, brand_cautions[brand]),
-                'source': {'table': 'kd_problem_guides', 'id': row['id'], 'scope': 'brand', 'brand': brand,
-                           'evidence_status': row.get('evidence_status'),
-                           'source_knowledge_ids': row.get('source_knowledge_ids') or []}})
-            if len(guide_seen) >= 3:
-                break
-        if len(guide_seen) >= 3:
-            break
-    source_status['kd_problem_guides'] = 'matched' if guide_seen else 'unavailable' if guide_failed else 'no_match'
+    # Model-generated points are not community experiences. Legacy knowledge
+    # retrieval is paused; retain independently collected cat_disease_clues.
     status = ('partial' if items and 'unavailable' in source_status.values() else 'ready' if items else
               'unavailable' if 'unavailable' in source_status.values() else 'no_match')
     return {'status': status, 'items': items, 'source_status': source_status,

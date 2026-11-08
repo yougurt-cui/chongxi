@@ -15,6 +15,8 @@ import test_soft_stool_consultation as fixtures
 class GuardianFeedbackTest(unittest.TestCase):
     def setUp(self):
         for mock in (
+            patch.object(chat.knowledge_qa, 'handle_question', return_value={
+                'result': {'knowledge_qa': {'generation_source': 'scope_limited'}}}),
             patch.object(llm, "get_chat_model_config", return_value={"api_key": ""}),
             patch.object(chat, "get_chat_model_config", return_value={"api_key": ""}),
             patch.object(pipeline, "build_baseline_diet_profile", return_value=deepcopy(fixtures.BASELINE)),

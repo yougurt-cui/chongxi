@@ -10,6 +10,8 @@ from unittest.mock import MagicMock, patch
 import pymysql
 from sqlalchemy import create_engine, text
 from services import guardian_knowledge_service as qa
+from services import guardian_point_knowledge as points
+from test_guardian_point_knowledge import connection, point
 from services import miniprogram_chat_service as chat
 
 
@@ -60,22 +62,22 @@ class RetrievalTest(unittest.TestCase):
         self.assertNotIn('沙发', qa.plan_query('那洗澡呢', self.pet, plan)['query'])
 
     def test_real_sql_is_parameterized_ranked_before_limit_and_sources_required(self):
-        conn = MagicMock(); cur = conn.__enter__.return_value.cursor.return_value.__enter__.return_value
-        cur.fetchall.return_value = [record(id=1), record(id=2), record(id=3, conditions_json='{"species":"狗"}'),
-                                   record(id=4, problem='领养前准备', pairs_json='[]')]
+        conn, cur = connection([point(id=2, content='猫抓沙发时可以提供猫抓板，引导磨爪。',
+                                      category_code='behavior_daily', topic_code='scratching')])
         plan = qa.plan_query("沙发' OR 1=1 --", self.pet)
-        with patch.object(qa, '_connect', return_value=conn):
+        with patch.object(points, '_connect', return_value=conn):
             result = qa.retrieve(plan)
         self.assertEqual([r['id'] for r in result['items']], [2])
         sql, params = cur.execute.call_args.args
         self.assertNotIn("OR 1=1 --", sql)
-        self.assertIn('kd_problem_guides', sql)
+        self.assertIn('knowledge_point_source', sql)
+        self.assertNotIn('kd_problem_guides', sql)
         self.assertNotIn('knowledge_base', sql)
         self.assertLess(sql.index('ORDER BY'), sql.index('LIMIT'))
         self.assertTrue(all(isinstance(p, str) for p in params))
 
     def test_database_down_and_empty_query_are_explicit(self):
-        with patch.object(qa, '_connect', side_effect=pymysql.OperationalError(2003, 'offline')) as connect:
+        with patch.object(points, '_connect', side_effect=pymysql.OperationalError(2003, 'offline')) as connect:
             self.assertEqual(qa.retrieve(qa.plan_query('抓沙发', self.pet))['status'], 'unavailable')
             connect.reset_mock()
             self.assertEqual(qa.retrieve(qa.plan_query('你好', self.pet))['status'], 'no_match')
@@ -158,12 +160,11 @@ class AnswerTest(unittest.TestCase):
                 self.assertNotIn('虚构答案', answer)
 
     def test_play_question_cannot_match_only_picky_eating_and_selection_needs_criteria(self):
-        conn = MagicMock(); cur = conn.__enter__.return_value.cursor.return_value.__enter__.return_value
-        cur.fetchall.return_value = [record(problem='猫挑食', pairs_json=json.dumps([
-            {'cause': '适口性可能不同', 'action': None}], ensure_ascii=False))]
-        with patch.object(qa, '_connect', return_value=conn):
-            self.assertEqual(qa.retrieve(qa.plan_query('猫不爱玩，怎么陪它玩', {'animal_type': 'cat', 'age_months': 24}))['status'], 'no_match')
-            self.assertEqual(qa.retrieve(qa.plan_query('如何选择猫抓板', {'animal_type': 'cat', 'age_months': 24}))['status'], 'no_match')
+        for question in ('猫不爱玩，怎么陪它玩', '如何选择猫抓板'):
+            conn, _ = connection([point(topic_code='picky_eating_behavior', content='猫挑食时可能是适口性不同。')])
+            with patch.object(points, '_connect', return_value=conn):
+                self.assertEqual(qa.retrieve(qa.plan_query(question,
+                    {'animal_type': 'cat', 'breed': '布偶', 'age_months': 24}))['status'], 'no_match')
 
     def test_followup_state_is_pet_turn_scoped_and_result_does_not_expose_private_records(self):
         state = chat._default_state('c')
@@ -180,10 +181,10 @@ class AnswerTest(unittest.TestCase):
 
 
 class RoutingTest(unittest.TestCase):
-    def test_only_new_general_questions_use_retrieval(self):
-        cases = [({'primary_intent': 'general_pet_qa'}, {}, True)]
+    def test_knowledge_and_health_questions_use_retrieval_without_intercepting_other_flows(self):
+        cases = [({'primary_intent': 'general_pet_qa'}, {}, True), ({'primary_intent': 'symptom_consult'}, {}, True)]
         cases += [({'primary_intent': intent}, {}, False) for intent in
-                  ('food_analysis', 'food_switch', 'ingredient_analysis', 'symptom_consult', 'reminder')]
+                  ('food_analysis', 'food_switch', 'ingredient_analysis', 'reminder')]
         cases += [({'primary_intent': 'general_pet_qa', '_analysis_followup_test': True}, {}, False),
                   ({'primary_intent': 'general_pet_qa', '_daily_status': True}, {}, False),
                   ({'primary_intent': 'general_pet_qa', 'dialogue_action': 'pause'}, {}, False),

@@ -21,6 +21,55 @@ def card(kind, content, ids=(), **extra):
             'source_ids': list(dict.fromkeys(ids)), **extra}
 
 
+POINT_SYSTEM = SYSTEM + '''
+本轮知识来自多模型采集后的 knowledge_point_source，不是社区反馈或专业证据。
+source_provider是原始来源，source_model是原模型；标准化模型不代表第二份证据。只整合本轮实际提供的来源，不宣称三个模型都有结果。
+先判断原始适用条件是否适合当前问题：未说明阶段不等于全阶段；诊断、健康、敏感肠胃等限制不能从品种推断。未知时仅作带条件的说明，不说这只宠物已满足条件。
+同一观点只说一次；补充信息合并到相应段落；出现冲突时不得投票、取平均或随意选一边，更不能把多模型一致视为已验证。
+禁止输出community卡。对缺乏核验的绝对化断言、品牌功效、最低配比、营养百分比不直接照搬。此知识库不提供商品事实依据，不推荐具体品牌或产品、不提供用药或诊断。
+尤其不要把“配料前三位必须是肉”“植物蛋白没有价值”“布偶公认玻璃胃”“冻干复水导致软便”等模型断言改写成操作建议或品种定论。可保留有条件、非绝对的原料来源与个体耐受观察方向。知识仅说关注点时，不扩写为预防或改善疾病效果。
+不把营养百分比作为结论或做法。若确需对照冲突数值，只能在cautions中引用双方并明确说明分歧、不能据此确定标准；通常只写“不同资料的比例建议不一致”即可。不要输出配料前三位必须是什么，也不要建议先低蛋白再逐步提高。优先使用没有这些断言的知识点形成做法。
+结果额外带 conflicts 数组（没有冲突则为空），每项为 {"source_ids":[真实ID,真实ID],"summary":"冲突是什么"}。
+有冲突时用cautions说明资料存在分歧及不能据此确定的结论，并引用冲突双方；不要在其它卡中再给出冲突数值或替用户作出选择。
+合计正文尽量在400字以内，结论<=60字；不能确认的结论省略或明确资料不足。
+'''
+
+
+def point_fallback():
+    # Raw model claims may contradict each other. Never expose them on synthesis failure.
+    return [card('conclusion', '相关知识资料暂时未能完成核对整理，请稍后重试。')], []
+
+
+def validate_points(data, raw, rows):
+    if raw.get('sufficient') is False:
+        return
+    conflicts = raw.get('conflicts')
+    if not isinstance(conflicts, list):
+        raise ValueError('conflicts must be an array')
+    ids = {r['id'] for r in rows}
+    cautions = next((c for c in data if c['type'] == 'cautions'), None)
+    for conflict in conflicts:
+        if (not isinstance(conflict, dict) or not isinstance(conflict.get('source_ids'), list)
+                or not all(type(i) is int for i in conflict['source_ids'])
+                or len(set(conflict['source_ids'])) < 2 or not set(conflict['source_ids']) <= ids
+                or not isinstance(conflict.get('summary'), str) or not conflict['summary'].strip()
+                or not cautions or not set(conflict['source_ids']) <= set(cautions['source_ids'])):
+            raise ValueError('Conflict must cite both sources in cautions')
+    for block in data:
+        if block['type'] == 'community':
+            raise ValueError('Model knowledge is not community evidence')
+        content = block['content']
+        if block['type'] == 'cautions' and conflicts:
+            # Numeric disagreements are allowed as explicitly qualified comparisons,
+            # never as a feeding threshold. Both sides were verified above.
+            content = '\n'.join(line for line in content.splitlines() if not (
+                re.search(r'分歧|不一致|不能.{0,8}(?:确定|标准)|不同.{0,8}(?:建议|说法)', line)
+                and not re.search(r'你应|应选择|应喂|建议采用', line)))
+        forbidden = re.search(r'\d+(?:\.\d+)?\s*[%％]|至少.{0,8}\d|必须.{0,8}\d|公认|显著高于|已被验证|多数模型|三个模型一致|前三位.{0,8}(?:应|须|必须)|植物蛋白.{0,12}(?:无价值|无实际|价值有限)|发生率.{0,8}(?:较高|高于)', content)
+        if forbidden:
+            raise ValueError('Remove unverified threshold/absolute claim from ' + block['type'] + ': ' + forbidden[0])
+
+
 def validate(raw, rows, unsafe, unverified_medical):
     """Reject malformed or untraceable answers as a whole, then use source-only fallback."""
     if raw.get('sufficient') is False and raw.get('data') == []:

@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import json
 import logging
-import math
 import re
 import time
 from datetime import datetime, timedelta, timezone
@@ -275,83 +274,31 @@ def _guide_content(row):
 
 
 def retrieve(plan):
-    if not plan['terms']:
-        return {'status': 'no_match', 'items': []}
-    # Read only the second-stage guide table; never fall back to atomic knowledge_base rows.
-    terms = [term.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_') for term in plan['terms']]
-    fields = ('k.problem', 'k.subtopic', 'k.symptoms_json', 'k.pairs_json', 'k.risks_json', 'k.disputes_json')
-    clauses = ['(' + ' OR '.join(f'{field} LIKE %s' for field in fields) + ')'] * len(terms)
-    score = ' + '.join([
-        '(CASE WHEN k.problem LIKE %s THEN 2 ELSE 0 END) + '
-        '(CASE WHEN k.symptoms_json LIKE %s OR k.pairs_json LIKE %s OR k.risks_json LIKE %s '
-        'OR k.disputes_json LIKE %s THEN 1 ELSE 0 END)'
-    ] * len(terms))
-    params = [pattern for term in terms for pattern in ['%' + term + '%'] * len(fields)]
-    params.extend(pattern for term in terms for pattern in ['%' + term + '%'] * 5)
-    try:
-        with _connect() as conn:
-            with conn.cursor() as cursor:
-                cursor.execute(f'''SELECT k.id,k.problem,k.topic,k.subtopic,k.symptoms_json,k.pairs_json,
-                    k.risks_json,k.disputes_json,k.conditions_json,k.source_ids_json,
-                    k.evidence_status,k.review_status AS status
-                    FROM kd_problem_guides k
-                    WHERE k.review_status IN ('待审核','已审核','已通过','已发布','active','approved','published')
-                    AND k.evidence_status IN ('待验证','社区经验','专业已验证')
-                    AND k.source_ids_json <> '[]'
-                    AND ({' OR '.join(clauses)}) ORDER BY ({score}) DESC,
-                    JSON_LENGTH(k.source_ids_json) DESC,k.id DESC LIMIT 300''', params)
-                rows = cursor.fetchall()
-        scored = []
-        for row in rows:
-            row['content'] = _guide_content(row)
-            row['source_knowledge_ids'] = _json(row.get('source_ids_json'), [])
-            row['source_count'] = len(row['source_knowledge_ids'])
-            if not eligible(row, plan['pet_scope']):
-                continue
-            if plan.get('anchors') and not any(term in row['content'] for term in plan['anchors']):
-                continue
-            if plan.get('selection') and row.get('topic') != '用品选择标准':
-                continue
-            hits = [term for term in plan['terms'] if term in row['content']]
-            if not hits:
-                continue
-            rank = sum(2 + min(len(term), 6) for term in hits) + (2 if row['topic'] in plan['topics'] else 0)
-            rank += min(math.log1p(max(0, int(row.get('source_count') or 0))), 2)
-            scored.append((rank, row))
-        scored.sort(key=lambda item: (-item[0], -int(item[1]['id'])))
-        unique, seen = [], set()
-        for rank, row in scored:
-            if row['content'] in seen:
-                continue
-            seen.add(row['content'])
-            unique.append({**row, 'relevance': round(rank, 3)})
-            if len(unique) == 5:
-                break
-        return {'status': 'matched' if unique else 'no_match', 'items': unique}
-    except pymysql.MySQLError:
-        return {'status': 'unavailable', 'items': []}
+    from services.guardian_point_knowledge import retrieve as retrieve_points
+    return retrieve_points(plan)
 
 
 def structured_answer(message, context, plan, retrieval):
     rows = retrieval['items']
+    point_source = retrieval.get('source_table') == 'knowledge_point_source' or any(r.get('source_table') == 'knowledge_point_source' for r in rows)
     if not rows:
         text_reply = ('本地养宠资料暂时无法读取，请稍后重试。' if retrieval['status'] == 'unavailable' else
                       '暂未找到适用于这个问题及宠物情况的可靠资料。请补充具体场景或换个问法，我再帮你查。')
         data = [cards.card('conclusion', text_reply)]
         return cards.plain_text(data), 'none', [], data, ''
-    data, used_ids = cards.fallback(rows)
-    mode = 'evidence_fallback'
+    data, used_ids = cards.point_fallback() if point_source else cards.fallback(rows)
+    mode = 'synthesis_unavailable' if point_source else 'evidence_fallback'
     cfg = get_chat_model_config()
     if cfg.get('api_key'):
         try:
             payload = {'question': message, 'retrieval_query': plan['query'], 'question_species': plan['species'],
-                       'context': context, 'knowledge': [
-                           {key: row.get(key) for key in ('id', 'topic', 'subtopic', 'evidence_status', 'status', 'conditions_json')}
+                       'context': context, 'applicable_scope': retrieval.get('scope'), 'knowledge': [
+                           {key: row.get(key) for key in ('id', 'topic', 'subtopic', 'evidence_status', 'status', 'conditions_json', 'source_provider', 'source_model', 'batch_id', 'original_condition', 'life_stage_codes')}
                            | {'evidence_lines': row['content'].splitlines()} for row in rows]}
             options = {'extra_body': {'thinking': {'type': 'disabled'}}} if cfg.get('provider') == 'deepseek' else {}
             client = OpenAI(api_key=cfg['api_key'], base_url=cfg['base_url'], timeout=14, max_retries=0)
             deadline = time.monotonic() + 22
-            messages = [{'role': 'system', 'content': cards.SYSTEM},
+            messages = [{'role': 'system', 'content': cards.POINT_SYSTEM if point_source else cards.SYSTEM},
                         {'role': 'user', 'content': json.dumps(payload, ensure_ascii=False, default=str)}]
             for attempt in range(2):
                 response = client.chat.completions.create(
@@ -362,6 +309,9 @@ def structured_answer(message, context, plan, retrieval):
                 try:
                     parsed = json.loads(raw)
                     data, used_ids = cards.validate(parsed, rows, UNSAFE_SOURCE, UNVERIFIED_MEDICAL)
+                    if point_source:
+                        cards.validate_points(data, parsed, rows)
+                        retrieval['conflicts'] = parsed.get('conflicts', [])
                     break
                 except (ValueError, TypeError, KeyError, AttributeError) as exc:
                     if attempt or deadline - time.monotonic() < 2:
@@ -377,7 +327,8 @@ def structured_answer(message, context, plan, retrieval):
                 mode = 'insufficient_evidence'
         except Exception as exc:
             logger.warning('Knowledge answer fallback: %s', str(exc) if type(exc) is ValueError else type(exc).__name__)
-            data, used_ids = cards.fallback(rows)
+            data, used_ids = cards.point_fallback() if point_source else cards.fallback(rows)
+            mode = 'synthesis_unavailable' if point_source else 'evidence_fallback'
     # Retain the existing production wording guard in both card and legacy text output.
     for block in data:
         block['content'] = scrub_brand_negatives(block['content'])
@@ -386,6 +337,9 @@ def structured_answer(message, context, plan, retrieval):
             block['content'] = '\n'.join('- ' + q for q in block['questions'])
     used = [row for row in rows if row['id'] in used_ids]
     note = cards.REVIEW_NOTE if any(row['evidence_status'] != '专业已验证' or row['status'] == '待审核' for row in used) else ''
+    if point_source:
+        from services.guardian_point_knowledge import REVIEW_NOTE
+        note = REVIEW_NOTE if used_ids else ''
     return cards.plain_text(data, note), mode, used_ids, data, note
 
 
@@ -440,7 +394,7 @@ def gap_answer(message, plan, timeout):
         return None, 'model_unavailable'
 
 
-def handle_question(user_id, conversation, message, state, *, report_scene=None, external_subject=None, message_id=None):
+def handle_question(user_id, conversation, message, state, *, report_scene=None, external_subject=None, message_id=None, consultation='general_pet_qa', allow_general=True):
     previous = state['slots'].get(STATE_KEY) or {}
     if (previous.get('turn_no') != state['turn_count'] or previous.get('pet_id') != conversation['pet_id']
             or previous.get('external_subject') != external_subject):
@@ -448,17 +402,27 @@ def handle_question(user_id, conversation, message, state, *, report_scene=None,
     if external_subject:
         context = {'pet_profile': {'animal_type': external_subject}, 'diet_history_status': 'not_applicable',
                    'health_anomalies': {'status': 'not_applicable'}}
-    else:
+    elif conversation.get('pet_id'):
         context = load_context(user_id, conversation['pet_id'], question=question_text(message, previous))
+    else:
+        context = {'pet_profile': {}, 'diet_history_status': 'not_applicable',
+                   'health_anomalies': {'status': 'not_applicable'}}
     plan = plan_query(message, context['pet_profile'], previous,
                       subject_species=external_subject or conversation.get('profile_species'))
     retrieval = retrieve(plan)
+    scope = retrieval.get('scope')
+    if scope is not None:
+        original = context['pet_profile']
+        if (scope.get('id') != original.get('id') or scope.get('age_months') != original.get('age_months')):
+            context = {'pet_profile': scope, 'diet_history_status': 'not_applicable',
+                       'health_anomalies': {'status': 'not_applicable'}}
+        plan.update(pet_scope=scope, species=scope.get('animal_type'))
     deadline = time.monotonic() + 22
     reply, mode, used_ids, data, note = structured_answer(message, context, plan, retrieval)
     status = 'insufficient_evidence' if mode == 'insufficient_evidence' else retrieval['status']
     gap = {}
     if status in ('no_match', 'insufficient_evidence'):
-        advice, mode = gap_answer(message, plan, deadline - time.monotonic())
+        advice, mode = gap_answer(message, plan, deadline - time.monotonic()) if allow_general else (None, 'scope_limited')
         gap = {'gap_message_id': message_id, 'species': plan['species'],
                'candidate_guide_ids': [r['id'] for r in retrieval['items']]}
         if advice:
@@ -467,17 +431,20 @@ def handle_question(user_id, conversation, message, state, *, report_scene=None,
         elif mode == 'scope_limited':
             data = [cards.card('conclusion', '现有资料不足以可靠回答这个具体问题。涉及健康或用药时，请向兽医确认。')]
             reply = cards.plain_text(data)
-    state.update(primary_intent='general_pet_qa', secondary_intent=None, current_step=None,
+    state.update(primary_intent=consultation, secondary_intent=None, current_step=None,
                  missing_slots=[], followup_count=0, turn_count=state['turn_count'] + 1)
     state['slots'][STATE_KEY] = {'query': plan['query'], 'topics': plan['topics'], 'pet_id': conversation['pet_id'],
-                               'turn_no': state['turn_count'], 'external_subject': external_subject, 'knowledge_ids': used_ids, 'guide_ids': used_ids}
+                               'turn_no': state['turn_count'], 'external_subject': external_subject,
+                               'source_table': 'knowledge_point_source', 'knowledge_ids': used_ids, 'point_ids': used_ids}
     response = {'response_type': 'text', 'reply': reply, 'result': {
-        'intent': 'general_pet_qa', 'pipeline': 'knowledge_qa', 'turn_no': state['turn_count'], 'sequence_no': 1,
+        'intent': consultation, 'pipeline': 'knowledge_qa', 'turn_no': state['turn_count'], 'sequence_no': 1,
         'data': data,
-        'knowledge_qa': {'version': 2, 'review_note': note, 'status': status, **gap, 'generation_source': mode,
+        'knowledge_qa': {'version': 3, 'review_note': note, 'status': status, **gap, 'generation_source': mode,
                          'query': plan['query'], 'topics': plan['topics'], 'knowledge_ids': used_ids,
-                         'guide_ids': used_ids, 'source_table': 'kd_problem_guides',
-                         'sources': [{key: row.get(key) for key in ('id', 'topic', 'subtopic', 'evidence_status', 'status', 'source_knowledge_ids')}
+                         'guide_ids': [], 'point_ids': used_ids, 'source_table': 'knowledge_point_source',
+                         'candidate_point_ids': [r['id'] for r in retrieval['items']],
+                         'conflicts': retrieval.get('conflicts', []) if mode == 'model_structured_answer' else [],
+                         'sources': [{key: row.get(key) for key in ('id', 'topic', 'subtopic', 'evidence_status', 'status', 'source_provider', 'source_model', 'batch_id', 'task_id', 'original_condition', 'duplicate_point_ids')}
                                      for row in retrieval['items'] if row['id'] in used_ids],
                          'context_status': {'diet': context['diet_history_status'], 'health': context['health_anomalies']['status']}}},
         'disclaimer': 'AI内容仅供参考，不能替代兽医诊断'}
