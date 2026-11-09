@@ -68,11 +68,18 @@ class MiniProgramPetImageServiceTest(unittest.TestCase):
                 'api_key': 'test', 'base_url': 'https://example.test/v1', 'model': 'qwen3-vl-plus'}), \
              patch.object(service, 'OpenAI', return_value=client), \
              patch.object(client.chat.completions, 'create', create=True, return_value=response) as create:
-            result, model = service.recognize_pet(b'test-image')
+            result, model = service.recognize_pet(self._image_file(size=(1600, 1200)).read())
         self.assertEqual(model, 'qwen3-vl-plus')
         self.assertEqual(result['breed']['value'], '波斯猫')
         self.assertEqual(result['appearance']['pattern']['value'], '三花')
         prompt = create.call_args.kwargs['messages'][0]['content'][1]['text']
+        self.assertEqual(create.call_args.kwargs['max_tokens'], 180)
+        self.assertNotIn('appearance', prompt)
+        self.assertNotIn('candidates', prompt)
+        import base64
+        encoded = create.call_args.kwargs['messages'][0]['content'][0]['image_url']['url'].split(',')[1]
+        with Image.open(io.BytesIO(base64.b64decode(encoded))) as image:
+            self.assertEqual(image.size, (1024, 768))
         self.assertIn('中华田园猫', prompt)
         self.assertIn('马尔济斯犬', prompt)
         self.assertIn('三花、橘猫、奶牛花色、玳瑁属于花色', prompt)

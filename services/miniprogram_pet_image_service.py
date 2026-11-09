@@ -6,6 +6,8 @@ import base64
 import hashlib
 import io
 import json
+import logging
+import time
 import os
 import re
 import secrets
@@ -30,7 +32,8 @@ TABLE_NAME = "miniprogram_pet_image_upload"
 MAX_IMAGE_SIZE = 10 * 1024 * 1024
 MAX_IMAGE_PIXELS = 30_000_000
 MAX_IMAGE_EDGE = 2048
-PROMPT_VERSION = "pet-profile-recognition-v2"
+PROMPT_VERSION = "pet-profile-recognition-v3-fast"
+logger = logging.getLogger(__name__)
 
 
 def _now() -> str:
@@ -246,31 +249,36 @@ def recognize_pet(content: bytes) -> tuple[dict[str, Any], str]:
     if not cfg["api_key"]:
         raise RuntimeError("未配置通义千问 API Key")
     schema = {
-        "animal_type": {"value": "cat|dog|unknown", "label": "猫咪", "confidence": 0.0},
-        "breed": {"value": "品种或空字符串", "confidence": 0.0, "candidates": [{"value": "候选品种", "confidence": 0.0}]},
-        "appearance": {key: {"value": "", "confidence": 0.0} for key in ("color", "pattern", "length")},
-        "age": {"stage": "juvenile|adult|senior|unknown", "label": "成年", "estimated_years": None, "minimum_years": None, "maximum_years": None, "confidence": 0.0},
-        "weight": {"estimated_kg": None, "minimum_kg": None, "maximum_kg": None, "confidence": 0.0},
-        "visible_health": {"status": "unknown", "label": "仅描述可见外观", "confidence": 0.0, "observations": []},
+        "animal_type": {"value": "cat|dog|unknown", "confidence": 0.0},
+        "breed": {"value": "唯一中文品种名", "confidence": 0.0},
     }
+    vocabulary = {species: [row['name'] for row in rows]
+                  for species, rows in catalog()['breeds'].items()}
     prompt = (
-        "分析照片中的主要宠物，为建档表单提供保守建议。只描述图像中可见内容，不诊断疾病；"
-        "品种只能从下方对应猫或狗的中文品种库中选择，必须使用中文标准名称。"
-        "三花、橘猫、奶牛花色、玳瑁属于花色，不是品种；花色和毛长分别填写 appearance。"
-        "例如三花短毛家猫可返回品种普通短毛家猫、color黑白橘、pattern三花、length短毛；"
-        "花色不能作为确认中华田园猫、波斯猫等品种或血统的依据。"
-        "无法判断具体品种时使用猫品种待确认或犬种待确认，提供最多3个库内中文候选供主人确认；"
-        "不要把无法判断自动等同于混种。只能描述外观上的品种相似性，不能证明血统。"
-        "外观字段只选下方appearance词表；无法看清留空，不按候选品种反推外观。"
-        "年龄和体重无法可靠判断时必须降低 confidence 并可返回 null。"
-        "词表：" + _json_dumps(catalog()) + "。只返回合法 JSON，结构为："
-        + _json_dumps(schema)
+        "识别照片中的主要宠物。只返回类型和置信度最高的唯一品种，不输出候选或解释。"
+        "品种必须从对应词表选择中文名称，仅表示外观相似性，不证明血统。"
+        "三花、橘猫、奶牛花色、玳瑁属于花色，不是品种。"
+        "确实无法判断时返回猫品种待确认或犬种待确认。"
+        "不要识别性别、年龄、体重、毛色或健康。词表：" + _json_dumps(vocabulary)
+        + "。只返回合法JSON，结构：" + _json_dumps(schema)
     )
-    data, model = vision_json(content, cfg, prompt, timeout=60.0)
+    # Keep the stored avatar intact; send a smaller image only to the model.
+    with Image.open(io.BytesIO(content)) as source:
+        image = source.convert('RGB')
+        image.thumbnail((1024, 1024), Image.Resampling.LANCZOS)
+        output = io.BytesIO()
+        image.save(output, format='JPEG', quality=80)
+        vision_content = output.getvalue()
+    started = time.monotonic()
+    data, model = vision_json(vision_content, cfg, prompt, timeout=30.0, max_retries=0,
+                             completion_options={'max_tokens': 180})
+    logger.info('pet_recognition_model seconds=%.3f bytes=%s model=%s',
+                time.monotonic() - started, len(vision_content), model)
     return _normalize_recognition(data), model
 
 
 def vision_json(content, cfg, prompt, **options):
+    completion_options = options.pop('completion_options', {})
     image_url = "data:image/jpeg;base64," + base64.b64encode(content).decode("ascii")
     client = OpenAI(api_key=cfg["api_key"], base_url=cfg["base_url"], **options)
     response = client.chat.completions.create(
@@ -280,6 +288,7 @@ def vision_json(content, cfg, prompt, **options):
             {"type": "text", "text": prompt},
         ]}],
         temperature=0,
+        **completion_options,
     )
     raw = response.choices[0].message.content or ""
     return _parse_json_object(raw), cfg["model"]
@@ -313,10 +322,13 @@ def upload_recognition(image_file, user_id, recognize, usage, version, *, conver
     cleaned_user_id = _clean(user_id, 128)
     if not cleaned_user_id:
         raise ValueError("user_id 不能为空")
+    started = time.monotonic()
     content, width, height = _prepare_image(image_file)
+    prepared = time.monotonic()
     init_pet_image_tables()
     image_id, now = uuid.uuid4().hex, _now()
     storage_path = _store_image(content, user_id=cleaned_user_id, image_id=image_id)
+    stored_at = time.monotonic()
     digest = hashlib.sha256(content).hexdigest()
     with _connect() as conn:
         with conn.cursor() as cursor:
@@ -335,6 +347,7 @@ def upload_recognition(image_file, user_id, recognize, usage, version, *, conver
     except Exception as exc:
         suggestions, model = {}, os.getenv("QWEN_VISION_MODEL") or "qwen3-vl-plus"
         recognition_status, error = "failed", _clean(exc, 1000)
+    recognized_at = time.monotonic()
     stored = {"conversation_id": conversation_id, "facts": suggestions} if conversation_id else suggestions
     with _connect() as conn:
         with conn.cursor() as cursor:
@@ -344,6 +357,9 @@ def upload_recognition(image_file, user_id, recognize, usage, version, *, conver
                 (recognition_status, _json_dumps(stored), model, version, error, _now(), image_id),
             )
         conn.commit()
+    logger.info('pet_image_timing image_id=%s usage=%s prepare=%.3f store=%.3f recognize=%.3f total=%.3f',
+                image_id, usage, prepared - started, stored_at - prepared,
+                recognized_at - stored_at, time.monotonic() - started)
     return {
         "ok": True,
         "image": {"id": image_id, "url": f"/api/miniprogram/pet-images/{image_id}", "width": width, "height": height},
