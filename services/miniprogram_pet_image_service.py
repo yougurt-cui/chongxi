@@ -8,6 +8,7 @@ import io
 import json
 import os
 import re
+import secrets
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -19,7 +20,7 @@ from PIL import Image, ImageOps
 from werkzeug.datastructures import FileStorage
 
 from app_config import get_mysql_config, get_qwen_config
-from services.pet_breed_catalog import catalog, normalize_identity
+from services.pet_breed_catalog import catalog, normalize_identity, resolve_breed, confidence
 
 
 BASE_DIR = Path(__file__).resolve().parents[1]
@@ -219,6 +220,24 @@ def _normalize_recognition(data: dict[str, Any]) -> dict[str, Any]:
         },
     }
     result.update(normalize_identity(data))
+    species = result['animal_type']['value']
+    raw_breed = data.get('breed') if isinstance(data.get('breed'), dict) else {}
+    candidates = raw_breed.get('candidates')
+    candidates = candidates if isinstance(candidates, list) else []
+    ranked = []
+    for item in [raw_breed, *candidates]:
+        if not isinstance(item, dict):
+            continue
+        match = resolve_breed(species, item.get('value') or item.get('standard_id'))
+        if match and not match['standard_id'].endswith('unknown'):
+            ranked.append({**match, 'confidence': confidence(item.get('confidence'))})
+    if ranked:
+        result['breed'] = {**max(ranked, key=lambda item: item['confidence']),
+                           'requires_confirmation': True, 'status': 'suggested'}
+    result['breed'].pop('candidates', None)
+    sex = secrets.choice(('male', 'female'))
+    result['sex'] = {'value': sex, 'label': '公' if sex == 'male' else '母',
+                     'source': 'random', 'requires_confirmation': True}
     return result
 
 

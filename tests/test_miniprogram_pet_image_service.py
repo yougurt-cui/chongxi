@@ -40,6 +40,23 @@ class MiniProgramPetImageServiceTest(unittest.TestCase):
         self.assertTrue(result["age"]["requires_confirmation"])
         self.assertTrue(result["weight"]["requires_manual_input"])
 
+    def test_recognition_selects_single_highest_breed_and_random_sex(self):
+        data = {'animal_type': {'value': 'cat'},
+                'breed': {'value': '波斯猫', 'confidence': .8,
+                          'candidates': [{'value': '布偶猫', 'confidence': .9},
+                                         {'value': '比熊犬', 'confidence': 1}]}}
+        for sex in ('male', 'female'):
+            with patch.object(service.secrets, 'choice', return_value=sex):
+                result = service._normalize_recognition(data)
+            self.assertEqual(result['breed']['value'], '布偶猫')
+            self.assertEqual(result['breed']['confidence'], .9)
+            self.assertNotIn('candidates', result['breed'])
+            self.assertEqual(result['sex']['value'], sex)
+            self.assertEqual(result['sex']['source'], 'random')
+        data['breed'] = {'value': '猫品种待确认', 'candidates': [
+            {'value': '布偶猫', 'confidence': .4}]}
+        self.assertEqual(service._normalize_recognition(data)['breed']['value'], '布偶猫')
+
     def test_recognition_prompt_uses_catalog_and_separate_appearance(self):
         client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace()))
         response = SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content='''{
