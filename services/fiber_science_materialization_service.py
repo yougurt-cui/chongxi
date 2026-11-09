@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from collections import Counter
 from typing import Any, Iterable
 
@@ -61,14 +62,58 @@ def _position_weight(position: Any) -> float:
     return 0.2
 
 
+def _ingredient_origins(text):
+    """Keep top-level order and compound membership; do not flatten brackets."""
+    tokens, buffer, depth = [], [], 0
+    for char in text or "":
+        if char in "(（[【":
+            depth += 1
+        elif char in ")）]】":
+            depth = max(0, depth - 1)
+        if char in "、,，;；\n" and depth == 0:
+            if "".join(buffer).strip():
+                tokens.append("".join(buffer).strip())
+            buffer = []
+        else:
+            buffer.append(char)
+    if "".join(buffer).strip():
+        tokens.append("".join(buffer).strip())
+    return tokens
+
+
+def _source_position(item, ingredient_text):
+    raw = str(item.get("raw_name") or "").strip()
+    for rank, token in enumerate(_ingredient_origins(ingredient_text), 1):
+        header = re.split(r"[(（\[【]", token, maxsplit=1)[0]
+        clean = re.sub(r"\d+(?:\.\d+)?\s*[%％]|\s+", "", header)
+        if raw and raw == clean:
+            return {"rank": rank, "raw_name": raw, "position_origin": "standardized_source"}
+        if raw and raw in token[len(header):]:
+            percentage = re.search(r"(\d+(?:\.\d+)?)\s*[%％]", header)
+            # Unknown compound amounts must not silently become a default weight.
+            if not percentage:
+                raise ValueError(f"复合原料子成分缺少父原料比例，无法评分: {raw}")
+            fraction = float(percentage.group(1)) / 100
+            if not 0 < fraction <= 1:
+                raise ValueError(f"复合原料比例无效: {header}")
+            return {"rank": rank, "raw_name": raw, "parent_ingredient": header,
+                    "parent_fraction": fraction, "position_origin": "compound_parent_cap"}
+    rank = item.get("position")
+    if not rank or int(rank) <= 0:
+        raise ValueError(f"标准化原料缺少顺位: {raw}")
+    return {"rank": int(rank), "raw_name": raw, "position_origin": "standardized_item"}
+
+
 def build_science_payload(
     items: Iterable[dict[str, Any]],
     profiles: dict[str, dict[str, Any]],
+    ingredient_text: str = "",
 ) -> dict[str, Any]:
     items = list(items)
     details: dict[str, dict[str, Any]] = {}
     subtype_tags: dict[str, list[str]] = {}
     starch_items: list[dict[str, Any]] = []
+    scoring_items = []
     missing: list[dict[str, Any]] = []
     used_ids: list[str] = []
     eligible_count = 0
@@ -115,6 +160,9 @@ def build_science_payload(
                     if value in PREBIOTIC_FUNCTION_LABELS
                 ],
             }
+            origin = _source_position(item, ingredient_text)
+            scoring_items.append({"tag_name": name, "standard_ingredient_id": standard_id,
+                                  **origin, "detail": detail})
             details.setdefault(name, detail)
             subtype_tags.setdefault(category_label, [])
             if name not in subtype_tags[category_label]:
@@ -147,6 +195,8 @@ def build_science_payload(
         "ingredient_category_tags": category_tags,
         "ingredient_subtype_tags": subtype_tags,
         "ingredient_tag_detail": details,
+        "ingredient_scoring_items": scoring_items,
+        "position_schema_version": 1,
     }
     versions = sorted((str(item.get("standard_ingredient_id") or f"proxy:{item.get('position')}"),
                        (profiles.get(str(item.get("standard_ingredient_id") or "")) or

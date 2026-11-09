@@ -405,7 +405,7 @@ def backfill_formula(
             if materialize_science_features:
                 science_profiles = _load_science_profiles(cursor, effective_items)
                 fat_features = build_science_features(effective_items, science_profiles)
-                fiber_payload = build_science_payload(effective_items, science_profiles)
+                fiber_payload = build_science_payload(effective_items, science_profiles, main_ingredient_text)
 
             cursor.execute(
                 f"DELETE FROM `{FORMULA_INGREDIENT_ITEM_TABLE}` WHERE formula_id = %s",
@@ -662,7 +662,7 @@ def materialize_formula_science_source_tables(
             items = [item for item in cursor.fetchall() if not item.get("is_ignored")]
             profiles = _load_science_profiles(cursor, items)
             fat_features = build_science_features(items, profiles)
-            fiber_payload = build_science_payload(items, profiles)
+            fiber_payload = build_science_payload(items, profiles, _strip_additives(formula.get("ingredient_composition") or ""))
             ingredient_text = _strip_additives(formula.get("ingredient_composition") or "")
             _upsert_fat_feature(
                 cursor, formula=formula, ingredient_text=ingredient_text, features=fat_features

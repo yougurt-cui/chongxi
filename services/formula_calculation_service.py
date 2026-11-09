@@ -59,6 +59,7 @@ def algorithm_fingerprint():
               root / 'scripts/backfill_formula_ingredient_features.py',
               root / 'scripts/rebuild_protein_source_from_profiles.py',
               root / 'services/ingredient_coarse_proxy_service.py',
+              root / 'services/fiber_science_materialization_service.py',
               root / 'services/product_portrait_summary_service.py',
               root / 'services/formula_incremental_service.py',
               root / 'services/catfood_standardization_service.py',

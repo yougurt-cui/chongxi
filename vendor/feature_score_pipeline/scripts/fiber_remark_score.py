@@ -848,11 +848,28 @@ def compute_scores(raw_ingredient_text: str, ingredient_feature_json: Dict[str, 
     score_details = []
     function_score_total = {name: 0.0 for name in PORTRAIT_FUNCTION_SCORE_NAMES}
 
-    for tag_name, detail in tag_detail_map.items():
-        matched_ing, rank = find_best_match_rank(tag_name, ingredient_list)
+    structured = ingredient_feature_json.get("ingredient_scoring_items")
+    if ingredient_feature_json.get("position_schema_version") == 1 and not isinstance(structured, list):
+        raise ValueError("标准化纤维顺位数据缺失")
+    entries = structured if isinstance(structured, list) else [
+        {"tag_name": name, "detail": detail} for name, detail in tag_detail_map.items()]
+    for entry in entries:
+        tag_name, detail = entry["tag_name"], entry["detail"]
+        if structured is not None:
+            rank = entry.get("rank")
+            if not isinstance(rank, int) or isinstance(rank, bool) or rank <= 0:
+                raise ValueError(f"标准化纤维顺位无效: {tag_name}")
+            matched_ing = entry.get("raw_name")
+            weight = get_rank_weight(rank)
+            if entry.get("parent_fraction") is not None:
+                weight *= float(entry["parent_fraction"])
+        else:
+            matched_ing, rank = find_best_match_rank(tag_name, ingredient_list)
+            if rank is None:
+                raise ValueError(f"纤维原料未匹配到配料顺位，请重建科学属性来源: {tag_name}")
+            weight = get_rank_weight(rank)
         if should_skip_score_match(tag_name, matched_ing):
             continue
-        weight = get_rank_weight(rank)
 
         base_score = calc_single_ingredient_base_score(detail)
         final_score = weighted_score(base_score, weight)
@@ -879,6 +896,10 @@ def compute_scores(raw_ingredient_text: str, ingredient_feature_json: Dict[str, 
             "weighted_score": final_score,
             "function_score": function_score,
             "raw_tag_detail": detail,
+            "standard_ingredient_id": entry.get("standard_ingredient_id"),
+            "position_origin": entry.get("position_origin", "legacy_name_match"),
+            "parent_ingredient": entry.get("parent_ingredient"),
+            "parent_fraction": entry.get("parent_fraction"),
         })
 
     p_form = round4(total["p_form"])
