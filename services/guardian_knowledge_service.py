@@ -280,7 +280,8 @@ def retrieve(plan):
 
 def structured_answer(message, context, plan, retrieval):
     rows = retrieval['items']
-    point_source = retrieval.get('source_table') == 'knowledge_point_source' or any(r.get('source_table') == 'knowledge_point_source' for r in rows)
+    point_tables = {'knowledge_point_source', 'knowledge_point_source_detail'}
+    point_source = retrieval.get('source_table') in point_tables or any(r.get('source_table') in point_tables for r in rows)
     if not rows:
         text_reply = ('本地养宠资料暂时无法读取，请稍后重试。' if retrieval['status'] == 'unavailable' else
                       '暂未找到适用于这个问题及宠物情况的可靠资料。请补充具体场景或换个问法，我再帮你查。')
@@ -409,6 +410,22 @@ def handle_question(user_id, conversation, message, state, *, report_scene=None,
                    'health_anomalies': {'status': 'not_applicable'}}
     plan = plan_query(message, context['pet_profile'], previous,
                       subject_species=external_subject or conversation.get('profile_species'))
+    from services.guardian_task_knowledge import health_answer
+    health = health_answer(plan, consultation=consultation == 'symptom_consult')
+    if health is not None:
+        state.update(primary_intent='symptom_consult', secondary_intent=None, current_step=None,
+                     missing_slots=[], followup_count=0, turn_count=state['turn_count'] + 1)
+        state['slots'][STATE_KEY] = {'query': plan['query'], 'topics': plan['topics'],
+            'pet_id': conversation.get('pet_id'), 'turn_no': state['turn_count'],
+            'external_subject': external_subject, 'source_table': 'health_knowledge_point'}
+        lines = [health['text']]
+        for group in health['groups']:
+            lines.append(group['cause'] + '\n' + group['mechanism'] + '\n伴随表现：' +
+                         '；'.join(group['manifestations']) + '\n判断依据：' + '；'.join(group['supporting']))
+        return {'response_type': 'risk_alert' if health['status'] == 'risk_alert' else 'text',
+                'reply': '\n\n'.join(lines), 'result': {'intent': 'symptom_consult',
+                    'pipeline': 'health_knowledge', 'turn_no': state['turn_count'], 'sequence_no': 1,
+                    'health_knowledge': health}, 'disclaimer': 'AI内容仅供参考，不能替代兽医诊断'}
     retrieval = retrieve(plan)
     scope = retrieval.get('scope')
     if scope is not None:
@@ -435,13 +452,13 @@ def handle_question(user_id, conversation, message, state, *, report_scene=None,
                  missing_slots=[], followup_count=0, turn_count=state['turn_count'] + 1)
     state['slots'][STATE_KEY] = {'query': plan['query'], 'topics': plan['topics'], 'pet_id': conversation['pet_id'],
                                'turn_no': state['turn_count'], 'external_subject': external_subject,
-                               'source_table': 'knowledge_point_source', 'knowledge_ids': used_ids, 'point_ids': used_ids}
+                               'source_table': 'knowledge_point_source_detail', 'knowledge_ids': used_ids, 'point_ids': used_ids}
     response = {'response_type': 'text', 'reply': reply, 'result': {
         'intent': consultation, 'pipeline': 'knowledge_qa', 'turn_no': state['turn_count'], 'sequence_no': 1,
         'data': data,
         'knowledge_qa': {'version': 3, 'review_note': note, 'status': status, **gap, 'generation_source': mode,
                          'query': plan['query'], 'topics': plan['topics'], 'knowledge_ids': used_ids,
-                         'guide_ids': [], 'point_ids': used_ids, 'source_table': 'knowledge_point_source',
+                         'guide_ids': [], 'point_ids': used_ids, 'source_table': 'knowledge_point_source_detail',
                          'candidate_point_ids': [r['id'] for r in retrieval['items']],
                          'conflicts': retrieval.get('conflicts', []) if mode == 'model_structured_answer' else [],
                          'sources': [{key: row.get(key) for key in ('id', 'topic', 'subtopic', 'evidence_status', 'status', 'source_provider', 'source_model', 'batch_id', 'task_id', 'original_condition', 'duplicate_point_ids')}

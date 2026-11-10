@@ -17,6 +17,11 @@ RECOMMENDATION_KEY = '_health_recommendation_context'
 CONFIRM_SLOT = 'food_analysis_usage'
 RECOMMEND_SLOT = 'food_analysis_recommendation'
 CHOICE_SLOT = 'food_analysis_catalog'
+SWITCH_IMPACT_RE = re.compile(r'(?:请问|帮我分析)?从(.{2,60}?)换(?:到|成)(.{2,60}?)(?:后|会)?(?:有什么影响|有什么变化|会怎样|的换粮影响|换粮影响)[？?。]*')
+
+
+def is_switch_impact_request(message):
+    return bool(SWITCH_IMPACT_RE.fullmatch(str(message or '').strip()))
 
 
 def confirmation_interaction(message, state):
@@ -95,7 +100,10 @@ def accept_confirmation(interaction, user_id, conversation, state):
 def named_request(message):
     """Recognize explicit food analysis while leaving symptom triage to its router."""
     text = str(message or '').strip()
-    if re.search(r'^(?:帮我|请|麻烦)?(?:分析|对比|比较)(?:一下)?', text):
+    switch = SWITCH_IMPACT_RE.fullmatch(text)
+    if switch:
+        query = switch[1] + '和' + switch[2]
+    elif re.search(r'^(?:帮我|请|麻烦)?(?:分析|对比|比较)(?:一下)?', text):
         query = re.sub(r'^(?:帮我|请|麻烦)?(?:分析|对比|比较)(?:一下)?\s*', '', text)
     elif (re.search(r'粮|猫条|配方|罐头|零食', text)
           and (compare := re.fullmatch(r'(?:请|帮我)?(?:把|拿)?(.+?(?:和|与| vs ).+?)(?:对比|比较)(?:一下)?[？?。]*', text))):
@@ -170,6 +178,8 @@ def prepare_named_analysis(message, state, context, load_analysis):
                          'food_analysis': load_analysis(item['formula_id'])})
     context['named_food_analyses'] = subjects
     context['food_analysis_scope'] = 'named_comparison' if len(subjects) > 1 else 'named'
+    if is_switch_impact_request(message):
+        context['report_scene'] = 'switch_impact'
     if len(subjects) == 1:
         slots['catalog_key'] = f'formula:{matches[0]["formula_id"]}'
     return None
@@ -259,4 +269,4 @@ def build_analysis_reply(user_id, conversation, state, context):
                                            'overview': overview, 'is_multiple': multiple, 'coverage_note': coverage_note},
                        'food_candidates': []}, 'disclaimer': 'AI内容仅供参考，不能替代兽医诊断'}
     from services.guardian_report_service import attach_report
-    return attach_report(reply, context, subjects)
+    return attach_report(reply, context, subjects, scene=context.get('report_scene'))

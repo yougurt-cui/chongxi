@@ -567,10 +567,15 @@ def _handle_soft_stool_message(
         supplement = knowledge_qa.handle_question(
             user_id, conversation, '软便咨询：' + message, deepcopy(state),
             message_id=source_message_id, consultation='symptom_consult', allow_general=False)
-        meta = supplement['result']['knowledge_qa']
-        messages[-1]['result']['knowledge_qa'] = meta
-        result_meta['knowledge_qa'] = meta
-        if meta['generation_source'] == 'model_structured_answer':
+        key = 'health_knowledge' if 'health_knowledge' in supplement['result'] else 'knowledge_qa'
+        meta = supplement['result'][key]
+        # Only the supplementary bubble owns the new health card. Keep the
+        # original triage bubble and its controls visible, including on replay.
+        result_meta['knowledge_status'] = meta.get('status')
+        if key == 'knowledge_qa':
+            messages[-1]['result'][key] = meta
+            result_meta[key] = meta
+        if meta.get('generation_source') == 'model_structured_answer' or (key == 'health_knowledge' and meta.get('status') == 'matched'):
             messages.append({'response_type': 'text', 'reply': supplement['reply'],
                              'result': {**supplement['result'], 'parent_pipeline': 'soft_stool',
                                         'turn_no': state['turn_count'], 'sequence_no': len(messages) + 1,
@@ -1458,7 +1463,7 @@ def _recognize_guardian_turn(message, state):
     if _uploaded_product_followup(message, state) or _uploaded_current_comparison(message, state):
         return {'primary_intent': 'food_analysis', 'slots': {}, '_target_flow': 'general'}, None
     analysis_query = health_flow.named_request(message)
-    if analysis_query and not requested_flow(message):
+    if analysis_query and (health_flow.is_switch_impact_request(message) or not requested_flow(message)):
         return {'primary_intent': 'food_analysis', 'slots': {'food_name': analysis_query}, '_target_flow': 'general'}, None
     target = requested_flow(message)
     if target == 'reminder' or (state.get('primary_intent') == 'reminder' and state.get('current_step') and not target and not SOFT_STOOL_PAUSE_RE.search(message)):

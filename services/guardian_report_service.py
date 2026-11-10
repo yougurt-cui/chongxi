@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 SCHEMA = 'guardian_report'
 VERSION = 1
 SECTIONS = ['pet', 'summary', 'feeding', 'community', 'next_steps']
-SCENES = {'diet_advice', 'product_analysis', 'ingredient_analysis', 'product_comparison', 'diet_history'}
+SCENES = {'diet_advice', 'product_analysis', 'ingredient_analysis', 'product_comparison', 'diet_history', 'switch_impact'}
 
 
 def _connect():
@@ -329,9 +329,18 @@ def attach_report(reply, context, subjects=(), *, scene=None):
     profiles = load_profiles([s.get('formula_id') for s in subjects if s.get('result_stage') != 'provisional'])
     products = product_evidence(subjects, profiles)
     comparisons = compare_products(products)
+    from services.guardian_task_knowledge import nutrition_pairs, question_pool
+    nutrition = nutrition_pairs(comparisons, pet.get('animal_type')) if comparisons else None
     community = community_evidence(pet, products)
     basics = pet_summary(pet)
-    narration = summarize(basics, products, comparisons, community, scene)
+    narration = summarize(basics, products, comparisons, community, scene) if not nutrition else {
+        'summary': ('已按同版本六维画像对比两款配方；营养优势和观察点见下方，结构分值不等于营养含量。'
+                    if any(pair['status'] == 'comparable' for pair in comparisons) else
+                    '产品资料或计算版本不一致，暂时不能给出双方优势及换粮变化。'),
+        'community': '以下为独立的社区记录，仅供参考。' if community['items'] else '暂无相关社区记录。',
+        'mode': 'nutrition_rules', 'source_ids': []}
+    if nutrition:
+        narration['feeding'] = '以下按两款配方的实际差值整理营养优势与日常观察点，是否适合仍需结合宠物的实际耐受。'
     if any(p['status'] == 'provisional' for p in products):
         if '初算' not in narration['summary']:
             narration['summary'] = '初算待核对。' + narration['summary']
@@ -346,9 +355,13 @@ def attach_report(reply, context, subjects=(), *, scene=None):
         'community': {**community, 'text': narration['community']},
         'next_steps': {'prompt': (result.get('health_analysis') or {}).get('prompt') or
                       ('可以继续询问具体关注点。' if products else '补充当前粮款或上传配料表后，可以继续分析。'),
-                       'interaction': deepcopy(reply.get('interaction')), 'actions': deepcopy(result.get('actions') or [])},
+                       'interaction': deepcopy(reply.get('interaction')), 'actions': deepcopy(result.get('actions') or []),
+                       'switch_plan': deepcopy(result.get('switch_plan'))},
         'coverage_note': (result.get('health_analysis') or {}).get('coverage_note') or '',
         'generation': {k: narration[k] for k in ('mode', 'model', 'source_ids') if k in narration},
     }
     result['guardian_report'] = report
+    if nutrition:
+        report['feeding']['task_nutrition'] = nutrition
+        report['next_steps']['questions'] = question_pool(' → '.join(p['label'] for p in products[:2]), 'nutrition')
     return reply

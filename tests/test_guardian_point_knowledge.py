@@ -40,7 +40,7 @@ def test_source_batch_provenance_parameterized_sql_no_legacy_and_balanced_provid
     with patch.object(points,'_connect',return_value=conn):
         result=qa.retrieve(qa.plan_query("蛋白' OR 1=1 --",PET))
     sql,params=cur.execute.call_args.args
-    assert 'knowledge_point_source' in sql and 'knowledge_import_batch' in sql
+    assert 'knowledge_point_source_detail' in sql and 'knowledge_import_batch' in sql
     assert "b.status='success'" in sql and 'k.source_provider=b.provider' in sql
     assert 'kd_problem_guides' not in sql and 'knowledge_base' not in sql
     assert 'OR 1=1 --' not in sql and sql.index('ORDER BY')<sql.index('LIMIT')

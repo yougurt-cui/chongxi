@@ -292,6 +292,16 @@ def handle_food_flow(user_id, conversation, message, state, context, interaction
     analysis['risk_models_current'] = (risks or {}).get(comparison_id) if comparison_id else None
     flow["comparison"] = comparison
 
+    def with_impact(reply):
+        from services.guardian_report_service import attach_report
+        subjects = [
+            {'formula_id': comparison_id, 'portrait': portraits.get(comparison_id) or {},
+             'label': original_label, 'roles': ['current']},
+            {'formula_id': selected['formula_id'], 'portrait': portraits.get(selected['formula_id']) or {},
+             'label': selected.get('label') or selected['product_name'], 'roles': ['target']},
+        ]
+        return attach_report(reply, context, subjects, scene='switch_impact')
+
     def factor_ready():
         factor = comparison['factor_evidence']
         return (factor.get('status') in {'ready', 'partial'}
@@ -325,8 +335,8 @@ def handle_food_flow(user_id, conversation, message, state, context, interaction
             for risk in analysis.get('risk_models', []):
                 text += '\n' + ('软便' if risk['kind'] == 'soft_stool' else '黑下巴') + '结构风险参考：' + str(risk.get('relative_risk_level') or '等级暂无') + '（非患病概率）。'
         text += '\n确定要换到这款时，可以继续查看换粮安排；已经实际开始吃，也可以直接告诉我。'
-        return {**card(text, flow, food_analysis=analysis, food_comparison=comparison), 'response_type': 'text_or_select',
-                'interaction': {'slot': 'food_flow_action', 'options': [{'label': '看看怎么换粮', 'value': 'switch_plan'}, {'label': '重新选粮', 'value': 'restart'}]}}
+        return with_impact({**card(text, flow, food_analysis=analysis, food_comparison=comparison), 'response_type': 'text_or_select',
+                'interaction': {'slot': 'food_flow_action', 'options': [{'label': '看看怎么换粮', 'value': 'switch_plan'}, {'label': '重新选粮', 'value': 'restart'}]}})
     plan = {"steps": ["确认目标主粮适用阶段及包装喂食说明。", "保留原粮，逐步引入目标粮，期间避免同时增加其他新食物。",
                        "记录食欲、精神、便便形态及呕吐情况；出现异常先暂停推进并联系兽医。"],
             "confirmation": "已经开始吃后，请回复“已经开始吃这款”；完全换好后可以回复“已经换好了”。"}
@@ -346,4 +356,4 @@ def handle_food_flow(user_id, conversation, message, state, context, interaction
         stage = selected.get("life_stage")
         stage_label = {"adult": "成猫", "kitten": "幼猫", "senior": "老年猫", "all": "全阶段", "all_stages": "全阶段"}.get(stage, stage or "资料未提供")
         text += "\n年龄未填写，本次未按年龄筛选，请核对目标粮适用阶段：" + stage_label + "。"
-    return card(text, flow, food_comparison=comparison, food_analysis=analysis, switch_plan=plan)
+    return with_impact(card(text, flow, food_comparison=comparison, food_analysis=analysis, switch_plan=plan))

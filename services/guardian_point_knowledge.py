@@ -15,7 +15,7 @@ import pymysql
 from app_config import get_mysql_config
 
 logger = logging.getLogger(__name__)
-SOURCE_TABLE = 'knowledge_point_source'
+SOURCE_TABLE = 'knowledge_point_source_detail'
 REVIEW_NOTE = '以下内容由 AI 知识资料整合，尚未专业验证，仅供养宠参考。'
 DICTIONARIES = ('dict_breed', 'dict_life_stage', 'dict_user_need', 'dict_knowledge_topic')
 PROVIDERS = {'deepseek', 'qwen', 'doubao', 'file'}
@@ -181,7 +181,7 @@ def retrieve(plan):
                 parts.append('JSON_CONTAINS(k.need_codes,%s) * 4'); values.append(json.dumps(code))
             score = ' + '.join(parts)
             cur.execute(f'''SELECT k.*,b.model AS source_model,b.task_id,
-                ({score}) AS relevance FROM {source}.knowledge_point_source k
+                ({score}) AS relevance FROM {source}.knowledge_point_source_detail k
                 JOIN {source}.knowledge_import_batch b ON b.id=k.batch_id
                 WHERE b.status='success' AND k.source_provider=b.provider
                   AND JSON_UNQUOTE(JSON_EXTRACT(k.standardization_meta,'$.status'))='success'
