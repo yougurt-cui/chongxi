@@ -675,6 +675,36 @@ def _prepare_saved_food_analysis(message: str, state: dict[str, Any], context: d
     mentions_current = bool(CURRENT_FOOD_ANALYSIS_RE.search(message))
     mentions_history = bool(HISTORY_FOOD_ANALYSIS_RE.search(message))
 
+    # Older pet profiles may contain only the brand/name. Resolve an exact,
+    # unique catalogue identity before treating a saved food as unavailable.
+    if mentions_current and current and not current_formula_id:
+        brand, name = current.get('brand'), current.get('product_name')
+        normalize = lambda value: re.sub(r'\s+', '', str(value or '')).casefold()
+        matches = {}
+        if brand and name:
+            try:
+                candidates = list_standard_product_candidates(brand, product=name, limit=100)
+            except pymysql.MySQLError:
+                candidates = []
+            for candidate in candidates:
+                if (candidate.get('formula_id')
+                        and normalize(candidate.get('brand')) == normalize(brand)
+                        and normalize(candidate.get('product_name')) == normalize(name)
+                        and (not current.get('product_id')
+                             or candidate.get('product_id') == current['product_id'])):
+                    matches[int(candidate['formula_id'])] = candidate
+        if len(matches) == 1:
+            current_formula_id, selected = next(iter(matches.items()))
+            current.update(formula_id=current_formula_id, product_id=selected.get('product_id'),
+                           catalog_key=f'formula:{current_formula_id}')
+        elif not mentions_history:
+            # The existing named-food flow asks for a version when ambiguous.
+            slots['food_name'] = ' '.join(filter(None, (brand, name)))
+            slots.pop('catalog_key', None)
+            context.pop('food_analysis_scope', None)
+            context['food_analysis'] = None
+            return
+
     if mentions_current and mentions_history:
         records = [item for item in history if not item.get('is_current')]
         context['food_analysis_scope'] = 'current_vs_history'
