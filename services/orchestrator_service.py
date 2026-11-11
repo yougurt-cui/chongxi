@@ -856,7 +856,8 @@ def _check_formula_profile(output: dict[str, Any]) -> CheckResult:
                 )
                 if _is_non_empty(resolved_product_key):
                     product_key = resolved_product_key
-                risk_rows = _fetch_risk_result_rows(cursor, product_key)
+                risk_rows = _fetch_risk_result_rows(cursor, product_key,
+                    batch_id=_get_output_value(output, "batch_id"))
     except Exception as exc:
         return CheckResult(False, NODE_FAILED, f"配方画像结果表检查失败: {exc}")
 
@@ -1042,20 +1043,24 @@ def _fetch_first_sku_feature_input_row(
     return None, None
 
 
-def _fetch_risk_result_rows(cursor: pymysql.cursors.DictCursor, product_key: Any) -> list[dict[str, Any]]:
+def _fetch_risk_result_rows(cursor: pymysql.cursors.DictCursor, product_key: Any, *, batch_id: Any = None) -> list[dict[str, Any]]:
     if not _is_non_empty(product_key):
         return []
+    batch_clause = " AND batch_id = %s" if _is_non_empty(batch_id) else ""
+    params = [str(product_key)]
+    if batch_clause:
+        params.append(str(batch_id))
     cursor.execute(
-        """
+        f"""
         SELECT sku_id, sku_name, brand_name, feature_version, score_model_version,
                history_percentile, history_risk_level,
                current_pool_percentile, current_pool_risk_level,
                final_risk_type, reason_tags, calculated_at
         FROM sku_risk_score_result
-        WHERE sku_id = %s
+        WHERE sku_id = %s{batch_clause}
         ORDER BY calculated_at DESC
         """,
-        (str(product_key),),
+        tuple(params),
     )
     return list(cursor.fetchall() or [])
 
