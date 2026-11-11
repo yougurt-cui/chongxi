@@ -1460,6 +1460,20 @@ td b{color:var(--cx-text)!important}
     try {
       const response = await fetch('/api/workbench-auth/me', { cache: 'no-store' });
       const data = await response.json();
+      // Workbench staff access is independent of enterprise subscriptions and
+      // any company left in localStorage by an earlier enterprise login.
+      if (response.ok && ['data_admin', 'member'].includes(data.user?.role)) {
+        const user = data.user;
+        const name = user.name || user.username || '工作台用户';
+        document.getElementById('accountCompany').textContent = name;
+        document.getElementById('accountAvatar').textContent = name.slice(0, 1);
+        const alert = document.getElementById('subscriptionAlert');
+        alert.className = 'subscription-alert paid';
+        alert.textContent = user.role === 'data_admin'
+          ? '✓ 管理员｜永久有效'
+          : '✓ 工作台成员｜内部访问';
+        return;
+      }
       const mappedCompany = data.user?.company;
       if (mappedCompany?.id) enterpriseSession.saveCompany(mappedCompany);
     } catch (_) {}
