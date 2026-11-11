@@ -1216,7 +1216,7 @@ document.addEventListener('DOMContentLoaded', () => {
 PAGE_INIT.expired = function(){
   const c = store.getCompany() || {};
   $('#expiredCompany').textContent = c.company_name || c.name || '—';
-  if (c.status === 'paid_expired'){
+  if ((c.account_status || c.status) === 'paid_expired'){
     $('#expiredIcon').textContent = '⏰';
     $('#expiredTitle').textContent = '服务已到期';
     $('#expiredDesc').textContent = '您的正式版订阅已到期，续费后可继续使用宠析全部能力。';
@@ -1850,19 +1850,37 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   updateTopUser();
 
-  // Staff accounts have already authenticated at the outer workbench.  Reuse
-  // that session and enter the administration area without a second login.
+  // Reuse staff authentication, but check the subscription before entering
+  // the product. Otherwise an expired account loops back from the product.
   try {
     const auth = await api('/api/workbench-auth/me');
     if (auth.user && ['data_admin', 'member'].includes(auth.user.role)){
-      const requested = location.hash.replace(/^#/, '').split('?')[0];
-      if (!requested || requested === 'login' || !requested.startsWith('admin-')){
-        window.location.replace('/brand-growth-engine.html');
-        return;
+      const mappedCompany = auth.user.company;
+      if (mappedCompany?.id){
+        store.setCompany(mappedCompany);
+        store.setCompanyId(mappedCompany.id);
+      }
+      const companyId = store.getCompanyId();
+      if (companyId){
+        const subscription = await api(`/api/account/subscription-status?company_id=${encodeURIComponent(companyId)}`);
+        if (subscription.ok && subscription.company){
+          store.setCompany(subscription.company);
+          store.setCompanyId(subscription.company.id);
+          const requested = location.hash.replace(/^#/, '').split('?')[0];
+          if (subscription.can_access === true && (!requested || requested === 'login')){
+            window.location.replace('/brand-growth-engine.html');
+            return;
+          }
+          if (subscription.can_access === false && (!requested || requested === 'login')){
+            navigate('login');
+            renderLoginStatus(subscription.company);
+            return;
+          }
+        }
       }
     }
   } catch(e){
-    // Public enterprise registration/login remains available without a staff session.
+    // Keep the portal available when authentication or subscription checks fail.
   }
 
   // 从URL参数获取company_id（新开窗口时传递登录状态）
