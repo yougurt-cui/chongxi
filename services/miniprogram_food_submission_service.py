@@ -282,6 +282,23 @@ def _customer_processing_stage(task_status, nodes):
     return stage
 
 
+def _failure_node(task, recognition_status):
+    stopped = task.get('task_status') in {'failed', 'need_review', 'waiting_input'}
+    if task.get('task_status') == 'cancelled':
+        return None
+    nodes = task.get('nodes') or []
+    statuses = ('failed', 'need_review', 'blocked') if stopped else ('failed', 'need_review')
+    for status in statuses:
+        failed = next((n for n in nodes if n.get('node_status') == status), None)
+        if failed:
+            return failed['node_code']
+    if recognition_status == 'unrecognized':
+        return 'ocr_formula'
+    if stopped:
+        return next((n['node_code'] for n in nodes if n.get('node_status') not in {'success', 'skipped'}), 'unknown')
+    return None
+
+
 def _sync_recognition(row: dict[str, Any], *, persist: bool = True) -> dict[str, Any]:
     if row.get("status") == "cancelled":
         return {**row, "processing_status": "cancelled", "processing_stage": "已撤销",
@@ -383,7 +400,7 @@ def _sync_recognition(row: dict[str, Any], *, persist: bool = True) -> dict[str,
                 )
         if persist:
             conn.commit()
-    stage = next((n for n in task.get("nodes", []) if n["node_status"] not in {"success", "skipped"}), {})
+    failure_node = _failure_node(task, recognition_status)
     # Detailed node errors remain in the admin task, not in the customer page.
     message = {
         "failed": "本次处理暂时未能完成，请稍后重试。已上传的照片和已完成的结果会保留。",
@@ -392,7 +409,7 @@ def _sync_recognition(row: dict[str, Any], *, persist: bool = True) -> dict[str,
     }.get(task.get("task_status"), "")
     return {**row, **values, "processing_status": task.get("task_status"),
             "processing_stage": _customer_processing_stage(task.get("task_status"), task.get("nodes", [])),
-            "processing_message": message,
+            "processing_message": message, "failure_node": failure_node,
             "result_available": result_ready if versioned else task.get("task_status") == "done" and recognition_status == "success",
             "result_id": result_bundle.get('result_id'), "result_stage": result_bundle.get('result_stage'),
             "result_updating": result_bundle.get('updating', False), "calculation_result": result_bundle,
@@ -403,6 +420,12 @@ def _serialize(row: dict[str, Any], images: list[dict[str, Any]] | None = None) 
     from services.submission_notifications import public_config
     feedback = _recognition_feedback(row)
     row = {**row, "recognition_status": feedback["recognition_status"]}
+    failure_node = row.get("failure_node") or {
+        "unrecognized": "ocr_formula", "failed": "unknown", "needs_review": "unknown",
+    }.get(feedback["recognition_status"])
+    if (row.get("status") == "cancelled" or row.get("processing_status") == "cancelled"
+            or row.get("review_status") == "rejected" or row.get("result_available")):
+        failure_node = None
     item = {
         "id": row.get("id"),
         "claimed_brand": row.get("claimed_brand") or "",
@@ -432,6 +455,7 @@ def _serialize(row: dict[str, Any], images: list[dict[str, Any]] | None = None) 
         "created_at": str(row.get("created_at") or ""),
         "updated_at": str(row.get("updated_at") or ""),
         **feedback,
+        "failure_node": failure_node,
     }
     if images is not None:
         item["images"] = [
