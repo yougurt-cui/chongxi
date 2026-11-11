@@ -282,23 +282,6 @@ def _customer_processing_stage(task_status, nodes):
     return stage
 
 
-def _failure_node(task, recognition_status):
-    stopped = task.get('task_status') in {'failed', 'need_review', 'waiting_input'}
-    if task.get('task_status') == 'cancelled':
-        return None
-    nodes = task.get('nodes') or []
-    statuses = ('failed', 'need_review', 'blocked') if stopped else ('failed', 'need_review')
-    for status in statuses:
-        failed = next((n for n in nodes if n.get('node_status') == status), None)
-        if failed:
-            return failed['node_code']
-    if recognition_status == 'unrecognized':
-        return 'ocr_formula'
-    if stopped:
-        return next((n['node_code'] for n in nodes if n.get('node_status') not in {'success', 'skipped'}), 'unknown')
-    return None
-
-
 def _sync_recognition(row: dict[str, Any], *, persist: bool = True) -> dict[str, Any]:
     if row.get("status") == "cancelled":
         return {**row, "processing_status": "cancelled", "processing_stage": "已撤销",
@@ -347,6 +330,28 @@ def _sync_recognition(row: dict[str, Any], *, persist: bool = True) -> dict[str,
     }
     with _connect() as conn:
         with conn.cursor() as cursor:
+            # OCR parsing persists nutrient rows separately; its task output
+            # does not necessarily contain a guarantee object. Read the rows
+            # for this upload so existing submissions also display nutrients.
+            source_id = output.get("source_id") or row.get("source_id")
+            if not output.get("guarantee") and source_id:
+                cursor.execute(
+                    """SELECT metric_name,operator_symbol,metric_value,metric_unit,basis
+                    FROM product_guarantee WHERE source_id=%s ORDER BY id""",
+                    (source_id,),
+                )
+                guarantee = {}
+                for nutrient in cursor.fetchall():
+                    if not nutrient.get("metric_name") or nutrient.get("metric_value") is None:
+                        continue
+                    operator = {">=": "≥", "<=": "≤"}.get(
+                        nutrient.get("operator_symbol"), nutrient.get("operator_symbol") or ""
+                    )
+                    basis = f"（{nutrient['basis']}）" if nutrient.get("basis") else ""
+                    guarantee[nutrient["metric_name"]] = (
+                        f"{operator}{nutrient['metric_value']}{nutrient.get('metric_unit') or ''}{basis}"
+                    )
+                values["guarantee_json"] = json.dumps(guarantee, ensure_ascii=False)
             # OCR fallback names can come from the upload filename. Prefer
             # the product identity that passed standardization or review.
             if node_statuses.get("product_standardize") == "success" and product.get("product_id"):
@@ -378,7 +383,7 @@ def _sync_recognition(row: dict[str, Any], *, persist: bool = True) -> dict[str,
                 )
         if persist:
             conn.commit()
-    failure_node = _failure_node(task, recognition_status)
+    stage = next((n for n in task.get("nodes", []) if n["node_status"] not in {"success", "skipped"}), {})
     # Detailed node errors remain in the admin task, not in the customer page.
     message = {
         "failed": "本次处理暂时未能完成，请稍后重试。已上传的照片和已完成的结果会保留。",
@@ -387,7 +392,7 @@ def _sync_recognition(row: dict[str, Any], *, persist: bool = True) -> dict[str,
     }.get(task.get("task_status"), "")
     return {**row, **values, "processing_status": task.get("task_status"),
             "processing_stage": _customer_processing_stage(task.get("task_status"), task.get("nodes", [])),
-            "processing_message": message, "failure_node": failure_node,
+            "processing_message": message,
             "result_available": result_ready if versioned else task.get("task_status") == "done" and recognition_status == "success",
             "result_id": result_bundle.get('result_id'), "result_stage": result_bundle.get('result_stage'),
             "result_updating": result_bundle.get('updating', False), "calculation_result": result_bundle,
@@ -398,12 +403,6 @@ def _serialize(row: dict[str, Any], images: list[dict[str, Any]] | None = None) 
     from services.submission_notifications import public_config
     feedback = _recognition_feedback(row)
     row = {**row, "recognition_status": feedback["recognition_status"]}
-    failure_node = row.get("failure_node") or {
-        "unrecognized": "ocr_formula", "failed": "unknown", "needs_review": "unknown",
-    }.get(feedback["recognition_status"])
-    if (row.get("status") == "cancelled" or row.get("processing_status") == "cancelled"
-            or row.get("review_status") == "rejected" or row.get("result_available")):
-        failure_node = None
     item = {
         "id": row.get("id"),
         "claimed_brand": row.get("claimed_brand") or "",
@@ -433,7 +432,6 @@ def _serialize(row: dict[str, Any], images: list[dict[str, Any]] | None = None) 
         "created_at": str(row.get("created_at") or ""),
         "updated_at": str(row.get("updated_at") or ""),
         **feedback,
-        "failure_node": failure_node,
     }
     if images is not None:
         item["images"] = [
