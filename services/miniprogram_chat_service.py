@@ -37,6 +37,7 @@ from services import guardian_daily_status_service as daily_status
 from services.miniprogram_daily_record_service import normalize_client_records
 from services.guardian_recommendation_presentation import alternatives_requested
 from services import guardian_knowledge_service as knowledge_qa
+from services import guardian_ingredient_assembly_service as ingredient_assembly
 from services import guardian_photo_scene as photo_scene
 from services.miniprogram_pet_image_service import chat_photo_facts
 from services import guardian_subject_service as subjects
@@ -1723,7 +1724,8 @@ def handle_message(user_id: Any, conversation_id: Any, payload: dict[str, Any]) 
     if external_subject:
         state['slots']['_external_subject'] = external_subject
     scene, photos, photo_subject = _resolve_scene(user_id, conversation, state, message, photos, prior_photo,
-        external_subject, client_context, allow_text=not (attachments or interaction or ambiguous or subject_choice))
+        external_subject, client_context, allow_text=not (attachments or interaction or ambiguous or subject_choice
+            or ingredient_assembly.is_request(message, state, conversation.get('pet_id'))))
     if scene and photos:
         ambiguous = False
         if has_photo or photo_subject != previous_subject:
@@ -1742,6 +1744,8 @@ def handle_message(user_id: Any, conversation_id: Any, payload: dict[str, Any]) 
     # workflow changes, other animals and urgent symptoms keep their usual routes.
     typed_guide = (not interaction and not attachments and not diet_entry and not client_context.get('entry_point')
                    and guide and message and not supplied_name and not requested_flow(message) and not SOFT_STOOL_PAUSE_RE.search(message)
+                   and not (ingredient_assembly.CURRENT.search(message)
+                            and ingredient_assembly.is_request(message, state, conversation.get('pet_id')))
                    and not daily_status.requested(message, state) and not _should_route_soft_stool(message, state)
                    and not (guide.get('failure_node') == 'catalog_missing' and health_flow.named_request(message)
                             and re.search(r'对比|比较|该不该买|值得买吗', message)))
@@ -1756,7 +1760,16 @@ def handle_message(user_id: Any, conversation_id: Any, payload: dict[str, Any]) 
                   interaction=recorded_interaction,attachments=attachments,
                   result={"turn_no": state["turn_count"] + 1, "sequence_no": 0})
     question_message_id = question_message_id or user_message['id']
-    if direct_scene:
+    ingredient_reply = None
+    if (not interaction and not attachments and not ambiguous and not external_subject
+            and not guide_active and not subjects.urgent_message(message)
+            and ingredient_assembly.is_request(message, state, conversation.get('pet_id'))):
+        ingredient_context = _build_context(user_id, conversation, state, attachments, client_context)
+        ingredient_reply = ingredient_assembly.handle_question(
+            message, ingredient_context, state, conversation.get('pet_id'))
+    if ingredient_reply is not None:
+        reply = ingredient_reply
+    elif direct_scene:
         reply = _scene_reply(user_id, conversation, message, state, scene, photos, external_subject, question_message_id)
         if photos and not state.get('current_step') and not state['slots'].get(SOFT_STOOL_STATE_SLOT):
             state['slots'][photo_scene.SLOT] = {'turn': state['turn_count'], 'pet_id': conversation.get('pet_id'),
