@@ -165,7 +165,7 @@ def compare_portraits(current, target):
         if burden and (new > .65 or new - old > .10):
             result['shortcomings'].append({**evidence, 'text': f'目标粮的{label}' + ('比原粮更高' if new > old else '仍偏高')})
         elif not burden and (new <= .25 or new > .75):
-            result['shortcomings'].append({**evidence, 'text': f'目标粮的{label}' + ('偏低' if new <= .25 else '较高，不能视为越高越适合，恢复期需核对变化幅度')})
+            result['shortcomings'].append({**evidence, 'text': f'目标粮的{label}' + ('偏低' if new <= .25 else '评分较高，仅凭这一项不能判断实际适应情况')})
     result['status'] = 'partial' if result['missing_dimensions'] else 'ready'
     return result
 

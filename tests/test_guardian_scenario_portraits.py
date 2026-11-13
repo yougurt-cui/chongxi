@@ -122,6 +122,7 @@ class PortraitTest(unittest.TestCase):
         self.assertTrue(any(r['dimension'] == 'fat' for r in result['complements']))
         self.assertTrue(any(r['dimension'] == 'carbohydrate' for r in result['shortcomings']))
         self.assertIn('不表示建议混喂', portraits.portrait_comparison_text(result))
+        self.assertNotIn('恢复期', portraits.portrait_comparison_text(result))
 
     def test_missing_and_wrong_version_do_not_generate_relationships(self):
         a = build_portrait(features())

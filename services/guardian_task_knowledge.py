@@ -93,7 +93,8 @@ def summarize_health(query, rows):
     response = client.chat.completions.create(model=cfg['model'], temperature=.1, max_tokens=3300,
         response_format={'type': 'json_object'}, messages=[{'role': 'system', 'content': HEALTH_SYSTEM},
         {'role': 'user', 'content': json.dumps({'question': query, 'knowledge': rows}, ensure_ascii=False)}], **options)
-    groups = json.loads(response.choices[0].message.content).get('groups')
+    from services.guardian_response_format import compact_health_details
+    groups = compact_health_details(json.loads(response.choices[0].message.content).get('groups'))
     if not isinstance(groups, list) or not 1 <= len(groups) <= 10:
         raise ValueError('Invalid health groups')
     ids = {row['id'] for row in rows}

@@ -45,6 +45,11 @@ def test_two_separate_analyses_resolve_exact_formula_ids_without_model():
     assert ctx.decide('比较前面两款粮',m)['action']=='clarify'
 
 
+def test_health_effect_question_does_not_repeat_the_comparison_report():
+    with patch.object(ctx,'_model',side_effect=AssertionError('unnecessary route model')):
+        assert ctx.decide('这两款粮里，哪款肯定能解决便臭？',seed())['action']=='synthesize'
+
+
 def test_memory_keeps_prior_health_and_product_evidence_across_long_unrelated_chat():
     m=seed()
     for i in range(7,65):ctx.remember(m,msg(i,'无关话题'))
@@ -131,6 +136,7 @@ def test_dynamic_questions_use_current_answer_and_context_and_fallback_is_safe()
         ctx.contextual_questions(reply,'比较前面两款',seed())
     assert len(reply['result']['guardian_report']['next_steps']['questions'])==6
     assert model.call_args.args[1]['history']
+    assert model.call_args.args[1]['current_products']==[]
     saved=deepcopy(reply)
     with patch.object(ctx,'_model',side_effect=TimeoutError):ctx.contextual_questions(reply,'继续',seed())
     assert reply==saved
@@ -194,6 +200,54 @@ def test_synthesis_never_uses_previous_synthesis_as_independent_evidence():
     evidence=model.call_args.args[1]['evidence']
     assert prior['id'] not in {e['id'] for e in evidence}
     assert f'{1:032x}' in {e['id'] for e in evidence}
+
+
+def test_focused_old_card_excludes_unselected_product_reports_and_keeps_correction():
+    m=seed();m['source_id']=f'{2:032x}'
+    ctx.remember(m,msg(9,'更正：便臭是在换粮后开始的',role='user'))
+    with patch.object(ctx,'_model',return_value=answer_payload()) as model:
+        reply=ctx.answer('怎样核对寄生虫的可能？',m,{'action':'resume'},chat._default_state('c'))
+    ids={e['id'] for e in model.call_args.args[1]['evidence']}
+    assert {f'{2:032x}',f'{9:032x}'} <= ids
+    assert not {f'{4:032x}',f'{6:032x}'} & ids
+    assert reply['reply']==answer_payload()['conclusion']
+    assert reply['result']['context_answer']['reasons']==answer_payload()['reasons']
+
+
+def test_product_followup_keeps_numeric_comparison_without_unrelated_health_card():
+    m=seed();source=msg(8,'两款粮益生元相同')
+    source['result']['guardian_report']={'feeding':{'comparisons':[{
+        'left_label':'粮11','right_label':'粮22','status':'comparable','dimensions':[
+            {'title':'益生元支持','status':'comparable','left':{'score':1.56,'scale_max':5},
+             'right':{'score':1.56,'scale_max':5},'delta':0}]}]}}
+    ctx.remember(m,source);m['source_id']=source['id']
+    payload=answer_payload();payload['reasons'][0]['source_ids']=[source['id']]
+    with patch.object(ctx,'_model',return_value=payload) as model:
+        reply=ctx.answer('先关注哪个区别？',m,{'action':'continue'},chat._default_state('c'))
+    assert reply['result']['context_answer']['status']=='answered'
+    evidence=model.call_args.args[1]['evidence']
+    assert not {f'{1:032x}',f'{2:032x}'} & {e['id'] for e in evidence}
+    dimension=next(e for e in evidence if e['id']==source['id'])['evidence']['comparisons'][0]['dimensions'][0]
+    assert dimension['left_score']==dimension['right_score']==1.56 and dimension['delta']==0
+
+
+@pytest.mark.parametrize('questions',[
+    ['怎样记录？','怎样记录?','要补充什么？'],
+    ['最可能是什么原因？','要补充什么？','怎样记录？'],
+    ['怎样记录？','要补充什么？','粮款全名'*8+'怎样比较？'],
+])
+def test_redundant_or_overlong_questions_are_rejected(questions):
+    output=answer_payload();output['questions']=questions
+    with patch.object(ctx,'_model',return_value=output):
+        reply=ctx.answer('最可能是什么原因',seed(),{'action':'synthesize'},chat._default_state('c'))
+    assert reply['result']['context_answer']['status']=='unavailable'
+
+
+def test_hidden_audit_fields_are_still_checked_for_unsupported_certainty():
+    output=answer_payload();output['reasons'][0]['text']='一定是新粮导致'
+    with patch.object(ctx,'_model',return_value=output):
+        reply=ctx.answer('最可能是什么原因',seed(),{'action':'synthesize'},chat._default_state('c'))
+    assert reply['result']['context_answer']['status']=='unavailable'
 
 
 def test_new_topic_clears_pending_flow_but_keeps_memory():
