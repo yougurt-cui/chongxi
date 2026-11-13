@@ -78,6 +78,7 @@ git pull --ff-only origin "$REMOTE_BRANCH"
   services/guardian_knowledge_service.py \
   services/guardian_point_knowledge.py \
   services/guardian_task_knowledge.py \
+  services/guardian_conversation_context.py \
   services/guardian_knowledge_cards.py \
   services/pipeline_service.py \
   adapters/catfood_ingredient_adapter.py \

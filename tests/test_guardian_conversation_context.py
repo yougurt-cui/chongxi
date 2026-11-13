@@ -1,0 +1,215 @@
+import json
+from copy import deepcopy
+from contextlib import ExitStack
+from unittest.mock import MagicMock, patch
+
+import pytest
+from services import guardian_conversation_context as ctx
+from services import miniprogram_chat_service as chat
+
+CONV = dict(id='c',pet_id='cat',profile_species='cat',profile_age=24)
+
+
+def memory():
+    return ctx.empty('owner', CONV)
+
+
+def msg(i, text, *, role='assistant', fid=None, health=False):
+    result = {'turn_no':i,'intent':'food_analysis'}
+    if fid:
+        result['health_analysis'] = {'subjects':[{'formula_id':fid,'label':f'粮{fid}','roles':['named'],'findings':['结构评分仅作参考']}]}
+    if health:
+        result['health_knowledge'] = {'groups':[{'cause':'饮食变化','source_ids':[1]}], 'questions':['如何核对换粮时间？']}
+    return dict(id=f'{i:032x}',role=role,content=text,result=result,created_at=f'2026-11-13 12:{i:02d}:00')
+
+
+def seed():
+    m=memory()
+    for e in [msg(1,'便臭比换粮早三天',role='user'),msg(2,'可能涉及饮食、消化等原因',health=True),
+              msg(3,'分析粮11',role='user'),msg(4,'粮11的结构评分',fid=11),
+              msg(5,'分析粮22',role='user'),msg(6,'粮22的结构评分',fid=22)]:
+        ctx.remember(m,e)
+    return m
+
+
+def test_two_separate_analyses_resolve_exact_formula_ids_without_model():
+    m=seed()
+    with patch.object(ctx,'_model',side_effect=AssertionError('unnecessary model')):
+        decision=ctx.decide('帮我对比一下前面两款粮',m)
+    assert decision['product_ids']==[11,22]
+    assert decision['source_ids']==[f'{4:032x}',f'{6:032x}']
+    assert ctx.decide('比较前面两款粮',memory()) is None
+    m['products']=m['products'][:1]
+    assert ctx.decide('比较前面两款粮',m)['action']=='clarify'
+    ctx.remember(m,msg(7,'粮33',fid=33));ctx.remember(m,msg(8,'粮44',fid=44))
+    assert ctx.decide('比较前面两款粮',m)['action']=='clarify'
+
+
+def test_memory_keeps_prior_health_and_product_evidence_across_long_unrelated_chat():
+    m=seed()
+    for i in range(7,65):ctx.remember(m,msg(i,'无关话题'))
+    assert {e['id'] for e in m['events']} >= {f'{i:032x}' for i in [1,2,4,6]}
+    assert len(m['events'])<=54
+    external=msg(70,'另一只狗的情况',fid=33);external['result']['context_scope']='external';ctx.remember(m,external)
+    assert not any(p['formula_id']==33 for p in m['products'])
+
+
+def db(rows, source=None):
+    conn=MagicMock();cur=conn.__enter__.return_value.cursor.return_value.__enter__.return_value
+    cur.fetchall.return_value=rows;cur.fetchone.return_value=source
+    return conn,cur
+
+
+def test_load_checks_scope_owner_source_question_and_parameterized_sql():
+    source=msg(2,'旧健康卡',health=True);source['result_json']=json.dumps(source.pop('result'))
+    conn,cur=db([],source)
+    state={'slots':{ctx.SLOT:{**seed(),'pet_id':'another-pet'}}}
+    m=ctx.load(lambda:conn,'owner',CONV,state,source['id'],'如何核对换粮时间？')
+    assert not m['products'] and len(m['events'])==1
+    sql,params=cur.execute.call_args.args
+    assert params==(source['id'],'owner','c') and 'user_id=%s' in sql and 'conversation_id=%s' in sql
+    with pytest.raises(ValueError):ctx.load(lambda:conn,'owner',CONV,state,source['id'],'伪造追问')
+    cur.fetchone.return_value=None
+    with pytest.raises(ValueError):ctx.load(lambda:conn,'owner',CONV,state,'x','如何核对换粮时间？')
+
+
+@pytest.mark.parametrize('reply',[
+    {'action':'compare','product_ids':[11,999],'source_ids':[]},
+    {'action':'continue','product_ids':[],'source_ids':['forged']},
+    {'action':'invalid'},
+])
+def test_model_route_never_invents_sources_or_products(reply):
+    with patch.object(ctx,'_model',return_value=reply):
+        assert ctx.decide('那前面说的怎么样',seed())['action']=='unavailable'
+
+
+def test_return_to_topic_and_explicit_source_are_forwarded():
+    m=seed();m['source_id']=f'{2:032x}'
+    with patch.object(ctx,'_model',return_value={'action':'resume','source_ids':[f'{2:032x}'],'product_ids':[]}) as model:
+        assert ctx.decide('如何核对换粮时间？',m)['action']=='resume'
+    assert model.call_args.args[1]['source_id']==f'{2:032x}'
+    with patch.object(ctx,'_model',return_value={'action':'new'}):
+        assert ctx.decide('那我们换个话题聊玩具',seed())['action']=='new'
+
+
+def answer_payload():
+    return {'conclusion':'目前不能确定最主要原因，先核对便臭与饮食变化的时间。',
+            'reasons':[{'text':'你说便臭早于换粮，不能仅凭两款粮的评分认定换粮导致。','source_ids':[f'{1:032x}']}],
+            'missing':['便臭持续多久？'],'questions':['如何记录便便变化？','哪些表现需要补充？','如何核对换粮时间？']}
+
+
+def test_attribution_uses_user_facts_health_knowledge_and_both_analyses():
+    m=seed();state=chat._default_state('c')
+    question='结合我刚说的，你觉得便臭最大的可能是什么？'
+    decision=ctx.decide(question,m)
+    assert decision['action']=='synthesize'
+    with patch.object(ctx,'_model',return_value=answer_payload()) as model:
+        reply=ctx.answer(question,m,decision,state)
+    assert reply['result']['context_answer']['status']=='answered'
+    ids={e['id'] for e in model.call_args.args[1]['evidence']}
+    assert ids >= {f'{i:032x}' for i in [1,2,4,6]}
+    assert state['turn_count']==1 and m['focus']['source_ids']==[f'{1:032x}']
+    assert json.loads(json.dumps(reply))==reply
+
+
+@pytest.mark.parametrize('bad', ['source','dose','certainty','question','empty'])
+def test_answer_validation_fails_closed(bad):
+    output=answer_payload()
+    if bad=='source':output['reasons'][0]['source_ids']=['unknown']
+    if bad=='dose':output['conclusion']='每天给10毫克'
+    if bad=='certainty':output['conclusion']='一定是这个粮导致'
+    if bad=='question':output['questions']=[{}]
+    if bad=='empty':output['reasons']=[]
+    with patch.object(ctx,'_model',return_value=output):
+        reply=ctx.answer('最可能是什么原因',seed(),{'action':'synthesize'},chat._default_state('c'))
+    assert reply['result']['context_answer']['status']=='unavailable'
+
+
+def test_dynamic_questions_use_current_answer_and_context_and_fallback_is_safe():
+    reply={'reply':'两款粮的对比结论','result':{'guardian_report':{'next_steps':{'questions':['原问题']}}}}
+    with patch.object(ctx,'_model',return_value={'questions':[f'问题{i}？' for i in range(6)]}) as model:
+        ctx.contextual_questions(reply,'比较前面两款',seed())
+    assert len(reply['result']['guardian_report']['next_steps']['questions'])==6
+    assert model.call_args.args[1]['history']
+    saved=deepcopy(reply)
+    with patch.object(ctx,'_model',side_effect=TimeoutError):ctx.contextual_questions(reply,'继续',seed())
+    assert reply==saved
+
+
+def test_real_orchestrator_comparison_bypasses_name_search_and_preserves_history():
+    state=chat._default_state('c');m=seed();saved=[]
+    def save(**kw):
+        item=dict(id=f'{100+len(saved):032x}',**kw);saved.append(item);return item
+    with ExitStack() as stack:
+        def mock(obj,key,**kw):return stack.enter_context(patch.object(obj,key,**kw))
+        mock(chat,'_get_conversation',return_value=CONV);mock(chat,'_load_state',return_value=state)
+        persist=mock(chat,'_save_state');mock(chat,'_save_message',side_effect=save);mock(chat,'_connect',return_value=MagicMock())
+        mock(ctx,'load',return_value=m);mock(ctx,'contextual_questions')
+        mock(chat,'_resolve_scene',return_value=(None,[],None))
+        mock(chat,'_build_context',return_value={'pet_profile':{'animal_type':'cat'}})
+        loader=mock(chat,'_food_analysis_by_formula',side_effect=lambda fid:{'product':{'formula_id':fid},'product_portrait':{'formula_id':fid}})
+        mock(chat,'_recognize_guardian_turn',side_effect=AssertionError('must not resolve names again'))
+        build=mock(chat.health_flow,'build_analysis_reply',return_value={'reply':'已比较两款粮','result':{'health_analysis':{'subjects':[]}}})
+        result=chat.handle_message('owner','c',{'message':'帮我对比一下前面两款粮'})
+    assert [c.args[0] for c in loader.call_args_list]==[11,22]
+    assert [s['food_analysis']['product']['formula_id'] for s in build.call_args.args[3]['named_food_analyses']]==[11,22]
+    assert result['message']['result']['context_resolution']['formula_ids']==[11,22]
+    assert len(saved)==2 and state['slots'][ctx.SLOT]['events'][-1]['id']==saved[-1]['id']
+    persist.assert_called_once()
+
+
+def test_missing_portrait_does_not_silently_drop_one_side():
+    with patch.object(chat,'_food_analysis_by_formula',return_value=None):
+        reply=chat._context_comparison('owner',CONV,chat._default_state('c'),seed(),
+            {'action':'compare','product_ids':[11,22],'source_ids':[]},{})
+    assert reply['result']['context_answer']['status']=='missing_product_evidence'
+
+
+def test_urgent_symptoms_never_enter_context_reasoning():
+    state=chat._default_state('c');state['slots'][ctx.SLOT]=seed()
+    with ExitStack() as stack:
+        def mock(obj,key,**kw):return stack.enter_context(patch.object(obj,key,**kw))
+        mock(chat,'_get_conversation',return_value=CONV);mock(chat,'_load_state',return_value=state)
+        mock(chat,'_save_state');mock(chat,'_connect',return_value=MagicMock())
+        mock(chat,'_save_message',side_effect=lambda **kw:dict(id='a'*32,**kw))
+        mock(ctx,'load',return_value=seed());decide=mock(ctx,'decide');mock(ctx,'contextual_questions')
+        mock(chat,'_resolve_scene',return_value=({'task':'health_consult','needs':[]},[],None))
+        mock(chat,'_scene_reply',return_value={'reply':'立即就医','response_type':'risk_alert','result':{}})
+        r=chat.handle_message('owner','c',{'message':'结合刚才的情况，它现在呼吸困难了'})
+        decide.assert_not_called();assert r['message']['response_type']=='risk_alert'
+        assert len(state['slots'][ctx.SLOT]['products'])==2
+
+
+def test_emergency_scene_works_without_client_capabilities_or_fresh_topic():
+    state=chat._default_state('c');state.update(primary_intent='food_analysis',current_step='food_analysis_usage')
+    scene,_,_=chat._resolve_scene('owner',CONV,state,'结合刚才的情况，它呼吸困难了',[],{},None,{},allow_text=False)
+    assert scene['task']=='health_consult'
+
+
+def test_synthesis_never_uses_previous_synthesis_as_independent_evidence():
+    m=seed();prior=msg(10,'旧推测');prior['result']={'pipeline':'conversation_context','context_answer':answer_payload()}
+    ctx.remember(m,prior);m['source_id']=prior['id']
+    with patch.object(ctx,'_model',return_value=answer_payload()) as model:
+        ctx.answer('有什么依据',m,{'action':'continue'},chat._default_state('c'))
+    evidence=model.call_args.args[1]['evidence']
+    assert prior['id'] not in {e['id'] for e in evidence}
+    assert f'{1:032x}' in {e['id'] for e in evidence}
+
+
+def test_new_topic_clears_pending_flow_but_keeps_memory():
+    state=chat._default_state('c');state.update(primary_intent='food_analysis',current_step=chat.health_flow.CONFIRM_SLOT)
+    state['slots'][chat.health_flow.STATE_KEY]={'stage':'pending'}
+    with ExitStack() as stack:
+        def mock(obj,key,**kw):return stack.enter_context(patch.object(obj,key,**kw))
+        mock(chat,'_get_conversation',return_value=CONV);mock(chat,'_load_state',return_value=state)
+        mock(chat,'_save_state');mock(chat,'_connect',return_value=MagicMock())
+        mock(chat,'_save_message',side_effect=lambda **kw:dict(id='b'*32,**kw))
+        mock(ctx,'load',return_value=seed());mock(ctx,'decide',return_value={'action':'new'});mock(ctx,'contextual_questions')
+        def scene(*args,**kw):
+            assert state['primary_intent'] is None and state['current_step'] is None
+            assert state['slots'][chat.health_flow.STATE_KEY]['stage']=='superseded'
+            return {'task':'pet_knowledge','needs':[]},[],None
+        mock(chat,'_resolve_scene',side_effect=scene)
+        mock(chat,'_scene_reply',return_value={'reply':'玩具的新话题','result':{}})
+        chat.handle_message('owner','c',{'message':'那换个话题聊玩具'})
+    assert len(state['slots'][ctx.SLOT]['products'])==2

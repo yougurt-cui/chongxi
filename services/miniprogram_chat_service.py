@@ -38,6 +38,7 @@ from services.miniprogram_daily_record_service import normalize_client_records
 from services.guardian_recommendation_presentation import alternatives_requested
 from services import guardian_knowledge_service as knowledge_qa
 from services import guardian_ingredient_assembly_service as ingredient_assembly
+from services import guardian_conversation_context as dialogue_context
 from services import guardian_photo_scene as photo_scene
 from services.miniprogram_pet_image_service import chat_photo_facts
 from services import guardian_subject_service as subjects
@@ -1576,6 +1577,9 @@ def _scene_history(user_id, conversation_id):
 
 
 def _resolve_scene(user_id, conversation, state, message, photos, previous, subject, client_context, *, allow_text):
+    # Emergency triage must also work for old clients and interrupted workflows.
+    if subjects.urgent_message(message):
+        return {'task': 'health_consult', 'needs': [], 'related': True}, photos, subject
     followup = (allow_text and previous.get('pet_id') == conversation.get('pet_id')
                 and previous.get('subject') == subject and previous.get('turn') == state['turn_count']
                 and bool(previous.get('photos')))
@@ -1650,6 +1654,26 @@ def _scene_reply(user_id, conversation, message, state, scene, photos, subject, 
     return {'reply': text, 'response_type': kind, 'result': {'intent': intent, 'turn_no': state['turn_count'], 'sequence_no': 1}}
 
 
+def _context_comparison(user_id, conversation, state, memory, decision, client_context):
+    selected = {p['formula_id']: p for p in memory['products']}
+    analyses = []
+    for fid in decision['product_ids']:
+        product = selected[fid]
+        analysis = _food_analysis_by_formula(fid)
+        if not analysis or not analysis.get('product_portrait'):
+            return dialogue_context._reply(state, f'已找到前面讨论的“{product["label"]}”，但目前缺少可核验的有效配方画像，暂时无法完成这次对比。',
+                                           'missing_product_evidence', action='compare')
+        analyses.append({'label': product['label'], 'food_analysis': analysis})
+    context = _build_context(user_id, conversation, state, [], client_context)
+    context.update(food_analysis_scope='named_comparison', named_food_analyses=analyses)
+    state.update(primary_intent='food_analysis', current_step=None, turn_count=state['turn_count'] + 1)
+    reply = health_flow.build_analysis_reply(user_id, conversation, state, context)
+    reply['result'].update(turn_no=state['turn_count'], sequence_no=1,
+        context_resolution={'action': 'compare', 'formula_ids': decision['product_ids'], 'source_ids': decision['source_ids']})
+    memory['focus'] = {'question': '对比' + '与'.join(p['label'] for p in analyses), 'source_ids': decision['source_ids']}
+    return reply
+
+
 def handle_message(user_id: Any, conversation_id: Any, payload: dict[str, Any]) -> dict[str, Any]:
     user_id, conversation_id = _clean(user_id,128), _clean(conversation_id,32)
     conversation = _get_conversation(user_id, conversation_id)
@@ -1661,6 +1685,9 @@ def handle_message(user_id: Any, conversation_id: Any, payload: dict[str, Any]) 
     if not message and not interaction and not attachments:
         raise ValueError("message、interaction、attachments 至少提供一项")
     state = _load_state(conversation_id)
+    source_id = payload.get('source_message_id')
+    if source_id is not None and (not isinstance(source_id, str) or not re.fullmatch(r'[a-f0-9]{32}', source_id)):
+        raise ValueError('追问来源标识无效')
     slots = state['slots']
     prior_photo = slots.pop(photo_scene.SLOT, None) or {}
     if any(not isinstance(a, dict) for a in attachments):
@@ -1723,8 +1750,30 @@ def handle_message(user_id: Any, conversation_id: Any, payload: dict[str, Any]) 
         state = {**_default_state(conversation_id), 'turn_count': state['turn_count']}
     if external_subject:
         state['slots']['_external_subject'] = external_subject
+    context_memory = dialogue_context.from_state(user_id, conversation, state)
+    context_decision = None
+    if not external_subject and not ambiguous and not subjects.urgent_message(message):
+        try:
+            context_memory = dialogue_context.load(_connect, user_id, conversation, state, source_id, message)
+        except pymysql.MySQLError:
+            if source_id:
+                raise ValueError('暂时无法读取追问来源，请稍后重试。')
+        if (message and not interaction and not attachments and not subjects.urgent_message(message)
+                and not requested_flow(message) and not client_context.get('entry_point')
+                and not ingredient_assembly.is_request(message, state, conversation.get('pet_id'))
+                and not state['slots'].get(ingredient_guide.SLOT)
+                and (source_id or dialogue_context.SYNTHESIS.search(message) or not _should_route_soft_stool(message, state))):
+            context_decision = dialogue_context.decide(message, context_memory)
+            if context_decision and context_decision['action'] == 'new':
+                _pause_soft_stool(state)
+                state.update(primary_intent=None, secondary_intent=None, current_step=None,
+                             missing_slots=[], followup_count=0)
+                snapshot = state['slots'].get(health_flow.STATE_KEY) or {}
+                if snapshot.get('stage') == 'pending':
+                    snapshot['stage'] = 'superseded'
+                context_decision = None
     scene, photos, photo_subject = _resolve_scene(user_id, conversation, state, message, photos, prior_photo,
-        external_subject, client_context, allow_text=not (attachments or interaction or ambiguous or subject_choice
+        external_subject, client_context, allow_text=not (context_decision or attachments or interaction or ambiguous or subject_choice
             or ingredient_assembly.is_request(message, state, conversation.get('pet_id'))))
     if scene and photos:
         ambiguous = False
@@ -1758,8 +1807,12 @@ def handle_message(user_id: Any, conversation_id: Any, payload: dict[str, Any]) 
         interaction = health_flow.confirmation_interaction(message, state)
     user_message = _save_message(conversation_id=conversation_id,user_id=user_id,role="user",content=recorded_message,
                   interaction=recorded_interaction,attachments=attachments,
-                  result={"turn_no": state["turn_count"] + 1, "sequence_no": 0})
+                  result={"turn_no": state["turn_count"] + 1, "sequence_no": 0,
+                          'context_scope': 'external' if external_subject or ambiguous else 'profile',
+                          **({'source_message_id': source_id} if source_id else {})})
     question_message_id = question_message_id or user_message['id']
+    if not external_subject and not ambiguous:
+        dialogue_context.remember(context_memory, user_message)
     ingredient_reply = None
     if (not interaction and not attachments and not ambiguous and not external_subject
             and not guide_active and not subjects.urgent_message(message)
@@ -1767,7 +1820,13 @@ def handle_message(user_id: Any, conversation_id: Any, payload: dict[str, Any]) 
         ingredient_context = _build_context(user_id, conversation, state, attachments, client_context)
         ingredient_reply = ingredient_assembly.handle_question(
             message, ingredient_context, state, conversation.get('pet_id'))
-    if ingredient_reply is not None:
+    if context_decision and not (direct_scene or ambiguous or external_subject):
+        _pause_soft_stool(state)
+        if context_decision['action'] == 'compare':
+            reply = _context_comparison(user_id, conversation, state, context_memory, context_decision, client_context)
+        else:
+            reply = dialogue_context.answer(message, context_memory, context_decision, state)
+    elif ingredient_reply is not None:
         reply = ingredient_reply
     elif direct_scene:
         reply = _scene_reply(user_id, conversation, message, state, scene, photos, external_subject, question_message_id)
@@ -1859,18 +1918,30 @@ def handle_message(user_id: Any, conversation_id: Any, payload: dict[str, Any]) 
     if scene:
         for bubble in reply.get('messages') or [reply]:
             bubble.setdefault('result', {})['scene'] = {'task': scene['task'], 'needs': scene['needs']}
-    _save_state(state)
+    if not external_subject and not ambiguous:
+        dialogue_context.contextual_questions(reply, message, context_memory)
     with _connect() as conn:
         with conn.cursor() as cursor:
             cursor.execute(f"UPDATE {CONVERSATION_TABLE} SET primary_intent=%s,updated_at=%s WHERE id=%s AND user_id=%s",
                            (state.get("primary_intent"), _now(), conversation_id, user_id))
         conn.commit()
     saved_messages = []
+    if not external_subject and not ambiguous:
+        dialogue_context.remember(context_memory, user_message)
     for item in reply.get("messages") or [reply]:
+        item['result'] = dict(item.get('result') or reply.get('result') or {})
+        item['result']['context_scope'] = 'external' if external_subject or ambiguous else 'profile'
         saved = _save_message(conversation_id=conversation_id, user_id=user_id, role="assistant",
                              content=item["reply"], response_type=item.get("response_type"),
                              interaction=item.get("interaction"), result=item.get("result") or reply.get("result"),
                              model_name=(item.get("result") or {}).get("model_name"))
         saved["disclaimer"] = reply.get("disclaimer")
         saved_messages.append(saved)
+        if not external_subject and not ambiguous:
+            dialogue_context.remember(context_memory, saved)
+    if not external_subject and not ambiguous:
+        if not context_decision and saved_messages:
+            context_memory['focus'] = {'question': message[:300], 'source_ids': [saved_messages[-1]['id']]}
+        state['slots'][dialogue_context.SLOT] = context_memory
+    _save_state(state)
     return {"ok": True, "message": saved_messages[-1], "messages": saved_messages}
