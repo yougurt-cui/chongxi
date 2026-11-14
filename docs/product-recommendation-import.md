@@ -96,3 +96,27 @@ python scripts/merge_product_recommendations.py --apply
 ```bash
 python -m pytest tests/test_product_recommendation_pipeline.py tests/test_product_recommendation_import.py tests/test_model_knowledge_importer.py tests/test_health_import_routing.py tests/test_knowledge_source_assembly.py tests/test_multi_model_result_count.py -q
 ```
+
+## 截图社区推荐 Excel
+
+```bash
+python scripts/import_screenshot_product_recommendations.py --input /path/to/source.xlsx --dry-run
+python scripts/import_screenshot_product_recommendations.py --input /path/to/source.xlsx --apply
+```
+
+支持“产品推荐关系”工作表的14列截图模板。保留种类、品种、需求编码、生命阶段、品牌、商品名、推荐关系、推荐比例、场景排名、参考经验人数、截图问题、来源图片和原始核验状态。来源文件 SHA256、工作表及原始行号随 `sources`/`raw_json` 保存，重复输入同一文件幂等。
+
+`entity_level=brand` 表示仅品牌推荐（商品名“未明确”），独立于具体产品的身份键；`entity_level=product` 表示原表有商品名称，不等于已核验具体 SKU。“不限”年龄保留 `unspecified`，不推断为全阶段适用。品牌别名与产品名称只进行现有保守规范化，不进行模糊配方合并。
+
+新增 `recommendation_ratio`（0–1）、`scene_rank`、`experience_count`、`source_images` 和 `community_signals`。前三项只有同组单一社区来源时直接填值，多社区来源时置空并在 `community_signals` 中分别保留，不取均值、最大值或累计人数。这些字段是原截图的社区推荐信号，不是验证有效率或营养适用性。没有模型名称的社区来源不计入 `model_count`。
+
+现有六维表在首次写入时只做上述字段的增量扩展；普通模型来源记录的内容哈希保持不变。解析异常时整批不写入，人工审核过的已有分组仍受原冲突保护。
+
+```sql
+SELECT entity_level, species_code, breed_code, life_stage_code, need_code,
+       brand, product_name, recommendation_ratio, scene_rank, experience_count,
+       source_images, community_signals
+FROM chongxi_product.product_recommendation
+WHERE community_signals IS NOT NULL
+ORDER BY need_code, scene_rank;
+```

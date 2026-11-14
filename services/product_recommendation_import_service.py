@@ -39,8 +39,21 @@ def ensure_tables():
         cur.execute('SHOW COLUMNS FROM product_recommendation')
         required = {'recommendation_key', 'input_hash', 'product_key', 'breed_code',
                     'life_stage_code', 'need_code', 'sources', 'raw_json'}
-        if not required <= {r['Field'] for r in cur.fetchall()}:
+        columns = {r['Field'] for r in cur.fetchall()}
+        if not required <= columns:
             raise ValueError('检测到旧表结构，请先运行 scripts/merge_product_recommendations.py --apply 迁移；不自动覆盖旧表')
+        additions = {
+            'entity_level': "VARCHAR(16) NOT NULL DEFAULT 'product' COMMENT 'product产品级、brand仅品牌级'",
+            'recommendation_ratio': 'DECIMAL(7,6) NULL',
+            'scene_rank': 'INT UNSIGNED NULL',
+            'experience_count': 'BIGINT UNSIGNED NULL',
+            'community_signals': "JSON NULL COMMENT '社区截图信号，逐来源保留，不取平均或累计人数'",
+            'source_images': 'JSON NULL'}
+        missing = [f'ADD COLUMN `{name}` {definition}' for name, definition in additions.items() if name not in columns]
+        if missing:
+            try: cur.execute('ALTER TABLE product_recommendation ' + ','.join(missing))
+            except pymysql.err.OperationalError as exc:
+                if exc.args[0] != 1060: raise
         conn.commit()
 
 
@@ -83,7 +96,7 @@ def group_records(records):
         group = grouped[key]
         originals = group.pop('_records')
         recommendations = group.pop('_recommendations')
-        sources = []
+        sources, community = [], []
         reasons, descriptions, relations, models = set(), set(), set(), set()
         for signature in sorted(recommendations):
             source_key, recommendation = recommendations[signature]
@@ -96,14 +109,29 @@ def group_records(records):
                 'source_model': source.get('source_model'), 'source_provider': source.get('source_provider'),
                 'source_question': ctx.get('question'), 'source_evidence_status': ctx.get('evidence_status'),
                 'recommendation': recommendation, 'original_source': source})
+            if source.get('source_type') == 'community_screenshot':
+                metadata = {k: source.get(k) for k in ('source_type', 'source_file', 'file_sha256',
+                    'source_sheet', 'source_row', 'source_image', 'need_name',
+                    'recommendation_ratio', 'scene_rank', 'experience_count')}
+                sources[-1].update(metadata)
+                community.append({**metadata, 'source_key': source_key, 'source_question': ctx.get('question')})
             if recommendation.get('recommendation_reason'): reasons.add(recommendation['recommendation_reason'])
             if record.get('product_description'): descriptions.add(record['product_description'])
             relations.add(recommendation['relation_type'])
-            models.add((source.get('source_provider'), source.get('source_model')))
+            if source.get('source_model'): models.add((source.get('source_provider'), source['source_model']))
         group.update(product_description='\n\n'.join(sorted(descriptions)),
                      recommendation_reason='\n\n'.join(sorted(reasons)), relation_types=sorted(relations),
                      source_count=len(originals), model_count=len(models), sources=sources,
                      raw_json={'records': [originals[k] for k in sorted(originals)]})
+        if community:
+            signals = {digest(signal): signal for signal in community}
+            community = [signals[k] for k in sorted(signals)]
+            group.update(entity_level=next(iter(originals.values())).get('entity_level', 'product'),
+                         community_signals=community,
+                         source_images=sorted({signal['source_image'] for signal in community if signal['source_image']}))
+            # Ratios/ranks describe a single screenshot scene; never average or cherry-pick across scenes.
+            for field in ('recommendation_ratio', 'scene_rank', 'experience_count'):
+                group[field] = community[0][field] if len(community) == 1 else None
         result.append(group)
     return result
 
@@ -136,10 +164,12 @@ def write_record(conn, record, table='product_recommendation'):
             raise ValueError('合并内容发生变化且存在人工审核记录，请人工处理后重试')
         columns = ('recommendation_key', 'product_key', *GROUP_FIELDS, 'brand', 'product_name',
                    'product_description', 'recommendation_reason', 'relation_types', 'source_count',
-                   'model_count', 'sources', 'raw_json', 'input_hash')
-        json_columns = {'relation_types', 'sources', 'raw_json'}
+                   'model_count', 'sources', 'raw_json', 'input_hash', 'entity_level',
+                   'recommendation_ratio', 'scene_rank', 'experience_count', 'community_signals', 'source_images')
+        json_columns = {'relation_types', 'sources', 'raw_json', 'community_signals', 'source_images'}
         values = [fingerprint if k == 'input_hash' else
-                  json.dumps(record[k], ensure_ascii=False) if k in json_columns else record[k] for k in columns]
+                  json.dumps(record[k], ensure_ascii=False) if k in json_columns and record.get(k) is not None
+                  else record.get(k, 'product' if k == 'entity_level' else None) for k in columns]
         if previous:
             cur.execute(f'UPDATE {table} SET ' +
                         ','.join(f'{col}=%s' for col in columns) + ' WHERE id=%s', (*values, previous['id']))
