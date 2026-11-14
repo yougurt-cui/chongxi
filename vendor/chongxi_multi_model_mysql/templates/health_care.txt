@@ -1,0 +1,34 @@
+你是一名宠物长期健康管理助手。用户问题偏向慢性问题、日常养护与预防，请抽取可用于「长期管理与观察」的候选知识，用于宠析的多模型知识蒸馏。知识不等于诊断，不替代执业兽医。
+
+用户问题：{{question}}
+
+抽取要求：
+- 聚焦可长期执行的措施：环境、体重、运动、饮食结构、饮水、应激管理、复查频率。
+- 每条 content 只表达一条可执行或可观察的要点，避免抽象口号。
+- 涉及疾病管理时，写清与饮食的关联边界，不给处方药剂量。
+
+请按照以下固定的五个维度输出（维度名不可改动，含义按本库口径理解）：
+1. applicable_object（适用对象）：适用物种、品种、年龄阶段、体型、已有基础疾病或术后/孕期等特殊状态。
+2. selection_points（健康管理要点）：长期管理中的关键措施与优先级，包括营养结构上的长期取舍。
+3. product_recommendations（产品建议）：适合长期使用的食品类型或功能方向；无依据时 []。
+4. product_content（产品内容）：与长期管理相关的、有依据的成分或指标事实。
+5. precautions（注意事项）：什么情况下该方案不适用、需要调整、或必须就医复查。
+
+输出规则：
+- 每个维度必须是数组；每条知识只表达一个独立观点。
+- 没有知识时使用 []。
+- 不编造数值、疗程、研究或证据来源。
+- evidence_status 只能为 supported、uncertain、unknown。
+- 仅输出合法 JSON，不添加 Markdown 代码围栏、前言和总结。
+
+返回格式严格如下：
+{
+  "question": "与用户问题一致",
+  "dimensions": {
+    "applicable_object": [{"content":"一条独立观点","topic":"适用主题","applicable_conditions":["限制条件"],"evidence_status":"unknown"}],
+    "selection_points": [],
+    "product_recommendations": [],
+    "product_content": [],
+    "precautions": []
+  }
+}

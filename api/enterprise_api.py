@@ -340,3 +340,89 @@ def search_merchant_wechat_users():
 # Parent blueprint owns /api, so the publishing package needs no separate server.
 from api.merchant_publish_api import merchant_publish_api
 enterprise_api.register_blueprint(merchant_publish_api)
+
+
+# Multi-model collection shares the existing workbench authentication boundary.
+def _multi_model_result(operation, status=200):
+    try:
+        return jsonify({'ok': True, **operation()}), status
+    except ValueError as exc:
+        from services.multi_model_prompt_service import TemplateConflict
+        return jsonify({'ok': False, 'message': str(exc)}), 409 if isinstance(exc, TemplateConflict) else 400
+    except LookupError as exc:
+        return jsonify({'ok': False, 'message': str(exc)}), 404
+    except Exception:
+        from flask import current_app
+        current_app.logger.exception('multi_model_collection_failed')
+        return jsonify({'ok': False, 'message': '采集操作失败，请检查数据库连接或任务日志'}), 500
+
+
+@enterprise_api.get('/admin/multi-model/templates')
+@admin_required
+def multi_model_templates():
+    from services import multi_model_prompt_service as prompts
+    return _multi_model_result(prompts.list_templates)
+
+
+def _save_multi_template(base_code=None, template_code=None):
+    from services import multi_model_prompt_service as prompts
+    return _multi_model_result(lambda: prompts.save_template(
+        request.get_json(silent=True), base_code=base_code, template_code=template_code))
+
+
+@enterprise_api.post('/admin/multi-model/templates')
+@admin_required
+def multi_model_create_template():
+    return _save_multi_template()
+
+
+@enterprise_api.put('/admin/multi-model/templates/<base_code>/<template_code>')
+@admin_required
+def multi_model_update_template(base_code, template_code):
+    return _save_multi_template(base_code, template_code)
+
+
+@enterprise_api.get('/admin/multi-model/config')
+@admin_required
+def multi_model_config():
+    from services import multi_model_knowledge_service as multi
+    return _multi_model_result(multi.configuration)
+
+
+@enterprise_api.get('/admin/multi-model/tasks')
+@admin_required
+def multi_model_tasks():
+    from services import multi_model_knowledge_service as multi
+    return _multi_model_result(lambda: multi.list_tasks(request.args.get('page', 1),
+        request.args.get('knowledge_base', '').strip()))
+
+
+@enterprise_api.post('/admin/multi-model/tasks')
+@admin_required
+def multi_model_submit():
+    from services import multi_model_knowledge_service as multi
+    return _multi_model_result(lambda: multi.submit(request.get_json(silent=True)), 202)
+
+
+@enterprise_api.get('/admin/multi-model/tasks/<int:task_id>')
+@admin_required
+def multi_model_detail(task_id):
+    from services import multi_model_knowledge_service as multi
+    return _multi_model_result(lambda: multi.task_detail(task_id))
+
+
+@enterprise_api.post('/admin/multi-model/tasks/<int:task_id>/import')
+@admin_required
+def multi_model_import(task_id):
+    from services import model_knowledge_import_service as importer
+    return _multi_model_result(lambda: importer.import_task(task_id))
+
+
+@enterprise_api.get('/admin/model-knowledge')
+@admin_required
+def model_knowledge_points():
+    from services import model_knowledge_import_service as importer
+    return _multi_model_result(lambda: importer.list_points(
+        page=request.args.get('page', 1), provider=request.args.get('provider', ''),
+        batch_id=request.args.get('batch_id', ''), query=request.args.get('q', '').strip(),
+        knowledge_base=request.args.get('knowledge_base', '').strip()))

@@ -1,0 +1,17 @@
+{
+  "question": "布偶猫有什么猫粮推荐吗",
+  "dimensions": {
+    "applicable_object": [
+      {"content":"适用对象包含 3-12 月龄布偶幼猫，该阶段处于快速生长发育阶段，肠胃相对娇嫩","topic":"生命阶段","applicable_conditions":["3-12 月龄布偶幼猫"],"evidence_status":"supported"}
+    ],
+    "selection_points": [
+      {"content":"幼龄布偶猫猫粮需要关注钙磷比例、DHA，满足骨骼发育需求","topic":"幼猫营养","applicable_conditions":["3-12 月龄布偶幼猫"],"evidence_status":"supported"},
+      {"content":"老年布偶猫可优先选择低脂、易消化、低磷配方猫粮","topic":"老年营养","applicable_conditions":["7 岁以上布偶猫"],"evidence_status":"supported"}
+    ],
+    "product_recommendations": [],
+    "product_content": [],
+    "precautions": [
+      {"content":"布偶猫更换猫粮建议采用 7-14 天逐步过渡方式","topic":"换粮操作","applicable_conditions":["布偶猫"],"evidence_status":"supported"}
+    ]
+  }
+}

@@ -417,7 +417,7 @@ def handle_question(user_id, conversation, message, state, *, report_scene=None,
                      missing_slots=[], followup_count=0, turn_count=state['turn_count'] + 1)
         state['slots'][STATE_KEY] = {'query': plan['query'], 'topics': plan['topics'],
             'pet_id': conversation.get('pet_id'), 'turn_no': state['turn_count'],
-            'external_subject': external_subject, 'source_table': 'health_knowledge_point'}
+            'external_subject': external_subject, 'source_table': 'health_knowledge_point_detail'}
         lines = [health['text']]
         for group in health['groups']:
             lines.append(group['cause'] + '\n' + group['mechanism'] + '\n伴随表现：' +

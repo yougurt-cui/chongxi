@@ -756,6 +756,79 @@
       .science-domain-fields-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .science-identity-snapshot { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     }
+    .kb-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+      margin-bottom: 18px;
+    }
+    .kb-card {
+      text-align: left;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 14px 16px;
+      cursor: pointer;
+      box-shadow: var(--shadow);
+      transition: border-color 0.15s ease, background 0.15s ease;
+    }
+    .kb-card:hover { border-color: #b9c7e6; }
+    .kb-card.active { border-color: var(--primary); background: #f4f8ff; }
+    .kb-card .kb-name {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 15px;
+      font-weight: 800;
+      color: #102236;
+    }
+    .kb-card .kb-tag {
+      margin-top: 6px;
+      font-size: 12px;
+      line-height: 1.5;
+      color: var(--muted);
+    }
+    .kb-card .kb-meta {
+      margin-top: 10px;
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--primary);
+    }
+    .kb-card.active .kb-meta { color: var(--primary); }
+    .kb-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--line);
+      flex: none;
+    }
+    .kb-card.active .kb-dot { background: var(--primary); }
+    .tpl-preview {
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      max-height: 340px;
+      overflow: auto;
+      margin: 8px 0 0;
+      padding: 12px;
+      background: var(--panel-soft);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      font-size: 12px;
+      line-height: 1.65;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+    .template-layout { display:grid; grid-template-columns:minmax(220px, 1fr) minmax(0, 2fr); gap:20px; }
+    .template-item { display:block; width:100%; text-align:left; margin-bottom:8px; padding:14px; border:1px solid var(--line); border-radius:8px; background:var(--panel); cursor:pointer; }
+    .template-item.active { border-color:var(--primary); background:#f4f8ff; }
+    .template-item small { display:block; margin-top:6px; color:var(--muted); }
+    #promptDescription { min-height:78px; }
+    .template-editor label { display:block; margin-bottom:14px; }
+    .template-editor input[type="text"], .template-editor textarea { width:100%; box-sizing:border-box; }
+    @media (max-width:820px) { .template-layout { grid-template-columns:1fr; } }
+    #multiTemplateSelect { padding: 0 10px; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
+    @media (max-width: 820px) {
+      .kb-grid { grid-template-columns: 1fr; }
+    }
   </style>
 </head>
 <body>
@@ -788,6 +861,7 @@
       <button id="contentOperationsTab" class="tab" type="button" data-tab="content-operations">内容运营</button>
       <button id="reportReviewTab" class="tab" type="button" data-tab="report">举报审核</button>
       <button id="ideaTab" class="tab" type="button" data-tab="idea">创意管理</button>
+      <button id="multiModelTab" class="tab" type="button" data-tab="multi-model">多模型知识采集</button>
       <button id="merchantTab" class="tab" type="button" data-tab="merchant">商家认证</button>
       <button id="enterpriseAdminTab" class="tab" type="button" data-tab="enterprise-admin">企业后台</button>
     </section>
@@ -1269,6 +1343,43 @@
 
       <div id="ideaCardContainer" class="idea-grid"></div>
       <div id="ideaEmpty" class="empty" style="display:none;">暂无创意内容，点击"新增创意"开始吧。</div>
+    </section>
+
+    <section id="multiModelSection" class="section" hidden>
+      <section class="toolbar"><div><div class="title">多模型知识采集</div><div class="muted">先选知识库，再输入问题并挑选提示词模版；每个模型回答保存为批次，按适用条件、主题和正文逐条拆解入库。</div></div><div class="row-actions"><button id="multiCollectionView" class="button" type="button" aria-pressed="true">采集任务</button><button id="multiTemplatesView" class="button secondary" type="button" aria-pressed="false">提示词模板管理</button><button id="multiRefresh" class="button secondary" type="button">刷新任务</button></div></section>
+      <div id="multiCollectionPanel">
+      <div id="kbGrid" class="kb-grid" role="tablist" aria-label="选择知识库"></div>
+      <section class="card" style="padding:20px;margin-bottom:20px;">
+        <div><div class="title" id="kbTitle">正在读取知识库…</div><div class="muted" id="kbDescription" style="margin-top:6px;line-height:1.6;"></div></div>
+        <form id="multiForm">
+          <label style="display:block;margin-top:16px;"><span class="field-label">问题 *</span><textarea id="multiQuestion" required maxlength="2000" placeholder="选择一个知识库后填写问题" style="width:100%;min-height:90px;box-sizing:border-box;"></textarea></label>
+          <label style="display:block;margin-top:16px;"><span class="field-label">提示词模版 *</span><select id="multiTemplateSelect" required style="width:100%;min-height:38px;"></select><span id="multiTemplateDesc" class="muted" style="display:block;margin-top:6px;"></span></label>
+          <details style="margin-top:10px;"><summary class="muted">查看模版全文（保留 {{question}} 占位符）</summary><pre id="multiTemplatePreview" class="tpl-preview"></pre></details>
+          <fieldset style="margin:16px 0;border:1px solid var(--line,#ddd);border-radius:8px;padding:12px;"><legend>选择模型</legend><div id="multiProviders" class="row-actions">正在读取配置…</div></fieldset>
+          <label style="display:flex;gap:8px;align-items:center;margin-bottom:12px;"><input id="multiWebSearch" type="checkbox" checked /><span>启用模型内置联网搜索</span></label>
+          <p class="muted">联网时使用千问原生搜索、DeepSeek Pro 搜索模型。搜索与模型用量按提供商规则计费；来源链接不等于内容已审核。</p>
+          <div class="row-actions" style="margin-top:16px;"><button id="multiSubmit" class="button" type="submit" disabled>开始运行</button><span id="multiMessage" class="muted" role="status" aria-live="polite"></span></div>
+          <p class="muted">每次运行会调用所选模型并产生 API 用量。任务在后台执行，关闭页面不影响采集；再次点击会创建新任务。</p>
+        </form>
+      </section>
+      <section class="card"><div class="table-wrap"><table style="min-width:820px;"><thead><tr><th>任务</th><th>知识库</th><th>问题</th><th>状态</th><th>拆解条数</th><th>创建时间</th><th>操作</th></tr></thead><tbody id="multiRows"></tbody></table></div><div id="multiEmpty" class="empty" hidden>当前知识库下暂无采集任务。</div><div class="row-actions" style="padding:16px;"><button id="multiPrev" class="button secondary" type="button">上一页</button><span id="multiPage" class="muted"></span><button id="multiNext" class="button secondary" type="button">下一页</button></div></section>
+      <section id="multiDetail" class="card" style="padding:20px;margin-top:20px;" hidden><div class="title" id="multiDetailTitle"></div><div id="multiDetailBody"></div></section>
+      </div>
+      <section id="multiTemplatesPanel" class="card" style="padding:20px;" hidden>
+        <div class="toolbar" style="padding:0;"><div><div class="title">提示词模板管理</div><p class="muted">按知识库维护模板。保存后用于后续采集，已提交任务保留提交时的模板全文。</p></div><div class="row-actions"><button id="promptRefresh" class="button secondary" type="button">刷新模板列表</button><button id="promptNew" class="button" type="button">新增模板</button></div></div>
+        <label style="display:block;margin:16px 0;"><span class="field-label">所属知识库</span><select id="promptBase" aria-label="模板所属知识库"></select></label>
+        <div class="template-layout">
+          <div><div id="promptList" aria-label="提示词模板列表"></div><p id="promptListMessage" class="muted" role="status"></p></div>
+          <form id="promptForm" class="template-editor">
+            <div class="title" id="promptEditorTitle" style="margin-bottom:16px;">选择或新增模板</div>
+            <label><span class="field-label">模板名称 *</span><input id="promptTitle" type="text" required maxlength="80" placeholder="例如：肠道营养知识抽取" /></label>
+            <label><span class="field-label">用途说明</span><textarea id="promptDescription" maxlength="500" rows="2" placeholder="描述这个模板适合什么问题"></textarea></label>
+            <label><span class="field-label">提示词全文 *</span><textarea id="promptContent" required maxlength="30000" rows="20" spellcheck="false" style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;" placeholder="在模板中使用 {{question}} 插入本次问题"></textarea><span class="muted">须保留 {{question}} 占位符，最多 30,000 字。</span></label>
+            <div class="row-actions" style="margin:16px 0;"><label style="margin:0;"><input id="promptActive" type="checkbox" checked /> 启用</label><label style="margin:0;"><input id="promptDefault" type="checkbox" /> 设为该知识库默认模板</label></div>
+            <div class="row-actions"><button id="promptSave" class="button" type="submit">保存模板</button><button id="promptCopy" class="button secondary" type="button">复制为新模板</button><span id="promptMessage" class="muted" role="status" aria-live="polite"></span></div>
+          </form>
+        </div>
+      </section>
     </section>
 
     <section id="merchantSection" class="section" hidden>
@@ -3931,6 +4042,12 @@
 
     function switchTab(tab) {
       activeTab = tab;
+      if (tab === 'multi-model' && !window.location.hash.startsWith('#multi-model')) history.replaceState(null, '', multiView === 'templates' ? '#multi-model/templates' : '#multi-model');
+      else if (tab !== 'multi-model' && window.location.hash.startsWith('#multi-model')) history.replaceState(null, '', '#' + tab);
+      document.getElementById("multiModelTab").classList.toggle("active", tab === "multi-model");
+      document.getElementById("multiModelSection").hidden = tab !== "multi-model";
+      clearTimeout(multiPoll);
+      if (tab === "multi-model") loadMultiModel();
       nodeTab.classList.toggle("active", tab === "node");
       identityTab.classList.toggle("active", tab === "identity");
       diseaseTab.classList.toggle("active", tab === "disease");
@@ -4303,7 +4420,297 @@
       finally { button.disabled=false; }
     });
 
-    if (window.location.hash === "#merchant") switchTab("merchant");
+
+    const multiLabels = {qwen:"通义千问",doubao:"豆包",deepseek:"DeepSeek"};
+    const multiStates = {running:"处理中",completed:"已完成",partial_failed:"部分失败",failed:"失败",success:"成功",parse_failed:"解析失败",api_failed:"调用失败",pending:"待审核"};
+    const multiDimensions = {applicable_object:"适用对象",selection_points:"选粮要点",product_recommendations:"产品建议",product_content:"产品内容",precautions:"注意事项"};
+    let multiView = "collection";
+    let multiConfig = null, multiPage = 1, multiPoll = null, multiSelected = null, multiSelectedStatus = null, multiDetailVersion = 0, multiLoading = false, multiBase = null;
+    const multiEl = id => document.getElementById(id);
+    function multiBaseList() { return (multiConfig && multiConfig.knowledge_bases) || []; }
+    function currentBase() { return multiBaseList().find(b => b.code === multiBase) || null; }
+    function baseLabel(code) { const b = multiBaseList().find(x => x.code === code); return b ? b.label : (code || '—'); }
+    function canSubmit() {
+      const search = multiEl('multiWebSearch').checked;
+      return Boolean(currentBase()?.templates.length) && (multiConfig?.providers || []).some(p => p.ready && (!search || p.search_supported));
+    }
+    function renderMultiProviders() {
+      if (!multiConfig) return;
+      const search = multiEl('multiWebSearch').checked;
+      multiEl('multiProviders').innerHTML = multiConfig.providers.map(p => {
+        const enabled = p.ready && (!search || p.search_supported);
+        const model = search && p.search_supported ? p.search_model : p.model;
+        return `<label style="display:flex;gap:6px;align-items:center;"><input type="checkbox" name="multiProvider" value="${escapeHtml(p.name)}" ${enabled ? 'checked' : 'disabled'} /><span>${escapeHtml(multiLabels[p.name] || p.name)} · ${escapeHtml(model || '缺少文本模型 ID')}${p.key_configured ? '' : ' · 缺少密钥'}${search && !p.search_supported ? ' · 未适配内置搜索' : ''}</span></label>`;
+      }).join('');
+      multiEl('multiSubmit').disabled = !canSubmit();
+    }
+    function renderKnowledgeBases() {
+      const bases = multiBaseList();
+      multiEl('kbGrid').innerHTML = bases.map(b => `<button type="button" class="kb-card${b.code === multiBase ? ' active' : ''}" role="tab" aria-selected="${b.code === multiBase}" data-kb="${escapeHtml(b.code)}"><div class="kb-name"><span class="kb-dot"></span>${escapeHtml(b.label)}</div><div class="kb-tag">${escapeHtml(b.tagline || '')}</div><div class="kb-meta">${b.templates.length} 个模版</div></button>`).join('');
+      renderBasePanel();
+    }
+    function renderBasePanel() {
+      const base = currentBase();
+      if (!base) return;
+      multiEl('kbTitle').textContent = base.label;
+      multiEl('kbDescription').textContent = base.description || '';
+      multiEl('multiQuestion').placeholder = base.question_placeholder || '请填写问题';
+      const select = multiEl('multiTemplateSelect'), keep = select.value;
+      select.innerHTML = base.templates.map(t => `<option value="${escapeHtml(t.code)}">${escapeHtml(t.title)}</option>`).join('');
+      if (base.templates.some(t => t.code === keep)) select.value = keep;
+      renderTemplatePreview();
+    }
+    function renderTemplatePreview() {
+      const base = currentBase();
+      if (!base) return;
+      const picked = base.templates.find(t => t.code === multiEl('multiTemplateSelect').value) || base.templates[0];
+      multiEl('multiTemplateDesc').textContent = picked ? picked.description : '';
+      multiEl('multiTemplatePreview').textContent = picked ? picked.template : '';
+      multiEl('multiSubmit').disabled = !canSubmit();
+    }
+    function standardMappingHtml(point) {
+      const meta = point.standardization_meta || {};
+      const status = {success:'已标准化',failed:'标准化失败'}[meta.status] || '待标准化';
+      const mappings = [point];
+      return `<div style="min-width:240px;white-space:normal;"><strong>${escapeHtml(status)}</strong>${meta.model ? `<small> · ${escapeHtml(meta.model)}</small>` : ''}${meta.error ? `<p>${escapeHtml(meta.error)}</p>` : ''}${mappings.map(m => `<div style="margin-top:8px;"><div>${escapeHtml(m.original_condition || '未指定条件')}</div><div>物种 / 品种：${escapeHtml(m.species_code || '未确定')} / ${escapeHtml(m.breed_code || '未确定')}</div><div>阶段：${escapeHtml((m.life_stage_codes || []).join(' | ') || '未确定')}</div><div>需求：${escapeHtml((m.need_codes || []).join(' | ') || '未确定')}</div></div>`).join('')}</div>`;
+    }
+    function topicMappingHtml(point) {
+      const pairs = point.category_code ? [{category_code:point.category_code,topic_code:point.topic_code}] : [];
+      return pairs.length ? pairs.map(p => `<div style="min-width:180px;white-space:normal;">分类：${escapeHtml(p.category_code || '未确定')}<br>主题：${escapeHtml(p.topic_code || '未确定')}</div>`).join('') : '待映射';
+    }
+    function multiSearchHtml(metadata) {
+      const m = metadata || {status:'disabled',sources:[]};
+      const labels = {disabled:'未联网',searched:'服务端已执行搜索',no_sources:'已执行搜索，但未返回来源链接',not_confirmed:'已请求搜索，服务端未确认执行',failed:'联网调用失败'};
+      const sources = (m.sources || []).filter(source => { try { return ['https:','http:'].includes(new URL(source.url).protocol); } catch (_) { return false; } });
+      return `<p><strong>联网状态：</strong>${escapeHtml(labels[m.status] || m.status)} · ${sources.length} 个来源</p>` + (sources.length ? `<details><summary>查看搜索来源</summary><ul>${sources.map(source => `<li><a href="${escapeHtml(source.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(source.title || source.url)}</a></li>`).join('')}</ul></details>` : '');
+    }
+    async function loadMultiModel() {
+      if (multiLoading || multiView !== 'collection') return;
+      multiLoading = true;
+      clearTimeout(multiPoll);
+      try {
+        if (!multiConfig) {
+          multiConfig = await api('/api/admin/multi-model/config');
+          if (!multiConfig.knowledge_bases.some(b => b.code === multiBase)) multiBase = multiConfig.knowledge_base || (multiConfig.knowledge_bases[0] || {}).code || null;
+          renderMultiProviders();
+          renderKnowledgeBases();
+        }
+        const result = await api(`/api/admin/multi-model/tasks?page=${multiPage}&knowledge_base=${encodeURIComponent(multiBase || '')}`);
+        multiEl('multiRows').innerHTML = result.items.map(t => `<tr><td>#${t.id}</td><td>${escapeHtml(baseLabel(t.knowledge_base))}</td><td style="white-space:normal;max-width:360px;">${escapeHtml(t.question)}</td><td>${escapeHtml(multiStates[t.status] || t.status)}</td><td>${t.point_count}</td><td>${escapeHtml(t.created_at)}</td><td><button class="small-button secondary" type="button" data-multi-id="${t.id}">查看结果</button></td></tr>`).join('');
+        multiEl('multiEmpty').hidden = result.items.length > 0;
+        multiEl('multiPage').textContent = `第 ${multiPage} 页 · 共 ${result.total} 个任务`;
+        multiEl('multiPrev').disabled = multiPage <= 1;
+        multiEl('multiNext').disabled = multiPage * result.page_size >= result.total;
+        if (multiSelected && (!multiSelectedStatus || multiSelectedStatus === 'running')) await loadMultiDetail(multiSelected);
+        multiEl('multiMessage').textContent = '任务和结果已更新';
+      } catch (error) {
+        multiEl('multiMessage').textContent = error.message;
+      } finally {
+        multiLoading = false;
+        if (activeTab === 'multi-model' && multiView === 'collection') multiPoll = setTimeout(loadMultiModel, 5000);
+      }
+    }
+    async function loadMultiDetail(id) {
+      const version = ++multiDetailVersion;
+      const result = await api(`/api/admin/multi-model/tasks/${id}`);
+      if (version !== multiDetailVersion) return;
+      multiSelected = id;
+      multiSelectedStatus = result.task.status;
+      multiEl('multiDetail').hidden = false;
+      multiEl('multiDetailTitle').textContent = `任务 #${id} · ${baseLabel(result.task.knowledge_base)} · ${multiStates[result.task.status] || result.task.status}`;
+      const imported = result.knowledge_import || {batches: []};
+      const importCount = imported.batches.reduce((n,b) => n + Number(b.total_count || 0), 0);
+      const importHtml = `<section style="margin:16px 0;padding:12px;background:#f0f7ff;border-radius:8px;"><strong>独立知识库解析</strong><p>${escapeHtml(imported.database || multiConfig?.knowledge_database || 'chongxi_model_knowledge')} · 已导入 ${imported.batches.length} 个模型响应 / ${importCount} 条来源知识</p>${imported.error ? `<p>${escapeHtml(imported.error)}</p>` : ''}<button class="button secondary" type="button" data-import-task="${id}">解析 / 重试入新库</button><span id="modelImportMessage" role="status" style="margin-left:12px;"></span></section>`;
+      const points = result.points || [];
+      const pointRows = points.map(c => `<tr><td>#${c.batch_id}<br>${escapeHtml(multiLabels[c.source_provider || c.provider] || c.source_provider || c.provider)}</td><td>${standardMappingHtml(c)}</td><td>${topicMappingHtml(c)}</td><td style="white-space:pre-wrap;min-width:260px;">${escapeHtml(c.content)}</td></tr>`).join('');
+      multiEl('multiDetailBody').innerHTML = importHtml + `<p style="white-space:pre-wrap;">${escapeHtml(result.task.question)}</p><details><summary>本次提示词模板</summary><pre style="white-space:pre-wrap;overflow-wrap:anywhere;">${escapeHtml(result.task.template_text)}</pre></details>` + result.responses.map(r => `<div style="margin-top:16px;"><strong>批次 #${r.id} · ${escapeHtml(multiLabels[r.provider] || r.provider)} · ${escapeHtml(r.model_name)}</strong><p>${escapeHtml(multiStates[r.status] || r.status)} · 输入 Token ${r.prompt_tokens ?? '—'} / 输出 Token ${r.completion_tokens ?? '—'}</p>${multiSearchHtml(r.search_metadata)}${r.error_message || r.import_error ? `<p style="color:#b42318;white-space:pre-wrap;">${escapeHtml(r.error_message || r.import_error)}</p>` : ''}<details><summary>查看模型原始回答</summary><pre style="white-space:pre-wrap;overflow-wrap:anywhere;max-height:400px;overflow:auto;">${escapeHtml(r.raw_text || '暂无回答')}</pre></details></div>`).join('') + `<h3>拆解结果（${points.length}）</h3>` + (pointRows ? `<div class="table-wrap"><table><thead><tr><th>批次 / 模型</th><th>适用条件映射</th><th>知识分类 / 主题</th><th>正文</th></tr></thead><tbody>${pointRows}</tbody></table></div>` : '<p class="muted">暂无拆解内容；处理中任务稍后自动刷新。</p>');
+      if ((result.assembled_points || []).length) {
+        const categoryLabels = {pet_profile:'宠物画像',life_stage_nutrition:'生命阶段营养',digestive_tolerance:'消化耐受',food_selection:'选粮原则',product_recommendation:'产品推荐',product_suitability:'产品适配',product_overview:'产品信息'};
+        const mergedRows = result.assembled_points.map(p => `<tr><td>${escapeHtml(p.species_code)} / ${escapeHtml(p.breed_code)}<br>${escapeHtml(p.life_stage_code === 'all_stages' ? '全生命阶段' : p.life_stage_code)}</td><td>${escapeHtml(p.need_scene_name || p.need_scene_code || '未指定需求场景')}<br><small>${escapeHtml(p.need_scene_code || '')}</small></td><td>${escapeHtml(categoryLabels[p.category] || p.category)}</td><td style="white-space:pre-wrap;min-width:350px;">${escapeHtml(p.content)}${(p.summary_meta?.notes || []).length ? '<br><strong>分歧 / 待核验：</strong>' + escapeHtml(p.summary_meta.notes.join('；')) : ''}</td><td>${Number(p.source_count)} 条来源 / ${Number(p.model_count)} 个模型<details><summary>查看原文及模型来源</summary>${(p.sources || []).map(e => `<p style="white-space:pre-wrap;">${escapeHtml(e.content)}<br><small>${escapeHtml(e.sources.map(s => `${multiLabels[s.source_provider] || s.source_provider} · #${s.id}`).join('；'))}</small></p>`).join('')}</details></td></tr>`).join('');
+        multiEl('multiDetailBody').insertAdjacentHTML('beforeend', `<h3>按对象与分类合并总结（${result.assembled_points.length}）</h3><p class="muted">相同物种、品种、生命阶段、需求场景及分类合并为一行。大模型总结仍为候选知识，需审核。</p><div class="table-wrap"><table><thead><tr><th>物种 / 品种 / 生命阶段</th><th>需求场景</th><th>分类</th><th>合并总结</th><th>来源追溯</th></tr></thead><tbody>${mergedRows}</tbody></table></div>`);
+      }
+      if (result.health_structured) {
+        const healthTypes = {CAUSE:'可能原因',MECHANISM:'作用机制',MANIFESTATION:'伴随表现',CONDITION:'适用与判断条件',DEFINITION:'问题定义'};
+        const healthPoints = result.health_structured.points || [];
+        const healthRows = healthPoints.map(p => `<tr><td>${Number(p.source_count || 0)} 条原文<br>${Number(p.model_count || 0)} 个模型<details><summary>查看原始原因及来源</summary><pre style="white-space:pre-wrap;max-height:360px;overflow:auto;">${escapeHtml(JSON.stringify(p.sources || [], null, 2))}</pre></details></td><td>${escapeHtml(({cat:'猫',dog:'狗'})[p.species_code] || '物种待确认')}<br>${escapeHtml(p.breed_code || '品种待确认')}<br>${escapeHtml(({all_stages:'全生命阶段',kitten:'幼猫',puppy:'幼犬',adult:'成年',senior:'老年',neonatal:'新生期',weaning:'断奶过渡期'})[p.life_stage_code] || p.life_stage_code || '阶段待确认')}</td><td>${escapeHtml(p.issue_name || '问题待映射')}<br>${escapeHtml(p.category_name || '')} / ${escapeHtml(p.issue_code || '')}</td><td style="white-space:pre-wrap;min-width:260px;"><strong>原因分类：</strong>${escapeHtml(({diet:'饮食营养',feeding_behavior:'喂养行为',physiology:'生理因素',environment:'环境因素',disease:'疾病因素'})[p.cause_type] || p.cause_type || '未标注')}<br><strong>原因：</strong>${escapeHtml(p.cause || '')}<br><strong>机制：</strong>${escapeHtml(p.mechanism || '')}<br><span class="muted">${escapeHtml((p.summary_meta?.notes || []).join('；'))}</span></td><td style="white-space:pre-wrap;min-width:200px;">${escapeHtml((p.nutrition_factors || []).map(f => `${f.cause ? '【' + f.cause + '】' : ''}${f.factor} · ${f.direction}\n${f.relation || f.explanation || ''}${f.condition ? '\n适用条件：' + f.condition : ''}`).join('\n\n') || '无关联指标')}</td><td style="white-space:pre-wrap;min-width:260px;">伴随表现：${escapeHtml((p.manifestations || []).join('；') || '原文未明确')}<br>支持：${escapeHtml((p.verification?.supporting || []).join('；') || '原文未明确')}<br>削弱：${escapeHtml((p.verification?.opposing || []).join('；') || '原文未明确')}<br>待补充：${escapeHtml((p.verification?.required_information || []).join('；') || '原文未明确')}</td><td>${escapeHtml(p.review_status === 'pending' ? '待审核' : p.review_status)}</td></tr>`).join('');
+        multiEl('multiDetailBody').insertAdjacentHTML('beforeend', `<h3>健康知识结构化（${healthPoints.length}）</h3><p>按物种、品种、生命阶段、健康问题和原因分类合并。同类中的独立原因分别保留机制、判断依据和营养关联，均为待审核候选知识。</p>` + (healthRows ? `<div class="table-wrap"><table><thead><tr><th>来源 / 模型</th><th>物种 / 品种 / 生命阶段</th><th>健康分类 / 问题</th><th>原因及机制</th><th>关联营养指标</th><th>伴随表现及判断依据</th><th>审核状态</th></tr></thead><tbody>${healthRows}</tbody></table></div>` : '<p class="muted">尚无健康结构化结果；请等待解析完成或重试解析入库。</p>'));
+        const exclusions = result.health_structured.excluded_sources || [];
+        if (exclusions.length) multiEl('multiDetailBody').insertAdjacentHTML('beforeend', `<details><summary>未成链原始条目（${exclusions.length}）</summary>${exclusions.map(e => `<p>#${e.batch_id} · ${escapeHtml(e.source_id)}：${escapeHtml(e.reason)}</p>`).join('')}</details>`);
+      }
+    }
+    multiEl('multiDetailBody').addEventListener('click', async event => {
+      const button = event.target.closest('[data-import-task]');
+      if (!button) return;
+      button.disabled = true;
+      const message = multiEl('modelImportMessage');
+      message.textContent = '正在解析入库…';
+      try {
+        const data = await api(`/api/admin/multi-model/tasks/${button.dataset.importTask}/import`, {method:'POST'});
+        if (data.errors.length) { message.textContent = data.errors.map(e => `${multiLabels[e.provider] || e.provider}：${e.message}`).join('；'); }
+        else if (!data.results.length) { message.textContent = '还没有成功的模型响应可导入'; }
+        else { await loadMultiDetail(Number(button.dataset.importTask)); multiEl('modelImportMessage').textContent = '入库完成，重复解析不会新增相同记录'; }
+      } catch (error) { message.textContent = error.message; }
+      finally { button.disabled = false; }
+    });
+    multiEl('multiWebSearch').addEventListener('change', renderMultiProviders);
+    multiEl('multiModelTab').addEventListener('click', () => switchTab('multi-model'));
+    multiEl('multiRefresh').addEventListener('click', () => { multiConfig = null; multiSelectedStatus = null; loadMultiModel(); });
+    multiEl('multiTemplateSelect').addEventListener('change', renderTemplatePreview);
+    multiEl('kbGrid').addEventListener('click', event => {
+      const card = event.target.closest('[data-kb]');
+      if (!card || card.dataset.kb === multiBase) return;
+      multiBase = card.dataset.kb; multiPage = 1;
+      multiSelected = null; multiSelectedStatus = null;
+      multiEl('multiDetail').hidden = true;
+      renderKnowledgeBases();
+      loadMultiModel();
+    });
+    multiEl('multiPrev').addEventListener('click', () => { if (multiPage > 1) { multiPage--; loadMultiModel(); } });
+    multiEl('multiNext').addEventListener('click', () => { multiPage++; loadMultiModel(); });
+    multiEl('multiRows').addEventListener('click', async event => {
+      const button = event.target.closest('[data-multi-id]');
+      if (!button) return;
+      try { await loadMultiDetail(Number(button.dataset.multiId)); }
+      catch (error) { multiEl('multiMessage').textContent = error.message; }
+    });
+    multiEl('multiForm').addEventListener('submit', async event => {
+      event.preventDefault();
+      const base = currentBase();
+      const question = multiEl('multiQuestion').value.trim();
+      const template_code = multiEl('multiTemplateSelect').value;
+      const providers = [...document.querySelectorAll('input[name="multiProvider"]:checked')].map(el => el.value);
+      if (!base) { multiEl('multiMessage').textContent = '请先选择知识库'; return; }
+      if (!question || !providers.length || !template_code) {
+        multiEl('multiMessage').textContent = '请输入问题、选择模版并勾选至少一个模型'; return;
+      }
+      multiEl('multiSubmit').disabled = true;
+      try {
+        const result = await api('/api/admin/multi-model/tasks', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({question,template_code,knowledge_base:base.code,providers,web_search:multiEl('multiWebSearch').checked})});
+        multiSelected = result.task_id; multiSelectedStatus = 'running'; multiPage = 1;
+        showToast(`${base.label} · 任务 #${result.task_id} 已开始运行`);
+        await loadMultiModel();
+      } catch (error) { multiEl('multiMessage').textContent = error.message; }
+      finally { multiEl('multiSubmit').disabled = !canSubmit(); }
+    });
+
+
+    let promptData = null, promptCode = null, promptDirty = false, promptSaving = false, promptLoading = false;
+    function promptCurrentBase() { return promptData?.bases.find(b => b.code === multiEl('promptBase').value); }
+    function discardPromptDraft() { return !promptDirty || window.confirm('有未保存的模板修改，确定放弃吗？'); }
+    function renderPromptList() {
+      const base = promptCurrentBase();
+      multiEl('promptList').innerHTML = (base?.templates || []).map(t => `<button class="template-item${t.code === promptCode ? ' active' : ''}" type="button" data-prompt-code="${escapeHtml(t.code)}"><strong>${escapeHtml(t.title)}</strong><small>${t.is_default ? '默认 · ' : ''}${t.active ? '已启用' : '已停用'}</small><small>${escapeHtml(t.description || '暂无用途说明')}</small></button>`).join('');
+      multiEl('promptListMessage').textContent = base ? `${base.templates.length} 个模板 · 停用的模板不会出现在采集选项中` : '正在读取模板…';
+    }
+    function editPrompt(code, copy = false) {
+      const base = promptCurrentBase();
+      if (!base) return;
+      const item = base.templates.find(t => t.code === code);
+      promptCode = copy ? null : (item?.code || null);
+      multiEl('promptEditorTitle').textContent = promptCode ? '编辑模板' : '新增模板';
+      multiEl('promptTitle').value = item ? item.title + (copy ? ' 副本' : '') : '';
+      multiEl('promptDescription').value = item?.description || '';
+      multiEl('promptContent').value = item?.template || base.templates.find(t => t.is_default)?.template || '{{question}}';
+      multiEl('promptActive').checked = copy ? true : (item?.active ?? true);
+      multiEl('promptDefault').checked = copy ? false : (item?.is_default ?? false);
+      multiEl('promptMessage').textContent = '';
+      promptDirty = copy;
+      renderPromptList();
+    }
+    async function loadPromptTemplates() {
+      if (promptLoading || promptSaving) return;
+      promptLoading = true;
+      multiEl('promptListMessage').textContent = '正在读取模板…';
+      try {
+        const keep = multiEl('promptBase').value || multiBase;
+        promptData = await api('/api/admin/multi-model/templates');
+        multiEl('promptBase').innerHTML = promptData.bases.map(b => `<option value="${escapeHtml(b.code)}">${escapeHtml(b.label)}</option>`).join('');
+        multiEl('promptBase').value = promptData.bases.some(b => b.code === keep) ? keep : promptData.default_base;
+        multiEl('promptBase').dataset.previous = multiEl('promptBase').value;
+        if (!promptDirty) editPrompt(promptCode || promptCurrentBase().default_template);
+        else renderPromptList();
+      } catch (error) { multiEl('promptListMessage').textContent = error.message; }
+      finally { promptLoading = false; }
+    }
+    async function openMultiView(view) {
+      if (view === 'collection' && multiView === 'templates' && !discardPromptDraft()) return;
+      multiView = view;
+      if (view === 'collection') promptDirty = false;
+      multiEl('multiCollectionPanel').hidden = view !== 'collection';
+      multiEl('multiTemplatesPanel').hidden = view !== 'templates';
+      multiEl('multiRefresh').hidden = view !== 'collection';
+      multiEl('multiCollectionView').classList.toggle('secondary', view !== 'collection');
+      multiEl('multiTemplatesView').classList.toggle('secondary', view !== 'templates');
+      multiEl('multiCollectionView').setAttribute('aria-pressed', String(view === 'collection'));
+      multiEl('multiTemplatesView').setAttribute('aria-pressed', String(view === 'templates'));
+      history.replaceState(null, '', view === 'templates' ? '#multi-model/templates' : '#multi-model');
+      clearTimeout(multiPoll);
+      if (view === 'templates') await loadPromptTemplates();
+      else { multiConfig = null; await loadMultiModel(); }
+    }
+    multiEl('multiCollectionView').addEventListener('click', () => openMultiView('collection'));
+    multiEl('multiTemplatesView').addEventListener('click', () => openMultiView('templates'));
+    multiEl('promptRefresh').addEventListener('click', loadPromptTemplates);
+    multiEl('promptBase').addEventListener('change', event => {
+      const previous = multiEl('promptBase').dataset.previous;
+      if (!discardPromptDraft()) { event.target.value = previous; return; }
+      promptDirty = false;
+      multiEl('promptBase').dataset.previous = event.target.value;
+      editPrompt(promptCurrentBase()?.default_template);
+    });
+    multiEl('promptList').addEventListener('click', event => {
+      const item = event.target.closest('[data-prompt-code]');
+      if (item && discardPromptDraft()) editPrompt(item.dataset.promptCode);
+    });
+    multiEl('promptNew').addEventListener('click', () => { if (discardPromptDraft()) { editPrompt(null); multiEl('promptTitle').focus(); } });
+    multiEl('promptCopy').addEventListener('click', () => {
+      if (!promptData) return;
+      promptCode = null;
+      multiEl('promptTitle').value = multiEl('promptTitle').value.slice(0, 76) + ' 副本';
+      multiEl('promptEditorTitle').textContent = '新增模板';
+      multiEl('promptDefault').checked = false;
+      multiEl('promptActive').checked = true;
+      promptDirty = true; renderPromptList(); multiEl('promptTitle').focus();
+    });
+    multiEl('promptForm').addEventListener('input', () => { promptDirty = true; });
+    multiEl('promptActive').addEventListener('change', () => { if (!multiEl('promptActive').checked) multiEl('promptDefault').checked = false; });
+    multiEl('promptForm').addEventListener('submit', async event => {
+      event.preventDefault();
+      if (promptSaving || !promptData) return;
+      const content = multiEl('promptContent').value;
+      if (!content.includes('{{question}}')) { multiEl('promptMessage').textContent = '请在模板中保留 {{question}} 占位符'; return; }
+      promptSaving = true;
+      for (const el of multiEl('multiTemplatesPanel').querySelectorAll('button, input, textarea, select')) el.disabled = true;
+      multiEl('promptMessage').textContent = '正在保存…';
+      try {
+        const base = promptCurrentBase().code;
+        const url = '/api/admin/multi-model/templates' + (promptCode ? `/${encodeURIComponent(base)}/${encodeURIComponent(promptCode)}` : '');
+        const payload = {knowledge_base:base, revision:promptData.revision, title:multiEl('promptTitle').value.trim(), description:multiEl('promptDescription').value, template:content, active:multiEl('promptActive').checked, is_default:multiEl('promptDefault').checked};
+        promptData = await api(url, {method:promptCode ? 'PUT' : 'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
+        promptDirty = false;
+        if (payload.is_default) multiEl('multiTemplateSelect').value = '';
+        editPrompt(promptData.saved_code);
+        multiEl('promptMessage').textContent = '已保存，后续采集使用新模板；历史任务不变';
+        multiConfig = null;
+      } catch (error) { multiEl('promptMessage').textContent = error.message; }
+      finally {
+        promptSaving = false;
+        for (const el of multiEl('multiTemplatesPanel').querySelectorAll('button, input, textarea, select')) el.disabled = false;
+      }
+    });
+    window.addEventListener('beforeunload', event => { if (promptDirty) { event.preventDefault(); event.returnValue = ''; } });
+    window.addEventListener('hashchange', () => {
+      if (window.location.hash.startsWith('#multi-model')) {
+        switchTab('multi-model');
+        openMultiView(window.location.hash === '#multi-model/templates' ? 'templates' : 'collection');
+      }
+    });
+    if (window.location.hash.startsWith('#multi-model')) {
+      if (window.location.hash === '#multi-model/templates') multiView = 'templates';
+      switchTab('multi-model');
+      if (multiView === 'templates') openMultiView('templates');
+    }
+    else if (window.location.hash === "#merchant") switchTab("merchant");
     else loadItems();
   </script>
 </body>

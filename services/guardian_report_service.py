@@ -156,10 +156,15 @@ def product_evidence(subjects, profiles):
     return products
 
 
-def compare_products(products):
+def compare_products(products, *, history_to_current=False):
     comparisons = []
-    for right in products[1:]:
-        left = products[0]
+    ordered_pairs = [(products[0], right) for right in products[1:]] if products else []
+    if history_to_current:
+        current = [p for p in products if 'current' in p.get('roles', [])]
+        history = [p for p in products if 'history' in p.get('roles', []) and 'current' not in p.get('roles', [])]
+        if current and history:
+            ordered_pairs = [(old, now) for old in history for now in current if old['id'] != now['id']]
+    for left, right in ordered_pairs:
         same_version = (left['status'] in {'ready', 'provisional'} and right['status'] in {'ready', 'provisional'}
                         and all(left.get(k) == right.get(k) for k in
                                 ('feature_version', 'portrait_version', 'calculation_version'))
@@ -328,19 +333,21 @@ def attach_report(reply, context, subjects=(), *, scene=None):
     pet = context.get('pet_profile') or {}
     profiles = load_profiles([s.get('formula_id') for s in subjects if s.get('result_stage') != 'provisional'])
     products = product_evidence(subjects, profiles)
-    comparisons = compare_products(products)
+    history_to_current = (context.get('food_analysis_scope') in {'current_vs_history', 'saved_diet'}
+                          and scene != 'switch_impact')
+    comparisons = compare_products(products, history_to_current=history_to_current)
     from services.guardian_task_knowledge import nutrition_pairs, question_pool
-    nutrition = nutrition_pairs(comparisons, pet.get('animal_type')) if comparisons else None
+    nutrition = nutrition_pairs(comparisons, pet.get('animal_type'), products) if comparisons else None
     community = community_evidence(pet, products)
     basics = pet_summary(pet)
     narration = summarize(basics, products, comparisons, community, scene) if not nutrition else {
-        'summary': ('已按同版本六维画像对比两款配方；营养优势和观察点见下方，结构分值不等于营养含量。'
+        'summary': ('营养优势依据各款粮的市场优势标签整理；日常关注仅列出已展示优势对应的观察内容。'
                     if any(pair['status'] == 'comparable' for pair in comparisons) else
                     '产品资料或计算版本不一致，暂时不能给出双方优势及换粮变化。'),
         'community': '以下为独立的社区记录，仅供参考。' if community['items'] else '暂无相关社区记录。',
         'mode': 'nutrition_rules', 'source_ids': []}
     if nutrition:
-        narration['feeding'] = '以下按两款配方的实际差值整理营养优势与日常观察点，是否适合仍需结合宠物的实际耐受。'
+        narration['feeding'] = '营养优势来自市场优势标签及对应规则；日常关注来自已展示优势的对应规则，是否适合仍需结合实际耐受。'
     if any(p['status'] == 'provisional' for p in products):
         if '初算' not in narration['summary']:
             narration['summary'] = '初算待核对。' + narration['summary']

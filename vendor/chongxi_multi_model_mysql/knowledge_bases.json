@@ -1,0 +1,69 @@
+{
+  "version": 1,
+  "default_base": "selection",
+  "bases": [
+    {
+      "code": "selection",
+      "label": "选粮知识库",
+      "tagline": "主粮与零食的配方选择依据",
+      "description": "面向「这只猫/狗该吃哪款粮」的问题，抽取配方结构与选粮判断依据，产出可用于选粮推荐的知识点。",
+      "question_placeholder": "例如：幼年布偶猫应该吃什么干粮？玻璃胃成猫换粮怎么选？",
+      "templates": [
+        {
+          "code": "selection_standard",
+          "title": "标准选粮知识抽取",
+          "description": "五维全量抽取：适用对象、选粮要点、产品建议、产品内容、注意事项。适合大多数选粮问题。",
+          "file": "templates/selection_standard.txt"
+        },
+        {
+          "code": "selection_compare",
+          "title": "多方案对比要点",
+          "description": "面向「A 和 B 怎么选」类问题，每个维度按候选方案平铺，便于横向比对。",
+          "file": "templates/selection_compare.txt"
+        }
+      ]
+    },
+    {
+      "code": "health",
+      "label": "健康知识库",
+      "tagline": "症状观察、健康风险与就医边界",
+      "description": "面向「这个症状/疾病要注意什么」的问题，抽取症状判断、风险边界、营养干预与就医时机，不替代兽医诊断。",
+      "question_placeholder": "例如：猫咪软便带血丝需要立刻就医吗？公猫尿闭早期有哪些信号？",
+      "templates": [
+        {
+          "code": "health_symptom",
+          "title": "症状与风险边界",
+          "description": "按症状表现、可能原因、红旗信号、就医时机组织，强调不确定性与风险披露。",
+          "file": "templates/health_symptom.txt"
+        },
+        {
+          "code": "health_care",
+          "title": "日常健康管理",
+          "description": "慢性问题、长期管理、复诊与观察指标，适合「怎么养/怎么防」类问题。",
+          "file": "templates/health_care.txt"
+        }
+      ]
+    },
+    {
+      "code": "nutrition",
+      "label": "营养知识库",
+      "tagline": "营养素机制与成分功能",
+      "description": "面向「这个营养素/成分起什么作用」的问题，抽取消化吸收机制、需求量与功能边界，强调证据强度。",
+      "question_placeholder": "例如：粗纤维对猫的肠道蠕动具体起什么作用？牛磺酸缺乏会怎样？",
+      "templates": [
+        {
+          "code": "nutrition_mechanism",
+          "title": "营养素机制解释",
+          "description": "以营养素为单位解释生理作用、缺乏/过量表现、剂量参考与种属差异。",
+          "file": "templates/nutrition_mechanism.txt"
+        },
+        {
+          "code": "nutrition_ingredient",
+          "title": "原料与成分功能",
+          "description": "以具体原料（如甜菜粕、车前子、菊苣根粉）为单位抽取功能定位与适用边界。",
+          "file": "templates/nutrition_ingredient.txt"
+        }
+      ]
+    }
+  ]
+}

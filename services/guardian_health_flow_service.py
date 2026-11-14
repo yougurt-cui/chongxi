@@ -231,9 +231,13 @@ def build_analysis_reply(user_id, conversation, state, context):
     comparison = []
     if scope in {'current_vs_history', 'named_comparison'} and len(subjects) > 1:
         for index, other in enumerate(subjects[1:], 1):
-            evidence = compare_portraits(subjects[0]['portrait'], other['portrait'])
-            comparison.append({'left': subjects[0]['label'], 'right': other['label'], 'subject_indices': [0, index], **evidence,
-                               'text': portrait_comparison_text(evidence).replace('原粮', subjects[0]['label']).replace('目标粮', other['label'])})
+            left, right, indices = subjects[0], other, [0, index]
+            if (scope == 'current_vs_history' and 'current' in left['roles']
+                    and 'history' in right['roles'] and 'current' not in right['roles']):
+                left, right, indices = right, left, [index, 0]
+            evidence = compare_portraits(left['portrait'], right['portrait'])
+            comparison.append({'left': left['label'], 'right': right['label'], 'subject_indices': indices, **evidence,
+                               'text': portrait_comparison_text(evidence).replace('原粮', left['label']).replace('目标粮', right['label'])})
     analysis_id = uuid.uuid4().hex
     multiple = len(subjects) > 1
     overview = build_overview(reports, comparison, use_model=False) if multiple else None

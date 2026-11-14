@@ -16,24 +16,28 @@ ISSUE=dict(issue_code='STOOL_ODOR',issue_name='便臭',aliases='猫屎臭',high_
 GROUP=dict(cause='消化不充分',mechanism='未消化部分进入后肠。',manifestations=['气味变化'],supporting=['近期是否换粮？'],source_ids=[1,2])
 
 
+def summary_points(points):
+ return [dict(id=p['id'],issue_code='SOFT_STOOL',causal_chains=[dict(cause='高脂饮食',nutrition_factors=p['nutrition_factors'],manifestations=p['manifestations'])]) for p in points]
+
+
 def test_normalized_top3_signed_advantages_and_exact_health_links():
  ds=[dim('protein_quality',.3,.9),dim('fat',.2,.7,kind='higher_is_burden'),dim('fiber',1,3,5),dim('prebiotic',1,2,5)]
  rules=[rule(1,'protein_quality','protein_quality','increase',True),rule(2,'protein_quality','protein_quality','decrease',False),rule(3,'fat_pressure','fat','increase',False),rule(4,'fat_pressure','fat','decrease',True)]
- points=[dict(id=99,manifestations=['偏软'],nutrition_factors=[dict(factor='FAT_PRESSURE',direction='increase',relation='受耐受影响')]),dict(id=100,manifestations=['错误关联'],nutrition_factors=[dict(factor='crude_protein',direction='increase',relation='含量不是评分')])]
- with patch.object(task,'load_rules',return_value=rules),patch.object(task,'health_rows',return_value=points):
+ points=[dict(id=99,manifestations=['偏软'],nutrition_factors=[dict(factor='FAT_BURDEN',direction='increase',relation='受耐受影响')]),dict(id=100,manifestations=['错误关联'],nutrition_factors=[dict(factor='crude_protein',direction='increase',relation='含量不是评分')])]
+ with patch.object(task,'load_rules',return_value=rules),patch.object(task,'switch_health_rows',return_value=summary_points(points)):
   result=task.nutrition_pairs([pair(ds)],'cat')['pairs'][0]
   reverse=task.nutrition_pairs([pair([{**d,'delta':-d['delta'],'left':d['right'],'right':d['left']} for d in ds])],'cat')['pairs'][0]
  assert [d['key'] for d in result['top_changes']]==['protein_quality','fat','fiber']
- assert result['products'][0]['strengths'][0]['rule_id']==4
- assert result['products'][1]['strengths'][0]['rule_id']==1
- assert result['health_links']==[dict(source_id=99,relation='受耐受影响',manifestations=['偏软'])]
- assert reverse['products'][0]['strengths'][0]['rule_id']==1 and not reverse['health_links']
+ assert not result['products'][0]['strengths']
+ assert not result['products'][1]['strengths']
+ assert [{k:l[k] for k in ('source_id','relation','manifestations')} for l in result['health_links']]==[dict(source_id=99,relation='',manifestations=['偏软'])]
+ assert not reverse['products'][0]['strengths'] and not reverse['health_links']
 
 
 def test_missing_mapping_equal_or_incomparable_never_invent():
  ds=[dim('protein',.2,.5,kind='higher_is_burden'),dim('fiber',1,1,5)]
  points=[dict(id=1,manifestations=['便臭'],nutrition_factors=[dict(factor='crude_protein',direction='increase',relation='原始营养量')])]
- with patch.object(task,'load_rules',return_value=[rule(1,'protein_pressure','protein','increase',False)]),patch.object(task,'health_rows',return_value=points):
+ with patch.object(task,'load_rules',return_value=[rule(1,'protein_pressure','protein','increase',False)]),patch.object(task,'switch_health_rows',return_value=summary_points(points)):
   r=task.nutrition_pairs([pair(ds)],'cat')['pairs'][0]
   assert len(r['top_changes'])==1 and not r['health_links'] and r['health_note']
   assert not r['products'][0]['strengths'] and not r['products'][1]['strengths']
@@ -113,9 +117,9 @@ def test_health_outage_preserves_health_boundary_and_rule_availability():
  import pymysql
  with patch.object(task,'identify_issues',side_effect=pymysql.OperationalError('offline')):
   assert task.health_answer(dict(query='猫咪便便臭',species='cat'))['status']=='unavailable'
- with patch.object(task,'load_rules',return_value=[rule(1,'fiber_support','fiber','increase',True)]),patch.object(task,'health_rows',side_effect=pymysql.OperationalError('offline')):
+ with patch.object(task,'load_rules',return_value=[rule(1,'fiber_support','fiber','increase',True)]),patch.object(task,'switch_health_rows',side_effect=pymysql.OperationalError('offline')):
   r=task.nutrition_pairs([pair([dim('fiber',1,3,5)])],'cat')
- assert r['status']=='ready' and r['pairs'][0]['products'][1]['strengths']
+ assert r['status']=='ready' and not r['pairs'][0]['products'][1]['strengths']
  assert '暂时无法读取' in r['pairs'][0]['health_note']
 
 
