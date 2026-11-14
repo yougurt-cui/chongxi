@@ -37,10 +37,10 @@ def ensure_tables():
             if statement.strip().startswith('CREATE TABLE'):
                 cur.execute(statement)
         cur.execute('SHOW COLUMNS FROM product_recommendation')
-        required = {'source_key', 'input_hash', 'knowledge_source_id', 'product_key',
-                    'recommendations', 'raw_json', 'source_model', 'source_provider'}
+        required = {'recommendation_key', 'input_hash', 'product_key', 'breed_code',
+                    'life_stage_code', 'need_code', 'sources', 'raw_json'}
         if not required <= {r['Field'] for r in cur.fetchall()}:
-            raise ValueError('检测到旧版多表结构，请选择新的 PRODUCT_KNOWLEDGE_DATABASE；不自动覆盖旧表')
+            raise ValueError('检测到旧表结构，请先运行 scripts/merge_product_recommendations.py --apply 迁移；不自动覆盖旧表')
         conn.commit()
 
 
@@ -56,52 +56,142 @@ def read_sources(*, source_id=None, after_id=0, limit=None):
         return list(cur.fetchall())
 
 
-def write_record(conn, record):
+GROUP_FIELDS = ('species_code', 'breed_code', 'life_stage_code', 'need_code')
+
+
+def group_records(records):
+    """One row per species/breed/stage/need/brand/product; retain every source."""
+    grouped = {}
+    seen = {}
+    for record in sorted(records, key=lambda row: row['source_key']):
+        source_key = record['source_key']
+        if source_key in seen and seen[source_key] != record:
+            raise ValueError('同一推荐来源出现冲突内容')
+        seen[source_key] = record
+        for recommendation in record['recommendations']:
+            identity = [recommendation[k] for k in GROUP_FIELDS] + [record['product_key']]
+            key = digest(identity)
+            group = grouped.setdefault(key, {
+                'recommendation_key': key, 'product_key': record['product_key'],
+                **{k: recommendation[k] for k in GROUP_FIELDS},
+                'brand': record['brand'], 'product_name': record['product_name'],
+                '_records': {}, '_recommendations': {}})
+            group['_records'][source_key] = record
+            group['_recommendations'][digest([source_key, recommendation])] = (source_key, recommendation)
+    result = []
+    for key in sorted(grouped):
+        group = grouped[key]
+        originals = group.pop('_records')
+        recommendations = group.pop('_recommendations')
+        sources = []
+        reasons, descriptions, relations, models = set(), set(), set(), set()
+        for signature in sorted(recommendations):
+            source_key, recommendation = recommendations[signature]
+            record = originals[source_key]
+            source = record['sources'][0]
+            ctx = source.get('source_context') or {}
+            if isinstance(ctx, str): ctx = json.loads(ctx)
+            sources.append({'source_key': source_key, 'knowledge_source_id': record['knowledge_source_id'],
+                'original_source_id': record['original_source_id'], 'batch_id': source.get('batch_id'),
+                'source_model': source.get('source_model'), 'source_provider': source.get('source_provider'),
+                'source_question': ctx.get('question'), 'source_evidence_status': ctx.get('evidence_status'),
+                'recommendation': recommendation, 'original_source': source})
+            if recommendation.get('recommendation_reason'): reasons.add(recommendation['recommendation_reason'])
+            if record.get('product_description'): descriptions.add(record['product_description'])
+            relations.add(recommendation['relation_type'])
+            models.add((source.get('source_provider'), source.get('source_model')))
+        group.update(product_description='\n\n'.join(sorted(descriptions)),
+                     recommendation_reason='\n\n'.join(sorted(reasons)), relation_types=sorted(relations),
+                     source_count=len(originals), model_count=len(models), sources=sources,
+                     raw_json={'records': [originals[k] for k in sorted(originals)]})
+        result.append(group)
+    return result
+
+
+def stored_records(rows):
+    records = {}
+    for row in rows:
+        raw = row['raw_json']
+        if isinstance(raw, str): raw = json.loads(raw)
+        for record in raw['records']:
+            key = record['source_key']
+            if key in records and records[key] != record:
+                raise ValueError('已有合并记录的来源内容不一致，请先核对')
+            records[key] = record
+    return records
+
+
+def write_record(conn, record, table='product_recommendation'):
+    """Write one six-dimension group, including its full provenance array."""
+    if not re.fullmatch(r'product_recommendation(?:_stage_[0-9a-f]{12})?', table):
+        raise ValueError('无效产品推荐表名')
     fingerprint = digest(record)
     with conn.cursor() as cur:
-        cur.execute('SELECT id,input_hash,review_status,verification_status FROM product_recommendation WHERE source_key=%s FOR UPDATE',
-                    (record['source_key'],))
+        cur.execute(f'SELECT id,input_hash,review_status,verification_status FROM {table} WHERE recommendation_key=%s FOR UPDATE',
+                    (record['recommendation_key'],))
         previous = cur.fetchone()
         if previous and previous['input_hash'] == fingerprint:
             return previous['id'], 'unchanged'
         if previous and (previous['review_status'] != 'pending' or previous['verification_status'] != 'pending'):
-            raise ValueError('来源已变更且存在人工审核记录，请人工处理后重试')
-        source = record['sources'][0]
-        ctx = source.get('source_context') or {}
-        if isinstance(ctx, str):
-            ctx = json.loads(ctx)
-        columns = ('product_key', 'species_code', 'brand', 'product_name', 'product_description',
-                   'source_key', 'input_hash', 'original_source_id', 'knowledge_source_id',
-                   'batch_id', 'source_model', 'source_provider', 'source_question',
-                   'source_evidence_status', 'recommendations', 'raw_json')
-        values = [record[k] for k in columns[:5]] + [
-            record['source_key'], fingerprint, record['original_source_id'], record['knowledge_source_id'],
-            source.get('batch_id'), source.get('source_model'), source.get('source_provider'),
-            ctx.get('question'), ctx.get('evidence_status'),
-            json.dumps(record['recommendations'], ensure_ascii=False),
-            json.dumps(record, ensure_ascii=False)]
+            raise ValueError('合并内容发生变化且存在人工审核记录，请人工处理后重试')
+        columns = ('recommendation_key', 'product_key', *GROUP_FIELDS, 'brand', 'product_name',
+                   'product_description', 'recommendation_reason', 'relation_types', 'source_count',
+                   'model_count', 'sources', 'raw_json', 'input_hash')
+        json_columns = {'relation_types', 'sources', 'raw_json'}
+        values = [fingerprint if k == 'input_hash' else
+                  json.dumps(record[k], ensure_ascii=False) if k in json_columns else record[k] for k in columns]
         if previous:
-            cur.execute('UPDATE product_recommendation SET ' +
-                        ','.join(f'{col}=%s' for col in columns) + ' WHERE id=%s',
-                        (*values, previous['id']))
+            cur.execute(f'UPDATE {table} SET ' +
+                        ','.join(f'{col}=%s' for col in columns) + ' WHERE id=%s', (*values, previous['id']))
             row_id = previous['id']
         else:
-            cur.execute('INSERT INTO product_recommendation (' + ','.join(columns) + ') VALUES (' +
+            cur.execute(f'INSERT INTO {table} (' + ','.join(columns) + ') VALUES (' +
                         ','.join(['%s'] * len(columns)) + ')', values)
             row_id = cur.lastrowid
     return row_id, 'imported'
 
 
+def lock_name():
+    return 'product-import:' + digest(target_database())[:40]
+
+
 def import_records(records):
     ensure_tables()
-    counts = {'imported': 0, 'unchanged': 0}
+    counts = {'imported': 0, 'unchanged': 0, 'removed_groups': 0}
     with target_connect() as conn:
+        acquired = False
         try:
+            with conn.cursor() as cur:
+                cur.execute('SELECT GET_LOCK(%s,10) acquired', (lock_name(),))
+                acquired = bool(cur.fetchone()['acquired'])
+                if not acquired: raise ValueError('产品推荐导入正在运行，请稍后重试')
+                cur.execute('SELECT * FROM product_recommendation FOR UPDATE')
+                existing = list(cur.fetchall())
+            all_records = stored_records(existing)
+            incoming = {}
             for record in records:
-                _, status = write_record(conn, record)
+                key = record['source_key']
+                if key in incoming and incoming[key] != record:
+                    raise ValueError('同一推荐来源出现冲突内容')
+                incoming[key] = record
+            all_records.update(incoming)
+            groups = group_records(all_records.values())
+            keys = {g['recommendation_key'] for g in groups}
+            for group in groups:
+                _, status = write_record(conn, group)
                 counts[status] += 1
+            with conn.cursor() as cur:
+                for row in existing:
+                    if row['recommendation_key'] in keys: continue
+                    if row['review_status'] != 'pending' or row['verification_status'] != 'pending':
+                        raise ValueError('需要移除的旧分组存在人工审核，请人工处理后重试')
+                    cur.execute('DELETE FROM product_recommendation WHERE id=%s', (row['id'],))
+                    counts['removed_groups'] += 1
             conn.commit()
         except Exception:
             conn.rollback()
             raise
+        finally:
+            if acquired:
+                with conn.cursor() as cur: cur.execute('SELECT RELEASE_LOCK(%s)', (lock_name(),))
     return counts

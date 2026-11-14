@@ -1,32 +1,31 @@
 CREATE DATABASE IF NOT EXISTS chongxi_product DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 USE chongxi_product;
 
--- 每行对应一款产品在一个原始来源及知识场景中的推荐，多个推荐条件保存在 JSON 数组中。
+-- 每行对应种类、品种、年龄阶段、需求、品牌、产品的唯一组合，保留全部推荐来源。
 CREATE TABLE IF NOT EXISTS product_recommendation (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
-  product_key CHAR(64) NOT NULL COMMENT '物种+品牌+产品名的身份哈希，不同来源允许同一产品重复',
+  recommendation_key CHAR(64) NOT NULL COMMENT '六维组合的唯一哈希',
+  product_key CHAR(64) NOT NULL COMMENT '物种、规范品牌及产品名哈希',
   species_code VARCHAR(32) NOT NULL,
+  breed_code VARCHAR(64) NOT NULL,
+  life_stage_code VARCHAR(32) NOT NULL,
+  need_code VARCHAR(80) NOT NULL,
   brand VARCHAR(160) NOT NULL,
   product_name VARCHAR(300) NOT NULL,
   product_description TEXT NULL,
-  recommendations JSON NOT NULL COMMENT '品种、阶段、需求、推荐理由、关系类型及证据状态数组',
+  recommendation_reason TEXT NULL COMMENT '不同来源的理由去重并列，不生成新的产品结论',
+  relation_types JSON NOT NULL COMMENT '保留明确产品适配与提问场景关系的区别',
   verification_status ENUM('pending','verified','rejected') NOT NULL DEFAULT 'pending',
   review_status ENUM('pending','verified','rejected') NOT NULL DEFAULT 'pending',
-  original_source_id BIGINT NOT NULL,
-  knowledge_source_id BIGINT NULL,
-  source_key CHAR(64) NOT NULL COMMENT '知识对象+原始来源+产品的唯一标识',
+  source_count INT UNSIGNED NOT NULL,
+  model_count INT UNSIGNED NOT NULL,
+  sources JSON NOT NULL COMMENT '全部来源、模型、问题、推荐理由、原始条目及证据状态',
   input_hash CHAR(64) NOT NULL,
-  batch_id BIGINT NULL,
-  source_model VARCHAR(150) NULL COMMENT '推荐来源模型',
-  source_provider VARCHAR(80) NULL COMMENT '推荐来源提供方',
-  source_question VARCHAR(500) NULL COMMENT '产生推荐的原始提问',
-  source_evidence_status VARCHAR(40) NULL,
-  raw_json JSON NOT NULL COMMENT '完整标准化记录及原始推荐来源',
+  raw_json JSON NOT NULL COMMENT '可重建的标准化来源记录',
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  UNIQUE KEY uk_source (source_key),
+  UNIQUE KEY uk_recommendation (recommendation_key),
   KEY idx_product (product_key),
-  KEY idx_knowledge_source (knowledge_source_id),
-  KEY idx_original_source (original_source_id),
+  KEY idx_query (species_code, breed_code, life_stage_code, need_code),
   KEY idx_brand_product (brand, product_name(100))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

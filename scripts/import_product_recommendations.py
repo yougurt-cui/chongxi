@@ -36,10 +36,11 @@ def main(argv=None):
         if args.source_id and not data:
             raise ValueError('未找到指定的产品推荐知识对象')
         result = service.normalize(data)
+        result['grouped_records'] = service.group_records(result['records'])
         if args.output:
             args.output.write_text(json.dumps(result,ensure_ascii=False,indent=2),encoding='utf-8')
         summary = {'mode': 'apply' if args.apply else 'dry-run', 'source_rows': len(data),
-                   'records': len(result['records']), 'products': len({r['product_key'] for r in result['records']}),
+                   'records': len(result['records']), 'grouped_records': len(result['grouped_records']), 'products': len({r['product_key'] for r in result['records']}),
                    'recommendations': sum(len(r['recommendations']) for r in result['records']),
                    'errors': result['errors']}
         if args.apply and not result['errors'] and result['records']:

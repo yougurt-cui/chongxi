@@ -130,5 +130,557 @@
       "verification_status": "pending"
     }
   ],
-  "errors": []
+  "errors": [],
+  "grouped_records": [
+    {
+      "recommendation_key": "284f4fe36c9f8b418c82c5011647a791d7bfb3cbbea619486b8a30ad9ffcc760",
+      "product_key": "9c12b280aaa61fafbc302d10ab83b6e40f86b52720517acbb91881e1932e42dc",
+      "species_code": "cat",
+      "breed_code": "ragdoll",
+      "life_stage_code": "all_stages",
+      "need_code": "coat_health",
+      "brand": "麦富迪",
+      "product_name": "布偶猫专用主食罐（三文鱼+鸡肝）",
+      "product_description": "专为布偶设计，三文鱼提供高Omega-3，鸡肝强化牛磺酸与维生素A，无胶无淀粉，水分含量≥78%，辅助泌尿与毛发健康",
+      "recommendation_reason": "专为布偶设计，三文鱼提供高Omega-3，鸡肝强化牛磺酸与维生素A，无胶无淀粉，水分含量≥78%，辅助泌尿与毛发健康",
+      "relation_types": [
+        "explicit_product"
+      ],
+      "source_count": 1,
+      "model_count": 1,
+      "sources": [
+        {
+          "source_key": "17134dd9c1f94055ba6bfa52e15391ebfea6a7a877de2a71b4a3f4183954c316",
+          "knowledge_source_id": null,
+          "original_source_id": 4790,
+          "batch_id": 191,
+          "source_model": "qwen-plus",
+          "source_provider": "qwen",
+          "source_question": "布偶猫推荐吃什么",
+          "source_evidence_status": "pending_verification",
+          "recommendation": {
+            "species_code": "cat",
+            "breed_code": "ragdoll",
+            "life_stage_code": "all_stages",
+            "need_code": "coat_health",
+            "relation_type": "explicit_product",
+            "recommendation_reason": "专为布偶设计，三文鱼提供高Omega-3，鸡肝强化牛磺酸与维生素A，无胶无淀粉，水分含量≥78%，辅助泌尿与毛发健康",
+            "evidence_status": "pending_verification",
+            "review_status": "pending"
+          },
+          "original_source": {
+            "id": 4790,
+            "batch_id": 191,
+            "need_codes": [
+              "coat_health",
+              "hydration",
+              "picky_eating"
+            ],
+            "source_model": "qwen-plus",
+            "source_provider": "qwen",
+            "source_context": {
+              "question": "布偶猫推荐吃什么",
+              "evidence_status": "pending_verification",
+              "structured_item": {
+                "brand": "麦富迪",
+                "product_name": "麦富迪布偶猫专用主食罐（三文鱼+鸡肝）",
+                "reason": "专为布偶设计，三文鱼提供高Omega-3，鸡肝强化牛磺酸与维生素A，无胶无淀粉，水分含量≥78%，辅助泌尿与毛发健康",
+                "applicable_conditions": [
+                  "全年龄段布偶猫湿粮补充",
+                  "美毛需求突出",
+                  "挑食或饮水不足"
+                ]
+              }
+            }
+          }
+        }
+      ],
+      "raw_json": {
+        "records": [
+          {
+            "product_key": "9c12b280aaa61fafbc302d10ab83b6e40f86b52720517acbb91881e1932e42dc",
+            "species_code": "cat",
+            "brand": "麦富迪",
+            "product_name": "布偶猫专用主食罐（三文鱼+鸡肝）",
+            "product_description": "专为布偶设计，三文鱼提供高Omega-3，鸡肝强化牛磺酸与维生素A，无胶无淀粉，水分含量≥78%，辅助泌尿与毛发健康",
+            "source_key": "17134dd9c1f94055ba6bfa52e15391ebfea6a7a877de2a71b4a3f4183954c316",
+            "knowledge_source_id": null,
+            "original_source_id": 4790,
+            "sources": [
+              {
+                "id": 4790,
+                "batch_id": 191,
+                "need_codes": [
+                  "coat_health",
+                  "hydration",
+                  "picky_eating"
+                ],
+                "source_model": "qwen-plus",
+                "source_provider": "qwen",
+                "source_context": {
+                  "question": "布偶猫推荐吃什么",
+                  "evidence_status": "pending_verification",
+                  "structured_item": {
+                    "brand": "麦富迪",
+                    "product_name": "麦富迪布偶猫专用主食罐（三文鱼+鸡肝）",
+                    "reason": "专为布偶设计，三文鱼提供高Omega-3，鸡肝强化牛磺酸与维生素A，无胶无淀粉，水分含量≥78%，辅助泌尿与毛发健康",
+                    "applicable_conditions": [
+                      "全年龄段布偶猫湿粮补充",
+                      "美毛需求突出",
+                      "挑食或饮水不足"
+                    ]
+                  }
+                }
+              }
+            ],
+            "source_scope": {
+              "species_code": null,
+              "breed_code": null,
+              "life_stage_code": null,
+              "need_scene_code": null
+            },
+            "recommendations": [
+              {
+                "species_code": "cat",
+                "breed_code": "ragdoll",
+                "life_stage_code": "all_stages",
+                "need_code": "coat_health",
+                "relation_type": "explicit_product",
+                "recommendation_reason": "专为布偶设计，三文鱼提供高Omega-3，鸡肝强化牛磺酸与维生素A，无胶无淀粉，水分含量≥78%，辅助泌尿与毛发健康",
+                "evidence_status": "pending_verification",
+                "review_status": "pending"
+              },
+              {
+                "species_code": "cat",
+                "breed_code": "ragdoll",
+                "life_stage_code": "all_stages",
+                "need_code": "hydration",
+                "relation_type": "explicit_product",
+                "recommendation_reason": "专为布偶设计，三文鱼提供高Omega-3，鸡肝强化牛磺酸与维生素A，无胶无淀粉，水分含量≥78%，辅助泌尿与毛发健康",
+                "evidence_status": "pending_verification",
+                "review_status": "pending"
+              },
+              {
+                "species_code": "cat",
+                "breed_code": "ragdoll",
+                "life_stage_code": "all_stages",
+                "need_code": "picky_eating",
+                "relation_type": "explicit_product",
+                "recommendation_reason": "专为布偶设计，三文鱼提供高Omega-3，鸡肝强化牛磺酸与维生素A，无胶无淀粉，水分含量≥78%，辅助泌尿与毛发健康",
+                "evidence_status": "pending_verification",
+                "review_status": "pending"
+              }
+            ],
+            "verification_status": "pending"
+          }
+        ]
+      }
+    },
+    {
+      "recommendation_key": "96ec6750e6233bd14df9d97ce3a5265f7db919a54675b607264902eaa347593f",
+      "product_key": "f18796b66a891b4c0d05df89925d9179300104cfc52b3e1d1a0d54e7f9154bd9",
+      "species_code": "cat",
+      "breed_code": "ragdoll",
+      "life_stage_code": "all_stages",
+      "need_code": "coat_health",
+      "brand": "渴望",
+      "product_name": "六种鱼全价猫粮（Six Fish）",
+      "product_description": "含85%优质动物原料，六种野生捕捞鱼提供丰富Omega-3，美毛效果突出，动物蛋白占比超80%。",
+      "recommendation_reason": "含85%优质动物原料，六种野生捕捞鱼提供丰富Omega-3，美毛效果突出，动物蛋白占比超80%。",
+      "relation_types": [
+        "source_context"
+      ],
+      "source_count": 1,
+      "model_count": 1,
+      "sources": [
+        {
+          "source_key": "f97bece9227e80a75e27f05a7acb95d111d9f637dfd56e0a69a1717bb47a7e08",
+          "knowledge_source_id": null,
+          "original_source_id": 4807,
+          "batch_id": 192,
+          "source_model": "doubao-seed-2-1-turbo-260628",
+          "source_provider": "doubao",
+          "source_question": "布偶猫推荐吃什么",
+          "source_evidence_status": "supported",
+          "recommendation": {
+            "species_code": "cat",
+            "breed_code": "ragdoll",
+            "life_stage_code": "all_stages",
+            "need_code": "coat_health",
+            "relation_type": "source_context",
+            "recommendation_reason": "含85%优质动物原料，六种野生捕捞鱼提供丰富Omega-3，美毛效果突出，动物蛋白占比超80%。",
+            "evidence_status": "supported",
+            "review_status": "pending"
+          },
+          "original_source": {
+            "id": 4807,
+            "batch_id": 192,
+            "need_codes": [
+              "coat_health"
+            ],
+            "source_model": "doubao-seed-2-1-turbo-260628",
+            "source_provider": "doubao",
+            "source_context": {
+              "question": "布偶猫推荐吃什么",
+              "evidence_status": "supported",
+              "structured_item": {
+                "brand": "渴望（ORIJEN）",
+                "product_name": "六种鱼全价猫粮（Six Fish）",
+                "reason": "含85%优质动物原料，六种野生捕捞鱼提供丰富Omega-3，美毛效果突出，动物蛋白占比超80%。",
+                "applicable_conditions": [
+                  "全生命阶段",
+                  "美毛需求、预算充足"
+                ]
+              }
+            }
+          }
+        }
+      ],
+      "raw_json": {
+        "records": [
+          {
+            "product_key": "f18796b66a891b4c0d05df89925d9179300104cfc52b3e1d1a0d54e7f9154bd9",
+            "species_code": "cat",
+            "brand": "渴望",
+            "product_name": "六种鱼全价猫粮（Six Fish）",
+            "product_description": "含85%优质动物原料，六种野生捕捞鱼提供丰富Omega-3，美毛效果突出，动物蛋白占比超80%。",
+            "source_key": "f97bece9227e80a75e27f05a7acb95d111d9f637dfd56e0a69a1717bb47a7e08",
+            "knowledge_source_id": null,
+            "original_source_id": 4807,
+            "sources": [
+              {
+                "id": 4807,
+                "batch_id": 192,
+                "need_codes": [
+                  "coat_health"
+                ],
+                "source_model": "doubao-seed-2-1-turbo-260628",
+                "source_provider": "doubao",
+                "source_context": {
+                  "question": "布偶猫推荐吃什么",
+                  "evidence_status": "supported",
+                  "structured_item": {
+                    "brand": "渴望（ORIJEN）",
+                    "product_name": "六种鱼全价猫粮（Six Fish）",
+                    "reason": "含85%优质动物原料，六种野生捕捞鱼提供丰富Omega-3，美毛效果突出，动物蛋白占比超80%。",
+                    "applicable_conditions": [
+                      "全生命阶段",
+                      "美毛需求、预算充足"
+                    ]
+                  }
+                }
+              }
+            ],
+            "source_scope": {
+              "species_code": null,
+              "breed_code": null,
+              "life_stage_code": null,
+              "need_scene_code": null
+            },
+            "recommendations": [
+              {
+                "species_code": "cat",
+                "breed_code": "ragdoll",
+                "life_stage_code": "all_stages",
+                "need_code": "coat_health",
+                "relation_type": "source_context",
+                "recommendation_reason": "含85%优质动物原料，六种野生捕捞鱼提供丰富Omega-3，美毛效果突出，动物蛋白占比超80%。",
+                "evidence_status": "supported",
+                "review_status": "pending"
+              }
+            ],
+            "verification_status": "pending"
+          }
+        ]
+      }
+    },
+    {
+      "recommendation_key": "da581317c729809395631c63a76c611e494f8f6a00753c125467b80d86074aae",
+      "product_key": "9c12b280aaa61fafbc302d10ab83b6e40f86b52720517acbb91881e1932e42dc",
+      "species_code": "cat",
+      "breed_code": "ragdoll",
+      "life_stage_code": "all_stages",
+      "need_code": "picky_eating",
+      "brand": "麦富迪",
+      "product_name": "布偶猫专用主食罐（三文鱼+鸡肝）",
+      "product_description": "专为布偶设计，三文鱼提供高Omega-3，鸡肝强化牛磺酸与维生素A，无胶无淀粉，水分含量≥78%，辅助泌尿与毛发健康",
+      "recommendation_reason": "专为布偶设计，三文鱼提供高Omega-3，鸡肝强化牛磺酸与维生素A，无胶无淀粉，水分含量≥78%，辅助泌尿与毛发健康",
+      "relation_types": [
+        "explicit_product"
+      ],
+      "source_count": 1,
+      "model_count": 1,
+      "sources": [
+        {
+          "source_key": "17134dd9c1f94055ba6bfa52e15391ebfea6a7a877de2a71b4a3f4183954c316",
+          "knowledge_source_id": null,
+          "original_source_id": 4790,
+          "batch_id": 191,
+          "source_model": "qwen-plus",
+          "source_provider": "qwen",
+          "source_question": "布偶猫推荐吃什么",
+          "source_evidence_status": "pending_verification",
+          "recommendation": {
+            "species_code": "cat",
+            "breed_code": "ragdoll",
+            "life_stage_code": "all_stages",
+            "need_code": "picky_eating",
+            "relation_type": "explicit_product",
+            "recommendation_reason": "专为布偶设计，三文鱼提供高Omega-3，鸡肝强化牛磺酸与维生素A，无胶无淀粉，水分含量≥78%，辅助泌尿与毛发健康",
+            "evidence_status": "pending_verification",
+            "review_status": "pending"
+          },
+          "original_source": {
+            "id": 4790,
+            "batch_id": 191,
+            "need_codes": [
+              "coat_health",
+              "hydration",
+              "picky_eating"
+            ],
+            "source_model": "qwen-plus",
+            "source_provider": "qwen",
+            "source_context": {
+              "question": "布偶猫推荐吃什么",
+              "evidence_status": "pending_verification",
+              "structured_item": {
+                "brand": "麦富迪",
+                "product_name": "麦富迪布偶猫专用主食罐（三文鱼+鸡肝）",
+                "reason": "专为布偶设计，三文鱼提供高Omega-3，鸡肝强化牛磺酸与维生素A，无胶无淀粉，水分含量≥78%，辅助泌尿与毛发健康",
+                "applicable_conditions": [
+                  "全年龄段布偶猫湿粮补充",
+                  "美毛需求突出",
+                  "挑食或饮水不足"
+                ]
+              }
+            }
+          }
+        }
+      ],
+      "raw_json": {
+        "records": [
+          {
+            "product_key": "9c12b280aaa61fafbc302d10ab83b6e40f86b52720517acbb91881e1932e42dc",
+            "species_code": "cat",
+            "brand": "麦富迪",
+            "product_name": "布偶猫专用主食罐（三文鱼+鸡肝）",
+            "product_description": "专为布偶设计，三文鱼提供高Omega-3，鸡肝强化牛磺酸与维生素A，无胶无淀粉，水分含量≥78%，辅助泌尿与毛发健康",
+            "source_key": "17134dd9c1f94055ba6bfa52e15391ebfea6a7a877de2a71b4a3f4183954c316",
+            "knowledge_source_id": null,
+            "original_source_id": 4790,
+            "sources": [
+              {
+                "id": 4790,
+                "batch_id": 191,
+                "need_codes": [
+                  "coat_health",
+                  "hydration",
+                  "picky_eating"
+                ],
+                "source_model": "qwen-plus",
+                "source_provider": "qwen",
+                "source_context": {
+                  "question": "布偶猫推荐吃什么",
+                  "evidence_status": "pending_verification",
+                  "structured_item": {
+                    "brand": "麦富迪",
+                    "product_name": "麦富迪布偶猫专用主食罐（三文鱼+鸡肝）",
+                    "reason": "专为布偶设计，三文鱼提供高Omega-3，鸡肝强化牛磺酸与维生素A，无胶无淀粉，水分含量≥78%，辅助泌尿与毛发健康",
+                    "applicable_conditions": [
+                      "全年龄段布偶猫湿粮补充",
+                      "美毛需求突出",
+                      "挑食或饮水不足"
+                    ]
+                  }
+                }
+              }
+            ],
+            "source_scope": {
+              "species_code": null,
+              "breed_code": null,
+              "life_stage_code": null,
+              "need_scene_code": null
+            },
+            "recommendations": [
+              {
+                "species_code": "cat",
+                "breed_code": "ragdoll",
+                "life_stage_code": "all_stages",
+                "need_code": "coat_health",
+                "relation_type": "explicit_product",
+                "recommendation_reason": "专为布偶设计，三文鱼提供高Omega-3，鸡肝强化牛磺酸与维生素A，无胶无淀粉，水分含量≥78%，辅助泌尿与毛发健康",
+                "evidence_status": "pending_verification",
+                "review_status": "pending"
+              },
+              {
+                "species_code": "cat",
+                "breed_code": "ragdoll",
+                "life_stage_code": "all_stages",
+                "need_code": "hydration",
+                "relation_type": "explicit_product",
+                "recommendation_reason": "专为布偶设计，三文鱼提供高Omega-3，鸡肝强化牛磺酸与维生素A，无胶无淀粉，水分含量≥78%，辅助泌尿与毛发健康",
+                "evidence_status": "pending_verification",
+                "review_status": "pending"
+              },
+              {
+                "species_code": "cat",
+                "breed_code": "ragdoll",
+                "life_stage_code": "all_stages",
+                "need_code": "picky_eating",
+                "relation_type": "explicit_product",
+                "recommendation_reason": "专为布偶设计，三文鱼提供高Omega-3，鸡肝强化牛磺酸与维生素A，无胶无淀粉，水分含量≥78%，辅助泌尿与毛发健康",
+                "evidence_status": "pending_verification",
+                "review_status": "pending"
+              }
+            ],
+            "verification_status": "pending"
+          }
+        ]
+      }
+    },
+    {
+      "recommendation_key": "fd0b463ff8b06b9911d8dcf42a836903a1698a3063eff9dc83bd05254c9692f5",
+      "product_key": "9c12b280aaa61fafbc302d10ab83b6e40f86b52720517acbb91881e1932e42dc",
+      "species_code": "cat",
+      "breed_code": "ragdoll",
+      "life_stage_code": "all_stages",
+      "need_code": "hydration",
+      "brand": "麦富迪",
+      "product_name": "布偶猫专用主食罐（三文鱼+鸡肝）",
+      "product_description": "专为布偶设计，三文鱼提供高Omega-3，鸡肝强化牛磺酸与维生素A，无胶无淀粉，水分含量≥78%，辅助泌尿与毛发健康",
+      "recommendation_reason": "专为布偶设计，三文鱼提供高Omega-3，鸡肝强化牛磺酸与维生素A，无胶无淀粉，水分含量≥78%，辅助泌尿与毛发健康",
+      "relation_types": [
+        "explicit_product"
+      ],
+      "source_count": 1,
+      "model_count": 1,
+      "sources": [
+        {
+          "source_key": "17134dd9c1f94055ba6bfa52e15391ebfea6a7a877de2a71b4a3f4183954c316",
+          "knowledge_source_id": null,
+          "original_source_id": 4790,
+          "batch_id": 191,
+          "source_model": "qwen-plus",
+          "source_provider": "qwen",
+          "source_question": "布偶猫推荐吃什么",
+          "source_evidence_status": "pending_verification",
+          "recommendation": {
+            "species_code": "cat",
+            "breed_code": "ragdoll",
+            "life_stage_code": "all_stages",
+            "need_code": "hydration",
+            "relation_type": "explicit_product",
+            "recommendation_reason": "专为布偶设计，三文鱼提供高Omega-3，鸡肝强化牛磺酸与维生素A，无胶无淀粉，水分含量≥78%，辅助泌尿与毛发健康",
+            "evidence_status": "pending_verification",
+            "review_status": "pending"
+          },
+          "original_source": {
+            "id": 4790,
+            "batch_id": 191,
+            "need_codes": [
+              "coat_health",
+              "hydration",
+              "picky_eating"
+            ],
+            "source_model": "qwen-plus",
+            "source_provider": "qwen",
+            "source_context": {
+              "question": "布偶猫推荐吃什么",
+              "evidence_status": "pending_verification",
+              "structured_item": {
+                "brand": "麦富迪",
+                "product_name": "麦富迪布偶猫专用主食罐（三文鱼+鸡肝）",
+                "reason": "专为布偶设计，三文鱼提供高Omega-3，鸡肝强化牛磺酸与维生素A，无胶无淀粉，水分含量≥78%，辅助泌尿与毛发健康",
+                "applicable_conditions": [
+                  "全年龄段布偶猫湿粮补充",
+                  "美毛需求突出",
+                  "挑食或饮水不足"
+                ]
+              }
+            }
+          }
+        }
+      ],
+      "raw_json": {
+        "records": [
+          {
+            "product_key": "9c12b280aaa61fafbc302d10ab83b6e40f86b52720517acbb91881e1932e42dc",
+            "species_code": "cat",
+            "brand": "麦富迪",
+            "product_name": "布偶猫专用主食罐（三文鱼+鸡肝）",
+            "product_description": "专为布偶设计，三文鱼提供高Omega-3，鸡肝强化牛磺酸与维生素A，无胶无淀粉，水分含量≥78%，辅助泌尿与毛发健康",
+            "source_key": "17134dd9c1f94055ba6bfa52e15391ebfea6a7a877de2a71b4a3f4183954c316",
+            "knowledge_source_id": null,
+            "original_source_id": 4790,
+            "sources": [
+              {
+                "id": 4790,
+                "batch_id": 191,
+                "need_codes": [
+                  "coat_health",
+                  "hydration",
+                  "picky_eating"
+                ],
+                "source_model": "qwen-plus",
+                "source_provider": "qwen",
+                "source_context": {
+                  "question": "布偶猫推荐吃什么",
+                  "evidence_status": "pending_verification",
+                  "structured_item": {
+                    "brand": "麦富迪",
+                    "product_name": "麦富迪布偶猫专用主食罐（三文鱼+鸡肝）",
+                    "reason": "专为布偶设计，三文鱼提供高Omega-3，鸡肝强化牛磺酸与维生素A，无胶无淀粉，水分含量≥78%，辅助泌尿与毛发健康",
+                    "applicable_conditions": [
+                      "全年龄段布偶猫湿粮补充",
+                      "美毛需求突出",
+                      "挑食或饮水不足"
+                    ]
+                  }
+                }
+              }
+            ],
+            "source_scope": {
+              "species_code": null,
+              "breed_code": null,
+              "life_stage_code": null,
+              "need_scene_code": null
+            },
+            "recommendations": [
+              {
+                "species_code": "cat",
+                "breed_code": "ragdoll",
+                "life_stage_code": "all_stages",
+                "need_code": "coat_health",
+                "relation_type": "explicit_product",
+                "recommendation_reason": "专为布偶设计，三文鱼提供高Omega-3，鸡肝强化牛磺酸与维生素A，无胶无淀粉，水分含量≥78%，辅助泌尿与毛发健康",
+                "evidence_status": "pending_verification",
+                "review_status": "pending"
+              },
+              {
+                "species_code": "cat",
+                "breed_code": "ragdoll",
+                "life_stage_code": "all_stages",
+                "need_code": "hydration",
+                "relation_type": "explicit_product",
+                "recommendation_reason": "专为布偶设计，三文鱼提供高Omega-3，鸡肝强化牛磺酸与维生素A，无胶无淀粉，水分含量≥78%，辅助泌尿与毛发健康",
+                "evidence_status": "pending_verification",
+                "review_status": "pending"
+              },
+              {
+                "species_code": "cat",
+                "breed_code": "ragdoll",
+                "life_stage_code": "all_stages",
+                "need_code": "picky_eating",
+                "relation_type": "explicit_product",
+                "recommendation_reason": "专为布偶设计，三文鱼提供高Omega-3，鸡肝强化牛磺酸与维生素A，无胶无淀粉，水分含量≥78%，辅助泌尿与毛发健康",
+                "evidence_status": "pending_verification",
+                "review_status": "pending"
+              }
+            ],
+            "verification_status": "pending"
+          }
+        ]
+      }
+    }
+  ]
 }
