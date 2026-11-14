@@ -347,6 +347,55 @@ def market_strengths(tags, rules, shared):
     return strengths
 
 
+def product_nutrition(product, tags, rules, shared=(), *, market_status='ready'):
+    """The same market advantages and corresponding observations for every report."""
+    strengths = market_strengths(tags, rules, shared)
+    observations, seen = [], set()
+    by_id = {r['id']: r for r in rules}
+    for strength in strengths:
+        text = str(by_id[strength['rule_id']].get('owner_observation') or '').strip()
+        normalized = re.sub(r'\s+|[，,。；;、]', '', text)
+        if text and normalized not in seen:
+            seen.add(normalized)
+            observations.append({'title': strength['title'], 'text': text, 'rule_id': strength['rule_id']})
+    return {'id': product['id'], 'label': product.get('label', ''), 'strengths': strengths,
+            'observations': observations, 'advantage_tags': tags, 'market_status': market_status}
+
+
+def nutrition_products(products):
+    """Single-product interpretation does not invent a comparison or query switch causes."""
+    try:
+        rules = load_rules()
+        market = load_market_advantages(products)
+    except (pymysql.MySQLError, ValueError):
+        return {'status': 'unavailable', 'mode': 'single', 'products': [], 'pairs': [],
+                'note': '营养优势资料暂时无法读取，请稍后重试。'}
+    sides = [product_nutrition(p, market.get(p.get('formula_id'), []) if p.get('status') == 'ready' else [],
+                              rules, market_status='ready' if p.get('status') == 'ready' else 'unavailable')
+             for p in products]
+    return {'status': 'ready', 'mode': 'single', 'products': sides, 'pairs': [],
+            'strengths_basis': 'market_advantage_tags', 'observations_basis': 'displayed_strength_rules'}
+
+
+def single_nutrition_text(nutrition):
+    if nutrition.get('status') == 'unavailable':
+        return '**营养优势／日常关注**\n' + nutrition['note']
+    lines = []
+    for product in nutrition.get('products') or []:
+        lines.append('**营养优势**')
+        strengths = product.get('strengths') or []
+        lines.extend('✅ **' + s['title'] + '：** ' + s['text'] for s in strengths)
+        if not strengths:
+            lines.append('暂未匹配到可展示的营养优势。' if product.get('market_status') == 'ready'
+                         else '当前配方暂无可用的市场优势资料。')
+        observations = product.get('observations') or []
+        lines.append('**日常关注**')
+        lines.extend('❗ **' + o['title'] + '：** ' + o['text'] for o in observations)
+        if not observations:
+            lines.append('暂无已展示优势对应的观察内容。')
+    return '\n\n'.join(lines)
+
+
 def deduplicate_health_links(links):
     """Merge repeated sources without dropping distinct conditional relations.
 
@@ -501,21 +550,9 @@ def nutrition_pairs(comparisons, species, products=()):
                         for side in ('left', 'right')}
         shared = set(tags_by_side['left']) & set(tags_by_side['right'])
         for side in ('left', 'right'):
-            strengths = market_strengths(tags_by_side[side], rules, shared)
-            observations = []
-            rule_by_id = {r['id']: r for r in rules}
-            seen_observations = set()
-            for strength in strengths:
-                rule = rule_by_id[strength['rule_id']]
-                text = str(rule.get('owner_observation') or '').strip()
-                normalized = re.sub(r'\s+|[，,。；;、]', '', text)
-                if text and normalized not in seen_observations:
-                    seen_observations.add(normalized)
-                    observations.append({'title': strength['title'], 'text': text,
-                                         'rule_id': rule['id']})
-            sides.append({'id': pair[side+'_id'], 'label': pair[side+'_label'],
-                          'strengths': strengths, 'observations': observations,
-                          'advantage_tags': tags_by_side[side], 'market_status': market_status})
+            product = {'id': pair[side+'_id'], 'label': pair[side+'_label']}
+            sides.append(product_nutrition(product, tags_by_side[side], rules, shared,
+                                           market_status=market_status))
         top = changes
         for change in top:
             change['health_links'] = deduplicate_health_links(

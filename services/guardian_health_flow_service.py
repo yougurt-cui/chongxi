@@ -273,4 +273,12 @@ def build_analysis_reply(user_id, conversation, state, context):
                                            'overview': overview, 'is_multiple': multiple, 'coverage_note': coverage_note},
                        'food_candidates': []}, 'disclaimer': 'AI内容仅供参考，不能替代兽医诊断'}
     from services.guardian_report_service import attach_report
-    return attach_report(reply, context, subjects, scene=context.get('report_scene'))
+    reply = attach_report(reply, context, subjects, scene=context.get('report_scene'))
+    if not multiple:
+        from services.guardian_task_knowledge import single_nutrition_text
+        nutrition = reply['result']['guardian_report']['feeding'].get('task_nutrition') or {}
+        detail = single_nutrition_text(nutrition)
+        if detail:
+            lines.insert(-1, detail)
+            reply['reply'] = '\n\n'.join(lines)
+    return reply

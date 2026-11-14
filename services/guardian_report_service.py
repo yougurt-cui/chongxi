@@ -336,18 +336,20 @@ def attach_report(reply, context, subjects=(), *, scene=None):
     history_to_current = (context.get('food_analysis_scope') in {'current_vs_history', 'saved_diet'}
                           and scene != 'switch_impact')
     comparisons = compare_products(products, history_to_current=history_to_current)
-    from services.guardian_task_knowledge import nutrition_pairs, question_pool
-    nutrition = nutrition_pairs(comparisons, pet.get('animal_type'), products) if comparisons else None
+    from services.guardian_task_knowledge import nutrition_pairs, nutrition_products, single_nutrition_text, question_pool
+    nutrition = (nutrition_pairs(comparisons, pet.get('animal_type'), products) if comparisons else
+                 nutrition_products(products) if len(products) == 1 else None)
     community = community_evidence(pet, products)
     basics = pet_summary(pet)
-    narration = summarize(basics, products, comparisons, community, scene) if not nutrition else {
+    narration = summarize(basics, products, comparisons, community, scene) if not comparisons else {
         'summary': ('营养优势依据各款粮的市场优势标签整理；日常关注仅列出已展示优势对应的观察内容。'
                     if any(pair['status'] == 'comparable' for pair in comparisons) else
                     '产品资料或计算版本不一致，暂时不能给出双方优势及换粮变化。'),
         'community': '以下为独立的社区记录，仅供参考。' if community['items'] else '暂无相关社区记录。',
         'mode': 'nutrition_rules', 'source_ids': []}
     if nutrition:
-        narration['feeding'] = '营养优势来自市场优势标签及对应规则；日常关注来自已展示优势的对应规则，是否适合仍需结合实际耐受。'
+        narration['feeding'] = (single_nutrition_text(nutrition) if not comparisons else
+            '营养优势来自市场优势标签及对应规则；日常关注来自已展示优势的对应规则。')
     if any(p['status'] == 'provisional' for p in products):
         if '初算' not in narration['summary']:
             narration['summary'] = '初算待核对。' + narration['summary']
