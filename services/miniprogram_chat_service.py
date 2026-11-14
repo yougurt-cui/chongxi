@@ -1475,7 +1475,7 @@ def _handle_reminder_message(user_id, conversation, message, state, source_messa
     return {**reply, 'result': result, 'messages': [{**reply, 'result': result}]}
 
 
-def _recognize_guardian_turn(message, state):
+def _recognize_guardian_turn(message, state, task_decision=None):
     """Reuse slot extraction for semantic handoffs; never add a routing LLM call
     to an existing soft-stool turn. Clear requests/short answers stay offline.
     """
@@ -1492,6 +1492,18 @@ def _recognize_guardian_turn(message, state):
                 "_soft_extraction": {**literal, "_field_evidence": {key: message for key in literal}}}, None
     if daily_status.requested(message, state):
         return {'primary_intent': 'general_pet_qa', 'slots': {}, '_target_flow': 'general', '_daily_status': True}, None
+    # A validated semantic business task owns routing. The legacy model may not
+    # reinterpret the same turn (e.g. an analysis request as food recommendation).
+    if task_decision and task_decision.get('task') == 'business' and task_decision.get('business_intent'):
+        intent = task_decision['business_intent']
+        slots = {}
+        if intent == 'food_analysis':
+            facts = task_decision.get('facts_to_merge') or {}
+            name = task_decision.get('product_query') or health_flow.named_request(message) or facts.get('current_food_name') or facts.get('new_food_name')
+            if name:
+                slots['food_name'] = name
+        return {'primary_intent': intent, 'slots': slots,
+                '_target_flow': 'food_switch' if intent == 'food_switch' else 'reminder' if intent == 'reminder' else 'general'}, None
     if _uploaded_product_followup(message, state) or _uploaded_current_comparison(message, state):
         return {'primary_intent': 'food_analysis', 'slots': {}, '_target_flow': 'general'}, None
     analysis_query = health_flow.named_request(message)
@@ -1693,13 +1705,32 @@ def _saved_product_analysis(user_id, conversation, state, decision, client_conte
     return reply
 
 
+def _context_named_product(name, role):
+    temporary, context = {'slots': {}}, {}
+    result = health_flow.prepare_named_analysis('分析一下' + name, temporary, context, _food_analysis_by_formula)
+    if result:
+        choices = ((result.get('interaction') or {}).get('options') or [])
+        return {'role': role, 'label': name, 'status': 'unavailable',
+                'identity_status': 'ambiguous' if choices else 'not_resolved',
+                'candidates': [choice['label'] for choice in choices]}
+    item = (context.get('named_food_analyses') or [{}])[0]
+    analysis = item.get('food_analysis')
+    return {'role': role, 'label': item.get('label') or name, 'analysis': analysis,
+            'status': 'available' if analysis else 'unavailable'}
+
+
 def _context_answer(user_id, conversation, message, state, memory, decision, client_context):
     """Prepare required evidence before any synthesis or focused product answer."""
     from services.guardian_task_recognizer import saved_scope
     products, diet = [], {}
     scope = decision.get('object_scope')
     scope = scope if scope in {'current', 'history', 'saved_diet'} else saved_scope(message)
-    if decision['action'] == 'synthesize' or decision.get('task') == 'supplement' or scope:
+    topic_ids = set(decision.get('topic_ids') or [])
+    facts = {f['field']: f['value'] for t in memory.get('topics', []) if t['id'] in topic_ids
+             for f in (t.get('facts') or {}).values()}
+    facts.update(decision.get('facts_to_merge') or {})
+    named = {k: facts[k] for k in ('previous_food_name', 'current_food_name', 'new_food_name') if facts.get(k)}
+    if decision['action'] == 'synthesize' or decision.get('task') == 'supplement' or scope or named:
         context = _build_context(user_id, conversation, state, [], client_context)
         diet = {k: context.get(k) for k in ('current_food', 'diet_history', 'diet_history_status',
                                            'recent_daily_records')}
@@ -1727,6 +1758,8 @@ def _context_answer(user_id, conversation, message, state, memory, decision, cli
                     '已尝试读取档案和吃粮历史，但目前未能取得所需的有效配方资料，请稍后重试；若粮款尚未关联配方，请先确认具体名称和版本。',
                     'product_evidence_unavailable', action=decision['action'])
         else:
+            for role, name in named.items():
+                products.append(_context_named_product(name, role))
             for product in selected[-6:]:
                 analysis = _food_analysis_by_formula(product['formula_id'])
                 products.append({'source_message_id': product['message_id'], 'formula_id': product['formula_id'],
@@ -1838,7 +1871,7 @@ def handle_message(user_id: Any, conversation_id: Any, payload: dict[str, Any]) 
             elif context_decision and context_decision['action'] == 'workflow':
                 context_decision = None
     scene, photos, photo_subject = _resolve_scene(user_id, conversation, state, message, photos, prior_photo,
-        external_subject, client_context, allow_text=not (context_decision or attachments or interaction or ambiguous or subject_choice
+        external_subject, client_context, allow_text=not (context_decision or (relation_decision or {}).get('business_intent') or attachments or interaction or ambiguous or subject_choice
             or ingredient_assembly.is_request(message, state, conversation.get('pet_id'))))
     if scene and photos:
         ambiguous = False
@@ -1955,7 +1988,9 @@ def handle_message(user_id: Any, conversation_id: Any, payload: dict[str, Any]) 
             intent_result = ({'primary_intent': 'symptom_consult', '_target_flow': 'general',
                               'slots': {'symptom': message}}, None)
         else:
-            intent_result = _recognize_guardian_turn(message, state) if message and not interaction and not attachments else None
+            intent_result = (_recognize_guardian_turn(message, state, relation_decision)
+                             if relation_decision and relation_decision.get('business_intent')
+                             else _recognize_guardian_turn(message, state)) if message and not interaction and not attachments else None
         routing_state = {**state, "_turn_decision": intent_result[0] if intent_result else ({'_target_flow': 'reminder'} if interaction and state.get('primary_intent') == 'reminder' else {})}
         strategy = select_strategy(message, routing_state, GUARDIAN_STRATEGIES)
         if strategy.name == "soft_stool" and not conversation.get("pet_id"):

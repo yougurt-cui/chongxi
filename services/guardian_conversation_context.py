@@ -57,12 +57,20 @@ def _update_topic(memory, event, result):
             preceding = [e for e in memory['events'] if e['role'] == 'user']
             ids = (preceding[-1].get('topic_ids') or []) if preceding else []
     event['topic_ids'] = ids
+    from services.guardian_task_recognizer import validated_facts
     for identity in ids:
         topic = next((t for t in topics if t['id'] == identity), None)
         if topic is None:
             topic = {'id': identity, 'question': event['text'][:300], 'statements': [],
                      'summary': '', 'source_ids': [], 'product_ids': [], 'hypotheses': []}
             topics.append(topic)
+        if event['role'] == 'user':
+            facts = validated_facts(relation.get('facts_to_merge') or {}, event['text'])
+            if relation.get('dialogue_act') == 'correct_fact' and set(facts) & {'current_food_name', 'new_food_name'}:
+                for key in {'current_food_name', 'new_food_name'} - set(facts):
+                    topic.setdefault('facts', {}).pop(key, None)
+            for key, value in facts.items():
+                topic.setdefault('facts', {})[key] = {'field': key, 'value': value, 'source_id': event['id']}
         topic['source_ids'] = list(dict.fromkeys(topic['source_ids'] + [event['id']]))[-12:]
         if event['role'] == 'user':
             topic['statements'] = list(dict.fromkeys(topic['statements'] + [event['text'][:300]]))[-5:]
@@ -78,7 +86,9 @@ def _update_topic(memory, event, result):
 def discussion(decision):
     """Persist routing provenance so replay does not silently merge independent topics."""
     return {'relation': (decision or {}).get('relation') or (decision or {}).get('action', 'new'),
-            'topic_ids': (decision or {}).get('topic_ids') or []}
+            'topic_ids': (decision or {}).get('topic_ids') or [],
+            'dialogue_act': (decision or {}).get('dialogue_act'),
+            'facts_to_merge': (decision or {}).get('facts_to_merge') or {}}
 
 
 def remember(memory, message):
@@ -91,7 +101,7 @@ def remember(memory, message):
     role = message.get('role')
     if role not in ('user', 'assistant'):
         return
-    event = {'id': message['id'], 'role': role, 'text': str(message.get('content') or '')[:1800],
+    event = {'id': message['id'], 'role': role, 'text': str(message.get('content') or '')[:4000 if role == 'user' else 1800],
              'turn': result.get('turn_no'), 'time': str(message.get('created_at') or ''),
              'kind': 'user_statement' if role == 'user' else result.get('pipeline') or result.get('intent') or 'assistant_answer'}
     evidence = {}
@@ -151,6 +161,7 @@ def remember(memory, message):
     keep.update(e['id'] for e in [e for e in events if e['role'] == 'user' and re.search(r'便|吐|吃|换粮|食欲|精神|开始|持续|不是|更正', e['text'])][-12:])
     keep.update(p['message_id'] for p in memory['products'])
     keep.update(i for t in memory.get('topics', []) for i in t['source_ids'][-2:])
+    keep.update(f['source_id'] for t in memory.get('topics', []) for f in (t.get('facts') or {}).values())
     memory['events'] = [e for e in events if e['id'] in keep][-54:]
 
 
@@ -223,6 +234,9 @@ def answer(question, memory, decision, state, *, product_evidence=None, diet_con
     wanted.update(i for t in memory.get('topics', []) if t['id'] in (decision.get('topic_ids') or []) for i in t['source_ids'])
     if memory.get('source_id'):
         wanted.add(memory['source_id'])
+    wanted.update(f['source_id'] for t in memory.get('topics', [])
+                  if t['id'] in (decision.get('topic_ids') or [])
+                  for f in (t.get('facts') or {}).values())
     events = memory['events']
     # Follow a prior synthesis back to its original evidence; never let an inference
     # become an independent source just because the assistant repeated it.
@@ -268,6 +282,7 @@ source_id指向旧卡片时围绕旧卡片回答；无关新话题不混入。�
 问产品差异就比较产品，不把历史症状和就医建议再次带入。明确的comparisons数值优先于市场优势标签：某款有市场标签不代表它比另一款分数更高。数值相同必须说相同，不能编造差异。
 若画像表明各维度都接近，直说没有明显差异，不必硬挑某项当作关键区别；不同量表的原始分差不能直接比大小。
 product_evidence中status=available表示已读取具体资料，必须使用，不得声称没有配料表或要求重复上传；status=unavailable表示读取失败或身份未解析，不等同于用户没有记录。部分资料不可用时明确哪些项目未取得，不扩大为两款都没有资料。
+dialogue_act为provide_fact/answer_question/correct_fact时先吸收本轮事实或纠正，再围绕原任务继续分析，不启动推荐或完整问卷；topic_facts是用户陈述且保留消息来源，纠正后的值优先。
 task为explain时解释已有结论的实际含义，不重出产品报告；task为supplement时仅补充用户要求的维度。
 综合原因时先使用已有证据解释，不以补问换粮多久作为回答前提。按具体原料/营养变化→相关机制→可能解释组织，多个因素可以共同推理。
 product_evidence是本轮读取的配方资料；diet_context是实际档案。使用raw_ingredient_text保留复合配料层级，不把子配料当作全配方排序。
@@ -290,7 +305,10 @@ questions生成3个围绕本轮主题、下一步确实有帮助的问题，每�
 问题必须是主人向管家请教的口吻（如“我该怎样记录换粮时间？”），不能是管家反问主人的调查问题（如“便臭持续多久了？”），不能预设用户未确认的事实。''' + CONCLUSION_STYLE_INSTRUCTION,
             {'question': question, 'action': action, 'source_id': memory.get('source_id'), 'evidence': evidence, 'product_evidence': product_evidence or [],
              'diet_context': diet_context or {}, 'task': decision.get('task'),
-             'target': decision.get('target')}, tokens=2600)
+             'target': decision.get('target'), 'dialogue_act': decision.get('dialogue_act'),
+             'facts_to_merge': decision.get('facts_to_merge') or {},
+             'topic_facts': [f for t in memory.get('topics', []) if t['id'] in (decision.get('topic_ids') or [])
+                             for f in (t.get('facts') or {}).values()]}, tokens=2600)
         conclusion, reasons = result.get('conclusion'), result.get('reasons')
         if not isinstance(conclusion, str) or not conclusion.strip() or len(conclusion) > 800:
             raise ValueError('invalid conclusion')

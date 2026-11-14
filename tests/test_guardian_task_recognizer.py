@@ -109,3 +109,95 @@ def test_contract_does_not_capture_explanations_supplements_or_explicit_attribut
     d = recognize(question, m, {}, model)
     assert d['task'] == task and 'constraint' not in d
     assert d['object_scope'] == 'saved_diet'
+
+
+def health_memory():
+    m = ctx.empty('u', {'id': 'c', 'pet_id': 'p'})
+    ctx.remember(m, {'id': 'symptom', 'role': 'user', 'content': '换粮后拉粑粑好臭', 'result': {}})
+    ctx.remember(m, {'id': 'answer', 'role': 'assistant', 'content': '可以核对换粮、蛋白消化和纤维组成。',
+                     'result': {'pipeline': 'health_knowledge', 'health_knowledge': {'groups': []}}})
+    return m
+
+
+@pytest.mark.parametrize('utterance,act,facts', [
+    ('换了卫仕LA20', 'provide_fact', {'new_food_name': '卫仕LA20'}),
+    ('卫仕LA20', 'answer_question', {'new_food_name': '卫仕LA20'}),
+    ('不是LA20，是卫仕LA40', 'correct_fact', {'new_food_name': '卫仕LA40'}),
+    ('已经三天了', 'provide_fact', {'duration': '三天'}),
+])
+def test_fact_updates_resume_health_task_even_if_model_says_business(utterance, act, facts):
+    m = health_memory()
+    model = Mock(return_value={'relation': 'continue', 'task': 'business',
+                              'dialogue_act': act, 'facts_to_merge': facts, 'business_intent': 'food_switch'})
+    d = recognize(utterance, m, {}, model)
+    assert d['action'] == 'continue' and d['task'] == 'explain'
+    assert d['business_intent'] is None and d['facts_to_merge'] == facts
+    assert d['topic_ids'] == ['topic:symptom']
+    active = model.call_args.args[1]['active_context']
+    assert active['task'] == 'symptom_cause_analysis'
+    assert active['user_statements'] == ['换粮后拉粑粑好臭']
+
+
+def test_new_fact_does_not_start_recommendation_or_attach_to_unrelated_topic():
+    d = recognize('换了卫仕LA20', memory(), {}, Mock(return_value={
+        'relation': 'new', 'task': 'business', 'dialogue_act': 'provide_fact',
+        'facts_to_merge': {'new_food_name': '卫仕LA20'}, 'business_intent': 'food_switch'}))
+    assert d['action'] == 'clarify' and d['business_intent'] is None
+
+
+def test_fact_corrections_are_scoped_persisted_and_replayed():
+    m = health_memory()
+    for i, text, act, name in [('f1', '换了卫仕LA20', 'provide_fact', '卫仕LA20'),
+                                ('f2', '不是LA20，是卫仕LA40', 'correct_fact', '卫仕LA40')]:
+        d = recognize(text, m, {}, Mock(return_value={
+            'relation': 'continue', 'task': 'explain', 'dialogue_act': act,
+            'source_ids': ['answer'], 'facts_to_merge': {'new_food_name': name}}))
+        ctx.remember(m, {'id': i, 'role': 'user', 'content': text,
+                         'result': {'discussion': ctx.discussion(d)}})
+    fact = m['topics'][0]['facts']['new_food_name']
+    assert fact == {'field': 'new_food_name', 'value': '卫仕LA40', 'source_id': 'f2'}
+    model = Mock(return_value={'relation': 'continue', 'task': 'explain', 'source_ids': ['answer']})
+    recognize('继续分析', m, {}, model)
+    assert model.call_args.args[1]['active_context']['known_facts'] == [fact]
+    assert 'facts' not in memory()['topics'][0]
+
+
+@pytest.mark.parametrize('facts', [
+    {'new_food_name': '皇家'}, {'diagnosis': '疾病'}, {'duration': 3},
+])
+def test_extracted_facts_must_be_supported_by_user_text(facts):
+    d = recognize('换了卫仕LA20', health_memory(), {}, Mock(return_value={
+        'relation': 'continue', 'task': 'explain', 'dialogue_act': 'provide_fact', 'facts_to_merge': facts}))
+    assert d['action'] == 'unavailable'
+
+
+def test_budget_answer_keeps_existing_questionnaire_and_explicit_requests_keep_their_intent():
+    state = {'primary_intent': 'food_switch', 'current_step': 'budget'}
+    d = recognize('每斤50元', health_memory(), state, Mock(return_value={
+        'relation': 'continue', 'task': 'business', 'dialogue_act': 'answer_question',
+        'business_intent': 'food_switch'}))
+    assert d['action'] == 'workflow' and d['business_intent'] == 'food_switch'
+    for question, intent in [('帮我推荐一款粮', 'food_switch'), ('卫仕LA20怎么样', 'food_analysis')]:
+        d = recognize(question, health_memory(), {}, Mock(return_value={
+            'relation': 'new', 'task': 'business', 'dialogue_act': 'request', 'business_intent': intent}))
+        assert d['action'] == 'new' and d['business_intent'] == intent
+
+
+def test_correction_of_current_food_removes_obsolete_new_food_value():
+    m = health_memory()
+    for i, text, act, facts in [('f1', '换了卫仕LA20', 'provide_fact', {'new_food_name': '卫仕LA20'}),
+                               ('f2', '不是LA20，是卫仕LA40', 'correct_fact', {'current_food_name': '卫仕LA40'})]:
+        ctx.remember(m, {'id': i, 'role': 'user', 'content': text, 'result': {'discussion': {
+            'topic_ids': ['topic:symptom'], 'dialogue_act': act, 'facts_to_merge': facts}}})
+    assert set(m['topics'][0]['facts']) == {'current_food_name'}
+    assert m['topics'][0]['facts']['current_food_name']['value'] == '卫仕LA40'
+
+
+def test_product_query_cannot_invent_identity_or_become_a_diet_fact():
+    for query, action in [('卫仕LA20', 'new'), ('皇家', 'unavailable')]:
+        d = recognize('卫仕LA20怎么样', health_memory(), {}, Mock(return_value={
+            'relation': 'new', 'task': 'business', 'dialogue_act': 'request',
+            'business_intent': 'food_analysis', 'product_query': query}))
+        assert d['action'] == action
+        if action == 'new':
+            assert d['facts_to_merge'] == {} and d['product_query'] == '卫仕LA20'
