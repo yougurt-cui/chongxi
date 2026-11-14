@@ -27,3 +27,24 @@ def test_health_card_does_not_append_repeated_disclaimer():
     result = health.analyse_portrait(portrait(), knowledge())
     assert '不代表这款粮会引起疾病' not in health.report_text('皇家 BK34', result)
     assert result['presentation']['attentions']
+
+
+def test_overview_keeps_evidence_note_out_of_conclusion():
+    from services.guardian_health_summary_service import build_overview
+    result = build_overview([{'label': '粮A', 'status': 'ready', 'presentation': {
+        'advantages': [{'title': '纤维', 'summary': '纤维来源较丰富。'}], 'attentions': []}}], [], use_model=False)
+    assert '纤维来源较丰富' in result['text']
+    assert '不代表实际吃粮效果' not in result['text']
+    assert '不代表实际吃粮效果' in result['note']
+
+
+def test_comparison_does_not_append_generic_note_but_preserves_missing_data():
+    from services.guardian_product_portrait_service import portrait_comparison_text
+    comparison = {'status': 'comparable', 'common': [], 'complements': [], 'shortcomings': [],
+                  'missing_dimensions': ['粗蛋白含量'],
+                  'note': '画像比较描述配方特点，不代表实际健康效果；互补不表示建议混喂。'}
+    text = portrait_comparison_text(comparison)
+    assert '粗蛋白含量' in text
+    assert '不代表实际健康效果' not in text
+    comparison.update(status='unavailable', note='资料或计算版本不一致，暂不比较。')
+    assert portrait_comparison_text(comparison) == comparison['note']

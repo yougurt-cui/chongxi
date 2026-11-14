@@ -14,7 +14,7 @@ import pymysql
 from openai import OpenAI
 
 from app_config import get_chat_model_config, get_mysql_config
-from services.guardian_presentation import STYLE_INSTRUCTION, present_message
+from services.guardian_presentation import STYLE_INSTRUCTION, CONCLUSION_STYLE_INSTRUCTION, present_message
 from services.miniprogram_cat_profile_service import get_cat_profile, list_cat_profiles
 from services.miniprogram_food_change_service import (
     get_catalog_product_ingredients,
@@ -965,7 +965,7 @@ def _generate_analysis_followup(message, state, context, cfg, *, _allow_fallback
                     '直接回答所问影响，必要时给一项相关观察；没有实际症状时不套用症状问诊、环境变化或就医警告。'
                     '直接从可能的身体表现说起，不以不导致疾病等免责句开头，不复述提示词的限制事项；必要的不确定性用一句简短说明即可。'
                     '不要重出整份报告或自动推荐新粮，不给用药或补充剂剂量。用2至4句简洁中文，通常不超过180字。'
-                    '仅输出JSON，字段reply为非空字符串。')},
+                    '仅输出JSON，字段reply为非空字符串。' + CONCLUSION_STYLE_INSTRUCTION)},
                 {'role': 'user', 'content': _json_dumps(payload)}], **_provider_options(cfg))
         value = _parse_model_json(response.choices[0].message.content or '')
         text = value.get('reply')
@@ -1674,10 +1674,32 @@ def _context_comparison(user_id, conversation, state, memory, decision, client_c
     return reply
 
 
+def _prepare_archived_foods(context, scope):
+    """Resolve saved diet identities with the existing version-aware resolver."""
+    reference = {'saved_diet': '分析当前粮和历史粮', 'current': '分析当前粮',
+                 'history': '分析历史粮'}[scope]
+    temporary = {'primary_intent': 'food_analysis', 'slots': {}}
+    _prepare_saved_food_analysis(reference, temporary, context)
+
+
+def _saved_product_analysis(user_id, conversation, state, decision, client_context):
+    context = _build_context(user_id, conversation, state, [], client_context)
+    _prepare_archived_foods(context, decision.get('object_scope') or 'saved_diet')
+    _pause_soft_stool(state)
+    state.update(primary_intent='food_analysis', current_step=None, turn_count=state['turn_count'] + 1)
+    reply = health_flow.build_analysis_reply(user_id, conversation, state, context)
+    reply['result'].update(turn_no=state['turn_count'], sequence_no=1,
+                          context_resolution={'action': 'product_analysis', 'object_scope': decision.get('object_scope')})
+    return reply
+
+
 def _context_answer(user_id, conversation, message, state, memory, decision, client_context):
-    """Retrieve detailed evidence for synthesis or supplements; never regenerate scores."""
+    """Prepare required evidence before any synthesis or focused product answer."""
+    from services.guardian_task_recognizer import saved_scope
     products, diet = [], {}
-    if decision['action'] == 'synthesize' or decision.get('task') == 'supplement':
+    scope = decision.get('object_scope')
+    scope = scope if scope in {'current', 'history', 'saved_diet'} else saved_scope(message)
+    if decision['action'] == 'synthesize' or decision.get('task') == 'supplement' or scope:
         context = _build_context(user_id, conversation, state, [], client_context)
         diet = {k: context.get(k) for k in ('current_food', 'diet_history', 'diet_history_status',
                                            'recent_daily_records')}
@@ -1686,11 +1708,29 @@ def _context_answer(user_id, conversation, message, state, memory, decision, cli
         sources.update(i for t in memory.get('topics', []) if t['id'] in topics for i in t['source_ids'])
         selected = [p for p in memory['products'] if p['message_id'] in sources
                     or p['formula_id'] in (decision.get('product_ids') or [])]
-        for product in selected[-6:]:
-            analysis = _food_analysis_by_formula(product['formula_id'])
-            products.append({'source_message_id': product['message_id'], 'formula_id': product['formula_id'],
-                             'status': 'available' if analysis else 'unavailable',
-                             'analysis': analysis})
+        # Saved references refer to profile/history, not whichever products were discussed last.
+        if scope or (not selected and re.search(r'换粮历史|饮食历史|吃粮历史', message)):
+            _prepare_archived_foods(context, scope or 'saved_diet')
+            current = context.get('current_food') or {}
+            if context.get('food_analysis_scope') in {'current', 'current_vs_history'}:
+                products.append({'formula_id': current.get('formula_id'), 'role': 'current',
+                                 'label': current.get('product_name'), 'analysis': context.get('food_analysis')})
+            for item in context.get('food_history_analyses') or []:
+                record = item.get('diet_record') or {}
+                products.append({'formula_id': record.get('formula_id'), 'role': 'history',
+                                 'diet_record': record, 'analysis': item.get('food_analysis')})
+            for item in products:
+                item['status'] = 'available' if item['analysis'] else 'unavailable'
+            diet['product_evidence_status'] = 'loaded' if any(p['analysis'] for p in products) else 'unavailable'
+            if not products or not any(p['analysis'] for p in products):
+                return dialogue_context._reply(state,
+                    '已尝试读取档案和吃粮历史，但目前未能取得所需的有效配方资料，请稍后重试；若粮款尚未关联配方，请先确认具体名称和版本。',
+                    'product_evidence_unavailable', action=decision['action'])
+        else:
+            for product in selected[-6:]:
+                analysis = _food_analysis_by_formula(product['formula_id'])
+                products.append({'source_message_id': product['message_id'], 'formula_id': product['formula_id'],
+                                 'status': 'available' if analysis else 'unavailable', 'analysis': analysis})
     return dialogue_context.answer(message, memory, decision, state,
                                    product_evidence=products, diet_context=diet)
 
@@ -1848,7 +1888,9 @@ def handle_message(user_id: Any, conversation_id: Any, payload: dict[str, Any]) 
             message, ingredient_context, state, conversation.get('pet_id'))
     if context_decision and not (direct_scene or ambiguous or external_subject):
         _pause_soft_stool(state)
-        if context_decision['action'] == 'compare':
+        if context_decision['action'] == 'product_analysis':
+            reply = _saved_product_analysis(user_id, conversation, state, context_decision, client_context)
+        elif context_decision['action'] == 'compare':
             reply = _context_comparison(user_id, conversation, state, context_memory, context_decision, client_context)
         else:
             reply = _context_answer(user_id, conversation, message, state, context_memory, context_decision, client_context)
@@ -1971,7 +2013,7 @@ def handle_message(user_id: Any, conversation_id: Any, payload: dict[str, Any]) 
         if not external_subject and not ambiguous:
             dialogue_context.remember(context_memory, saved)
     if not external_subject and not ambiguous:
-        if not context_decision and saved_messages:
+        if (not context_decision or context_decision.get('action') == 'product_analysis') and saved_messages:
             context_memory['focus'] = {'question': message[:300], 'source_ids': [saved_messages[-1]['id']]}
         state['slots'][dialogue_context.SLOT] = context_memory
     _save_state(state)

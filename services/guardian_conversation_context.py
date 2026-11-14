@@ -10,6 +10,7 @@ import re
 
 from openai import OpenAI
 from app_config import get_chat_model_config
+from services.guardian_presentation import CONCLUSION_STYLE_INSTRUCTION
 
 logger = logging.getLogger(__name__)
 SLOT = '_conversation_memory_v1'
@@ -266,6 +267,7 @@ def answer(question, memory, decision, state, *, product_evidence=None, diet_con
 source_id指向旧卡片时围绕旧卡片回答；无关新话题不混入。只回答当前问的那个点：问寄生虫就解释如何核对寄生虫，不重新总结粮款评分和换粮过程。
 问产品差异就比较产品，不把历史症状和就医建议再次带入。明确的comparisons数值优先于市场优势标签：某款有市场标签不代表它比另一款分数更高。数值相同必须说相同，不能编造差异。
 若画像表明各维度都接近，直说没有明显差异，不必硬挑某项当作关键区别；不同量表的原始分差不能直接比大小。
+product_evidence中status=available表示已读取具体资料，必须使用，不得声称没有配料表或要求重复上传；status=unavailable表示读取失败或身份未解析，不等同于用户没有记录。部分资料不可用时明确哪些项目未取得，不扩大为两款都没有资料。
 task为explain时解释已有结论的实际含义，不重出产品报告；task为supplement时仅补充用户要求的维度。
 综合原因时先使用已有证据解释，不以补问换粮多久作为回答前提。按具体原料/营养变化→相关机制→可能解释组织，多个因素可以共同推理。
 product_evidence是本轮读取的配方资料；diet_context是实际档案。使用raw_ingredient_text保留复合配料层级，不把子配料当作全配方排序。
@@ -285,7 +287,7 @@ conclusion<=800字，reasons最多3条且每条<=180字并包含非空有效来�
 questions生成3个围绕本轮主题、下一步确实有帮助的问题，每个<=28字，不重复本轮或已经回答的问题。
 用日常说法，不用“蛋白质量结构”等术语，不复述冗长粮款全名；可用“这两款粮”，点击时已有原消息定位。
 不扩展到未提及的恢复期、疾病或换粮计划，不预设产品已吃过。
-问题必须是主人向管家请教的口吻（如“我该怎样记录换粮时间？”），不能是管家反问主人的调查问题（如“便臭持续多久了？”），不能预设用户未确认的事实。''',
+问题必须是主人向管家请教的口吻（如“我该怎样记录换粮时间？”），不能是管家反问主人的调查问题（如“便臭持续多久了？”），不能预设用户未确认的事实。''' + CONCLUSION_STYLE_INSTRUCTION,
             {'question': question, 'action': action, 'source_id': memory.get('source_id'), 'evidence': evidence, 'product_evidence': product_evidence or [],
              'diet_context': diet_context or {}, 'task': decision.get('task'),
              'target': decision.get('target')}, tokens=2600)

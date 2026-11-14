@@ -74,3 +74,38 @@ def test_first_turn_keeps_existing_entry():
     model = Mock()
     assert recognize('分析猫粮', {'events': []}, {}, model) is None
     model.assert_not_called()
+
+
+@pytest.mark.parametrize('question', [
+    '帮我分析一下当前吃的粮和历史吃的粮',
+    '帮我分析一下历史粮和现在吃的粮',
+    '对比一下当前粮和历史粮',
+])
+def test_explicit_product_request_cannot_be_rewritten_as_symptom_attribution(question):
+    m = memory(); m['products'] = []; m['source_id'] = None
+    model = Mock(return_value={'relation': 'continue', 'task': 'synthesize', 'target': '便臭归因'})
+    d = recognize(question, m, {}, model)
+    assert d['action'] == 'product_analysis' and d['relation'] == 'new'
+    assert d['object_scope'] == 'saved_diet'
+    assert d['source_ids'] == [] and d['topic_ids'] == []
+    assert model.call_args.args[1]['request_contract']['task'] == 'product_analysis'
+
+
+def test_explicit_saved_product_request_survives_model_failure_and_first_turn():
+    model = Mock(side_effect=TimeoutError)
+    q = '帮我分析一下当前吃的粮和历史吃的粮'
+    assert recognize(q, memory(), {}, model)['action'] == 'product_analysis'
+    assert recognize(q, {'events': []}, {}, model)['action'] == 'product_analysis'
+
+
+@pytest.mark.parametrize('question,task', [
+    ('结合便臭分析当前粮和历史粮的影响', 'synthesize'),
+    ('帮我分析一下新粮和历史粮的纤维组成', 'supplement'),
+    ('当前粮和历史粮的差异日常怎么理解', 'explain'),
+])
+def test_contract_does_not_capture_explanations_supplements_or_explicit_attribution(question, task):
+    m = memory()
+    model = Mock(return_value={'relation': 'continue', 'task': task, 'source_ids': ['2']})
+    d = recognize(question, m, {}, model)
+    assert d['task'] == task and 'constraint' not in d
+    assert d['object_scope'] == 'saved_diet'

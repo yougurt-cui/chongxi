@@ -179,4 +179,4 @@ def portrait_comparison_text(comparison):
         lines.append(title + '：' + ('；'.join(texts) if texts else '现有画像未发现明确证据'))
     if comparison['missing_dimensions']:
         lines.append('画像缺项：' + '、'.join(comparison['missing_dimensions']))
-    return '\n'.join(lines + [comparison['note']])
+    return '\n'.join(lines)

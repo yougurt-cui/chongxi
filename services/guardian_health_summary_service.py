@@ -71,6 +71,5 @@ def build_overview(reports, comparisons, *, use_model=True):
         lines.append('现有资料不足以归纳整体优势或留心点，以下逐款说明可用资料。')
     if result['unavailable_subjects']:
         lines.append('资料不足：' + '、'.join(result['unavailable_subjects']))
-    lines.append(result['note'])
     result['text'] = '\n\n'.join(lines)
     return result

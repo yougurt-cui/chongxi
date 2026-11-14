@@ -310,7 +310,7 @@ def test_independent_topics_can_later_be_combined_and_replayed():
 def test_plain_independent_question_is_classified_with_topic_index():
     m = seed()
     with patch.object(ctx, '_model', return_value={'relation': 'new','task':'business'}) as model:
-        assert ctx.decide('帮我分析一下历史粮和当前粮', m)['action'] == 'new'
+        assert ctx.decide('帮我分析一下历史粮和当前粮', m)['action'] == 'product_analysis'
     assert model.call_args.args[1]['topics'] == m['topics']
 
 
@@ -388,3 +388,66 @@ def test_feeding_meaning_followup_does_not_regenerate_comparison():
     assert answer.call_args.args[2]['task'] == 'explain'
     assert r['message']['result']['task_decision']['task'] == 'explain'
     assert r['message']['result']['discussion']['topic_ids'] == [source_topic]
+
+
+def test_saved_product_analysis_runs_without_products_in_chat_memory():
+    state = chat._default_state('c'); m = memory()
+    ctx.remember(m, msg(1, '猫咪便便臭是什么原因', role='user'))
+    ctx.remember(m, msg(2, '便臭的可能机制', health=True))
+    context = {'current_food': {'formula_id': 343, 'product_name': 'LA40'},
+               'diet_history': [{'formula_id': 342, 'product_name': 'F32'}]}
+    with ExitStack() as stack:
+        def mock(obj, key, **kw): return stack.enter_context(patch.object(obj, key, **kw))
+        mock(chat, '_get_conversation', return_value=CONV); mock(chat, '_load_state', return_value=state)
+        mock(chat, '_save_state'); mock(chat, '_connect', return_value=MagicMock())
+        saved = []
+        def save(**kw):
+            item = dict(id=f'{100+len(saved):032x}', **kw); saved.append(item); return item
+        mock(chat, '_save_message', side_effect=save)
+        mock(ctx, 'load', return_value=m); mock(ctx, 'contextual_questions')
+        mock(ctx, '_model', return_value={'relation': 'continue', 'task': 'synthesize', 'target': '便臭归因'})
+        mock(chat, '_resolve_scene', return_value=(None, [], None))
+        mock(chat, '_build_context', return_value=context)
+        loader = mock(chat, '_food_analysis_by_formula', side_effect=lambda fid, current=None: {'product': {'formula_id': fid}})
+        builder = mock(chat.health_flow, 'build_analysis_reply', return_value={'reply': '产品对比报告', 'result': {}})
+        mock(ctx, 'answer', side_effect=AssertionError('must not generate symptom attribution'))
+        r = chat.handle_message('owner', 'c', {'message': '帮我分析一下当前吃的粮和历史吃的粮'})
+    assert [c.args[0] for c in loader.call_args_list] == [343, 342]
+    assert builder.call_args.args[3]['food_analysis_scope'] == 'current_vs_history'
+    assert r['message']['result']['task_decision']['task'] == 'product_analysis'
+    assert r['message']['result']['discussion']['topic_ids'] != [m['topics'][0]['id']]
+    assert state['slots'][ctx.SLOT]['focus']['source_ids'] == [r['message']['id']]
+
+
+def test_fiber_supplement_resolves_saved_foods_without_chat_product_ids():
+    state = chat._default_state('c')
+    context = {'current_food': {'formula_id': 343}, 'diet_history': [{'formula_id': 342}]}
+    decision = {'action': 'continue', 'task': 'supplement', 'object_scope': 'saved_diet', 'source_ids': []}
+    with patch.object(chat, '_build_context', return_value=context), \
+         patch.object(chat, '_food_analysis_by_formula', side_effect=lambda fid, current=None: {'ingredient_analysis': {'raw_ingredient_text': '纤维素、菊糖'}}) as loader, \
+         patch.object(ctx, 'answer', return_value={'reply': '纤维原料解释'}) as answer:
+        chat._context_answer('owner', CONV, '帮我分析一下新粮和历史粮的纤维组成', state, memory(), decision, {})
+    assert [c.args[0] for c in loader.call_args_list] == [343, 342]
+    evidence = answer.call_args.kwargs['product_evidence']
+    assert [p['formula_id'] for p in evidence] == [343, 342]
+    assert all(p['status'] == 'available' for p in evidence)
+
+
+def test_missing_saved_evidence_is_reported_as_read_failure_before_generation():
+    with patch.object(chat, '_build_context', return_value={'current_food': {'formula_id': 343}}), \
+         patch.object(chat, '_food_analysis_by_formula', return_value=None), \
+         patch.object(ctx, 'answer') as answer:
+        r = chat._context_answer('owner', CONV, '当前粮的纤维', chat._default_state('c'), memory(),
+                                 {'action': 'continue', 'task': 'supplement', 'object_scope': 'current'}, {})
+    answer.assert_not_called()
+    assert r['result']['context_answer']['status'] == 'product_evidence_unavailable'
+    assert '上传' not in r['reply']
+
+
+def test_context_answer_keeps_reasoning_constraints_internal():
+    from services.guardian_presentation import CONCLUSION_STYLE_INSTRUCTION
+    with patch.object(ctx, '_model', return_value=answer_payload()) as model:
+        reply = ctx.answer('这两款粮日常怎么理解', seed(), {'action': 'continue', 'source_ids': [f'{6:032x}']}, chat._default_state('c'))
+    assert reply['result']['context_answer']['status'] == 'answered'
+    assert CONCLUSION_STYLE_INSTRUCTION in model.call_args.args[0]
+    assert '不把结构评分说成营养摄入量或缺乏' in model.call_args.args[0]
