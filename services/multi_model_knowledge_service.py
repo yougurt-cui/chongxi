@@ -181,6 +181,7 @@ def task_detail(task_id):
             'raw_text':row['raw_response'],'parsed_json':store.decode(row['parsed_response']),
             'search_metadata':store.decode(row['search_metadata']) or {'status':'not_confirmed' if row['web_search'] else 'disabled','sources':[]},
             'error_message':row['error_message'],'import_error':row['import_error'],
+            'product_import':store.decode(row.get('product_import_result')),
             'prompt_tokens':row['prompt_tokens'],'completion_tokens':row['completion_tokens']})
     for point in points:
         for field in ('life_stage_codes','need_codes','standardization_meta'):
@@ -191,6 +192,10 @@ def task_detail(task_id):
         result['health_structured'] = task_result(task_id)
     from services.knowledge_source_assembly_service import task_objects
     result['assembled_points'] = task_objects(task_id)
+    if task['knowledge_base'] == 'selection':
+        from services.product_recommendation_import_service import task_recommendations
+        completed = [row['id'] for row in rows if (store.decode(row.get('product_import_result')) or {}).get('status') == 'completed']
+        result['product_recommendations'] = task_recommendations(completed)
     return result
 
 

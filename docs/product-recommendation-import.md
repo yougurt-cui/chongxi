@@ -75,3 +75,24 @@ python scripts/merge_product_recommendations.py --apply
 解析存在任何错误则整体不写入。写入阶段在同一事务内执行，任一记录失败整体回滚。DDL 的初始化单独执行，不属于数据事务。导入使用数据库命名锁防止并发覆盖。增量导入先保留现有来源，再替换本次输入的同来源记录并重新分组；改变年龄或需求时会移除已无来源的旧分组，不删除其他来源。完全相同的分组返回 `unchanged`；人工审核过的分组若需要改变或删除则整体报冲突并回滚。统计 `imported`/`unchanged` 按分组计数。源数据中已删除且本次输入没有出现的来源不会自动清理。
 
 退出码：0 成功；1 解析或执行失败；2 参数不正确。运行只读预览不会初始化旧知识表或触发模型调用。
+
+## 选粮知识库任务集成
+
+`pipeline-review.html#multi-model` 的选粮采集任务在每个成功模型响应后自动执行：
+
+1. 保存原始回答并拆解明细。
+2. 标准化适用条件并刷新知识对象汇总。
+3. 核对本批次推荐来源与当前明细一致，提取本批次的 `product_recommendation`。
+4. 按六维合并后写入独立产品库；已有其他批次来源保留。
+
+自动执行和页面“重试解析入库”共用 `process_batch_pipeline()`。问答的模型响应采集状态与产品处理状态分别保存；健康知识库继续原处理方式，不执行产品导入。
+
+`knowledge_import_batch.product_import_result` JSON 保存 `running/completed/skipped/failed`、处理阶段、计数或失败说明，由知识库初始化逻辑补列。产品库不可用、解析失败、适用条件暂停/失败或本批次汇总缺失时，不删除原始回答；页面展示失败并允许重试。重新执行使用既有映射缓存及幂等导入，不重复新增推荐。
+
+页面在处理期间持续刷新，展示本任务各模型的状态及已完成批次关联的推荐组合，最多200行。同一组合的来源可能包含其他历史任务，来源展开保留各自批次、模型和原始问题。打开任务详情只读取结果，不触发标准化、模型调用或产品表初始化。
+
+测试：
+
+```bash
+python -m pytest tests/test_product_recommendation_pipeline.py tests/test_product_recommendation_import.py tests/test_model_knowledge_importer.py tests/test_health_import_routing.py tests/test_knowledge_source_assembly.py tests/test_multi_model_result_count.py -q
+```

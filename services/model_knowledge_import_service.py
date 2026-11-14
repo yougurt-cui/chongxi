@@ -44,6 +44,12 @@ def _ensure_database(name):
             if not cur.fetchone():
                 cur.execute("ALTER TABLE knowledge_import_batch ADD COLUMN knowledge_base VARCHAR(32) NOT NULL DEFAULT 'selection' AFTER web_search")
                 cur.execute('ALTER TABLE knowledge_import_batch ADD KEY idx_batch_knowledge_base (knowledge_base,created_at)')
+            cur.execute("SHOW COLUMNS FROM knowledge_import_batch LIKE 'product_import_result'")
+            if not cur.fetchone():
+                try:
+                    cur.execute('ALTER TABLE knowledge_import_batch ADD COLUMN product_import_result JSON NULL')
+                except pymysql.err.OperationalError as exc:
+                    if exc.args[0] != 1060: raise
             from services.knowledge_source_assembly_service import DDL
             cur.execute(DDL)
             cur.execute('SHOW COLUMNS FROM knowledge_point_source_detail')
@@ -136,6 +142,52 @@ def import_batch(batch_id):
             'total_count':count,'inserted_count':0 if already else count,**health}
 
 
+def _product_status(batch_id, result):
+    with connect() as conn, conn.cursor() as cur:
+        cur.execute('UPDATE knowledge_import_batch SET product_import_result=%s WHERE id=%s',
+                    (dumps(result), batch_id))
+        conn.commit()
+
+
+def process_batch_pipeline(batch_id):
+    """Shared automatic/manual path; product ingestion follows successful mapping and assembly."""
+    ensure_database()
+    with connect() as lock_conn, lock_conn.cursor() as lock_cur:
+        from services.product_recommendation_import_service import digest
+        lock = 'selection-pipeline:' + digest([database_name(), batch_id])[:40]
+        lock_cur.execute('SELECT GET_LOCK(%s,0) acquired', (lock,))
+        if not lock_cur.fetchone()['acquired']:
+            return {'batch_id': batch_id, 'status': 'running'}
+        selection = False
+        try:
+            lock_cur.execute('SELECT knowledge_base FROM knowledge_import_batch WHERE id=%s', (batch_id,))
+            batch = lock_cur.fetchone()
+            if not batch: raise LookupError('采集批次不存在')
+            selection = batch['knowledge_base'] == 'selection'
+            if selection: _product_status(batch_id, {'status': 'running', 'stage': 'standardization'})
+            imported = import_batch(batch_id)
+            if not selection: return imported
+            from services.knowledge_standardization_service import normalize
+            normalized = normalize(batch_id=batch_id)
+            if (normalized.get('status') == 'paused' or any(normalized.get(k) for k in ('failed', 'busy', 'changed'))):
+                raise ValueError('适用条件标准化尚未完成，请重试解析入库')
+            _product_status(batch_id, {'status': 'running', 'stage': 'product_import'})
+            from services.product_recommendation_import_service import import_batch_recommendations
+            product = import_batch_recommendations(batch_id)
+            _product_status(batch_id, product)
+            with connect() as conn, conn.cursor() as cur:
+                cur.execute('UPDATE knowledge_import_batch SET import_error=NULL WHERE id=%s', (batch_id,))
+                conn.commit()
+            return {**imported, 'product_import': product}
+        except Exception as exc:
+            if selection:
+                message = str(exc) if isinstance(exc, ValueError) else '选粮解析或产品推荐入库失败，原始回答已保留，可重试'
+                _product_status(batch_id, {'status': 'failed', 'message': message})
+            raise
+        finally:
+            lock_cur.execute('SELECT RELEASE_LOCK(%s)', (lock,))
+
+
 def persist_model_result(task_id,result):
     ensure_database()
     with connect() as conn:
@@ -153,14 +205,7 @@ def persist_model_result(task_id,result):
         conn.commit()
     if result['status']=='success':
         try:
-            import_batch(batch_id)
-            from services.knowledge_standardization_service import normalize
-            with connect() as conn:
-                with conn.cursor() as cur:
-                    cur.execute('SELECT knowledge_base FROM knowledge_import_batch WHERE id=%s',(batch_id,))
-                    is_health = cur.fetchone()['knowledge_base'] == 'health'
-            if not is_health:
-                normalize(batch_id=batch_id)
+            process_batch_pipeline(batch_id)
         except Exception:
             LOGGER.exception('model_response_import_failed batch_id=%s',batch_id)
             with connect() as conn:
@@ -178,12 +223,12 @@ def import_task(task_id):
     results=[];errors=[]
     for row in rows:
         if row['status']!='success':continue
-        try:results.append(import_batch(row['id']))
+        try:results.append(process_batch_pipeline(row['id']))
         except Exception:
             LOGGER.exception('model_response_reimport_failed batch_id=%s',row['id'])
             errors.append({'batch_id':row['id'],'message':'解析或入库失败，原始回答保留，请查看日志'})
     return {'database':database_name(),'task_id':task_id,'results':results,'errors':errors,
-            'status':'partial_failed' if errors else 'completed' if results else 'no_successful_responses'}
+            'status':'partial_failed' if errors else 'running' if any(r.get('status') == 'running' for r in results) else 'completed' if results else 'no_successful_responses'}
 
 
 def task_status(task_id):

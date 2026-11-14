@@ -195,3 +195,71 @@ def import_records(records):
             if acquired:
                 with conn.cursor() as cur: cur.execute('SELECT RELEASE_LOCK(%s)', (lock_name(),))
     return counts
+
+
+def batch_source_groups(batch_id, detail_rows, assembled_rows):
+    """Filter leaves to this batch and verify assembled data matches current mapped details."""
+    from copy import deepcopy
+    from services.knowledge_source_assembly_service import category_groups
+    expected, _, pending = category_groups(detail_rows)
+    if pending: raise ValueError('本批次适用条件仍待标准化，请重试解析入库')
+    expected = {key: entries for key, entries in expected.items() if key[-1] == 'product_recommendation'}
+    def signatures(groups):
+        return {(key, source['id']): digest([entry['content'], source])
+                for key, entries in groups.items() for entry in entries for source in entry['sources']}
+    selected, actual = [], {}
+    for original in assembled_rows:
+        if original['category'] != 'product_recommendation': continue
+        row = deepcopy(original)
+        entries = json.loads(row['sources']) if isinstance(row['sources'], str) else row['sources']
+        filtered = []
+        for entry in entries:
+            leaves = [s for s in entry['sources'] if s.get('batch_id') == batch_id]
+            if leaves: filtered.append({**entry, 'sources': leaves})
+        if filtered:
+            key = tuple(row[k] for k in ('species_code', 'breed_code', 'life_stage_code', 'need_scene_code', 'category'))
+            actual[key] = filtered
+            row['sources'] = filtered
+            selected.append(row)
+    if signatures(expected) != signatures(actual):
+        raise ValueError('本批次产品推荐汇总尚未完成或来源已变化，请重试解析入库')
+    return selected
+
+
+def import_batch_recommendations(batch_id):
+    with source_store.connect() as conn, conn.cursor() as cur:
+        cur.execute("""SELECT d.*,b.model source_model FROM knowledge_point_source_detail d
+            JOIN knowledge_import_batch b ON b.id=d.batch_id
+            WHERE d.batch_id=%s AND b.knowledge_base='selection' ORDER BY d.id""", (batch_id,))
+        details = list(cur.fetchall())
+    selected = batch_source_groups(batch_id, details, read_sources())
+    result = normalize(selected)
+    if result['errors']:
+        raise ValueError('本批次产品推荐解析存在错误，未写入产品库：' + str(len(result['errors'])) + ' 条；请查看原始推荐')
+    records = result['records']
+    if not records:
+        return {'status': 'skipped', 'message': '本批次没有产品推荐条目', 'source_records': 0, 'groups': 0}
+    groups = group_records(records)
+    counts = import_records(records)
+    return {'status': 'completed', 'database': target_database(), 'source_records': len(records),
+            'products': len({r['product_key'] for r in records}), 'groups': len(groups), **counts}
+
+
+def task_recommendations(batch_ids):
+    """Read grouped candidates containing this task's batches; never initialize/write on page reads."""
+    if not batch_ids: return {'status': 'not_run', 'items': [], 'total': 0}
+    placeholders = ','.join(['%s'] * len(batch_ids))
+    joined = ' FROM product_recommendation p JOIN JSON_TABLE(p.sources, "$[*]" COLUMNS(source_batch_id BIGINT PATH "$.batch_id")) j ON j.source_batch_id IN (' + placeholders + ')'
+    try:
+        with target_connect() as conn, conn.cursor() as cur:
+            cur.execute('SELECT COUNT(DISTINCT p.id) n' + joined, batch_ids)
+            total = cur.fetchone()['n']
+            cur.execute('SELECT DISTINCT p.*' + joined + ' ORDER BY p.id LIMIT 200', batch_ids)
+            items = list(cur.fetchall())
+        for row in items:
+            row.pop('raw_json', None)
+            for key in ('sources', 'relation_types'):
+                if isinstance(row[key], str): row[key] = json.loads(row[key])
+        return {'status': 'available', 'items': items, 'total': total, 'truncated': total > len(items)}
+    except (pymysql.MySQLError, ValueError, KeyError):
+        return {'status': 'unavailable', 'items': [], 'total': 0, 'message': '产品推荐结果暂时无法读取，请检查产品库或稍后重试'}

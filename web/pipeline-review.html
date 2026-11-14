@@ -4501,7 +4501,7 @@
         multiEl('multiPage').textContent = `第 ${multiPage} 页 · 共 ${result.total} 个任务`;
         multiEl('multiPrev').disabled = multiPage <= 1;
         multiEl('multiNext').disabled = multiPage * result.page_size >= result.total;
-        if (multiSelected && (!multiSelectedStatus || multiSelectedStatus === 'running')) await loadMultiDetail(multiSelected);
+        if (multiSelected) await loadMultiDetail(multiSelected);
         multiEl('multiMessage').textContent = '任务和结果已更新';
       } catch (error) {
         multiEl('multiMessage').textContent = error.message;
@@ -4510,6 +4510,21 @@
         if (activeTab === 'multi-model' && multiView === 'collection') multiPoll = setTimeout(loadMultiModel, 5000);
       }
     }
+    function multiProductImportHtml(packet) {
+      if (!packet) return '<p class="muted">产品推荐标准化尚未执行；可点击“重试解析入库”补跑。</p>';
+      const labels = {running:'处理中',completed:'已完成',skipped:'无产品推荐，已跳过',failed:'处理失败'};
+      const counts = packet.status === 'completed' ? ` · ${Number(packet.source_records || 0)} 条来源 / ${Number(packet.products || 0)} 款产品 / ${Number(packet.groups || 0)} 个推荐组合` : '';
+      const stage = packet.stage === 'standardization' ? '（适用条件标准化）' : packet.stage === 'product_import' ? '（产品推荐入库）' : '';
+      return `<p${packet.status === 'failed' ? ' style="color:#b42318;"' : ''}><strong>产品推荐标准化：</strong>${escapeHtml(labels[packet.status] || packet.status)}${stage}${counts}${packet.message ? '<br>' + escapeHtml(packet.message) : ''}</p>`;
+    }
+
+    function renderMultiProductRecommendations(packet) {
+      if (!packet) return '';
+      const stages = {all_stages:'全生命阶段',kitten:'幼猫',puppy:'幼犬',adult:'成年',senior:'老年',unspecified:'未限定阶段'};
+      const rows = (packet.items || []).map(p => `<tr><td>${escapeHtml(({cat:'猫',dog:'狗'})[p.species_code] || p.species_code)} / ${escapeHtml(p.breed_code)}<br>${escapeHtml(stages[p.life_stage_code] || p.life_stage_code)}</td><td>${escapeHtml(p.need_code)}</td><td>${escapeHtml(p.brand)}<br>${escapeHtml(p.product_name)}</td><td style="white-space:pre-wrap;min-width:260px;">${escapeHtml(p.recommendation_reason || '')}</td><td>${Number(p.source_count)} 条来源 / ${Number(p.model_count)} 个模型<details><summary>查看推荐来源</summary>${(p.sources || []).map(source => `<p style="white-space:pre-wrap;">${escapeHtml(source.source_provider || '')} · ${escapeHtml(source.source_model || '')} · 批次 #${Number(source.batch_id || 0)}<br>原始问题：${escapeHtml(source.source_question || '')}<br>推荐理由：${escapeHtml(source.recommendation?.recommendation_reason || '')}<br>知识来源 #${Number(source.knowledge_source_id || 0)} / 原始条目 #${Number(source.original_source_id || 0)}</p>`).join('')}</details></td><td>${escapeHtml(({pending:'待审核',verified:'已审核',rejected:'已拒绝'})[p.review_status] || p.review_status)}</td></tr>`).join('');
+      return `<h3>产品推荐标准化（${Number(packet.total || 0)}）</h3><p class="muted">按种类、品种、年龄阶段、需求、品牌和产品合并。下列组合包含本任务的来源，相同组合也保留其他任务的推荐来源。</p>${packet.message ? '<p>' + escapeHtml(packet.message) + '</p>' : ''}${rows ? '<div class="table-wrap"><table><thead><tr><th>种类 / 品种 / 年龄阶段</th><th>需求</th><th>品牌 / 产品</th><th>推荐理由</th><th>推荐来源</th><th>审核状态</th></tr></thead><tbody>' + rows + '</tbody></table></div>' : '<p class="muted">尚无已入库的产品推荐；请查看各模型的处理状态。</p>'}${packet.truncated ? '<p class="muted">当前展示前200个推荐组合。</p>' : ''}`;
+    }
+
     async function loadMultiDetail(id) {
       const version = ++multiDetailVersion;
       const result = await api(`/api/admin/multi-model/tasks/${id}`);
@@ -4523,7 +4538,8 @@
       const importHtml = `<section style="margin:16px 0;padding:12px;background:#f0f7ff;border-radius:8px;"><strong>独立知识库解析</strong><p>${escapeHtml(imported.database || multiConfig?.knowledge_database || 'chongxi_model_knowledge')} · 已导入 ${imported.batches.length} 个模型响应 / ${importCount} 条来源知识</p>${imported.error ? `<p>${escapeHtml(imported.error)}</p>` : ''}<button class="button secondary" type="button" data-import-task="${id}">解析 / 重试入新库</button><span id="modelImportMessage" role="status" style="margin-left:12px;"></span></section>`;
       const points = result.points || [];
       const pointRows = points.map(c => `<tr><td>#${c.batch_id}<br>${escapeHtml(multiLabels[c.source_provider || c.provider] || c.source_provider || c.provider)}</td><td>${standardMappingHtml(c)}</td><td>${topicMappingHtml(c)}</td><td style="white-space:pre-wrap;min-width:260px;">${escapeHtml(c.content)}</td></tr>`).join('');
-      multiEl('multiDetailBody').innerHTML = importHtml + `<p style="white-space:pre-wrap;">${escapeHtml(result.task.question)}</p><details><summary>本次提示词模板</summary><pre style="white-space:pre-wrap;overflow-wrap:anywhere;">${escapeHtml(result.task.template_text)}</pre></details>` + result.responses.map(r => `<div style="margin-top:16px;"><strong>批次 #${r.id} · ${escapeHtml(multiLabels[r.provider] || r.provider)} · ${escapeHtml(r.model_name)}</strong><p>${escapeHtml(multiStates[r.status] || r.status)} · 输入 Token ${r.prompt_tokens ?? '—'} / 输出 Token ${r.completion_tokens ?? '—'}</p>${multiSearchHtml(r.search_metadata)}${r.error_message || r.import_error ? `<p style="color:#b42318;white-space:pre-wrap;">${escapeHtml(r.error_message || r.import_error)}</p>` : ''}<details><summary>查看模型原始回答</summary><pre style="white-space:pre-wrap;overflow-wrap:anywhere;max-height:400px;overflow:auto;">${escapeHtml(r.raw_text || '暂无回答')}</pre></details></div>`).join('') + `<h3>拆解结果（${points.length}）</h3>` + (pointRows ? `<div class="table-wrap"><table><thead><tr><th>批次 / 模型</th><th>适用条件映射</th><th>知识分类 / 主题</th><th>正文</th></tr></thead><tbody>${pointRows}</tbody></table></div>` : '<p class="muted">暂无拆解内容；处理中任务稍后自动刷新。</p>');
+      multiEl('multiDetailBody').innerHTML = importHtml + `<p style="white-space:pre-wrap;">${escapeHtml(result.task.question)}</p><details><summary>本次提示词模板</summary><pre style="white-space:pre-wrap;overflow-wrap:anywhere;">${escapeHtml(result.task.template_text)}</pre></details>` + result.responses.map(r => `<div style="margin-top:16px;"><strong>批次 #${r.id} · ${escapeHtml(multiLabels[r.provider] || r.provider)} · ${escapeHtml(r.model_name)}</strong><p>${escapeHtml(multiStates[r.status] || r.status)} · 输入 Token ${r.prompt_tokens ?? '—'} / 输出 Token ${r.completion_tokens ?? '—'}</p>${multiSearchHtml(r.search_metadata)}${result.task.knowledge_base === 'selection' ? multiProductImportHtml(r.product_import) : ''}${r.error_message || r.import_error ? `<p style="color:#b42318;white-space:pre-wrap;">${escapeHtml(r.error_message || r.import_error)}</p>` : ''}<details><summary>查看模型原始回答</summary><pre style="white-space:pre-wrap;overflow-wrap:anywhere;max-height:400px;overflow:auto;">${escapeHtml(r.raw_text || '暂无回答')}</pre></details></div>`).join('') + `<h3>拆解结果（${points.length}）</h3>` + (pointRows ? `<div class="table-wrap"><table><thead><tr><th>批次 / 模型</th><th>适用条件映射</th><th>知识分类 / 主题</th><th>正文</th></tr></thead><tbody>${pointRows}</tbody></table></div>` : '<p class="muted">暂无拆解内容；处理中任务稍后自动刷新。</p>');
+      if (result.product_recommendations) multiEl('multiDetailBody').insertAdjacentHTML('beforeend', renderMultiProductRecommendations(result.product_recommendations));
       if ((result.assembled_points || []).length) {
         const categoryLabels = {pet_profile:'宠物画像',life_stage_nutrition:'生命阶段营养',digestive_tolerance:'消化耐受',food_selection:'选粮原则',product_recommendation:'产品推荐',product_suitability:'产品适配',product_overview:'产品信息'};
         const mergedRows = result.assembled_points.map(p => `<tr><td>${escapeHtml(p.species_code)} / ${escapeHtml(p.breed_code)}<br>${escapeHtml(p.life_stage_code === 'all_stages' ? '全生命阶段' : p.life_stage_code)}</td><td>${escapeHtml(p.need_scene_name || p.need_scene_code || '未指定需求场景')}<br><small>${escapeHtml(p.need_scene_code || '')}</small></td><td>${escapeHtml(categoryLabels[p.category] || p.category)}</td><td style="white-space:pre-wrap;min-width:350px;">${escapeHtml(p.content)}${(p.summary_meta?.notes || []).length ? '<br><strong>分歧 / 待核验：</strong>' + escapeHtml(p.summary_meta.notes.join('；')) : ''}</td><td>${Number(p.source_count)} 条来源 / ${Number(p.model_count)} 个模型<details><summary>查看原文及模型来源</summary>${(p.sources || []).map(e => `<p style="white-space:pre-wrap;">${escapeHtml(e.content)}<br><small>${escapeHtml(e.sources.map(s => `${multiLabels[s.source_provider] || s.source_provider} · #${s.id}`).join('；'))}</small></p>`).join('')}</details></td></tr>`).join('');
@@ -4546,9 +4562,9 @@
       message.textContent = '正在解析入库…';
       try {
         const data = await api(`/api/admin/multi-model/tasks/${button.dataset.importTask}/import`, {method:'POST'});
-        if (data.errors.length) { message.textContent = data.errors.map(e => `${multiLabels[e.provider] || e.provider}：${e.message}`).join('；'); }
+        if (data.errors.length) { message.textContent = data.errors.map(e => `${multiLabels[e.provider] || e.provider || '批次 #' + e.batch_id}：${e.message}`).join('；'); }
         else if (!data.results.length) { message.textContent = '还没有成功的模型响应可导入'; }
-        else { await loadMultiDetail(Number(button.dataset.importTask)); multiEl('modelImportMessage').textContent = '入库完成，重复解析不会新增相同记录'; }
+        else { await loadMultiDetail(Number(button.dataset.importTask)); multiEl('modelImportMessage').textContent = data.status === 'running' ? '任务仍在处理中，请等待自动刷新' : '解析与标准化入库完成，重复执行不会新增相同记录'; }
       } catch (error) { message.textContent = error.message; }
       finally { button.disabled = false; }
     });

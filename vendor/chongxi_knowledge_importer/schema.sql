@@ -16,6 +16,7 @@ CREATE TABLE IF NOT EXISTS knowledge_import_batch (
  completion_tokens INT UNSIGNED NULL,
  latency_ms INT UNSIGNED NULL,
  import_error TEXT NULL,
+ product_import_result JSON NULL,
  imported_at DATETIME NULL,
  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
  finished_at DATETIME NULL,
