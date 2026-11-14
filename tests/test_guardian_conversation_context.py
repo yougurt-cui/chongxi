@@ -10,6 +10,20 @@ from services import miniprogram_chat_service as chat
 CONV = dict(id='c',pet_id='cat',profile_species='cat',profile_age=24)
 
 
+@pytest.fixture(autouse=True)
+def semantic_route_response():
+    def response(system, payload, **kwargs):
+        from services.guardian_task_recognizer import SYSTEM
+        assert system == SYSTEM, 'answer generation must be explicitly mocked'
+        if payload['question'] in {'帮我对比一下前面两款粮', '比较前面两款粮'}:
+            return {'relation': 'continue', 'task': 'compare'}
+        return {'relation': 'combine', 'task': 'synthesize',
+                'topic_ids': [t['id'] for t in payload['topics']],
+                'source_ids': [e['id'] for e in payload['history'] if e['role'] == 'assistant']}
+    with patch.object(ctx, '_model', side_effect=response):
+        yield
+
+
 def memory():
     return ctx.empty('owner', CONV)
 
@@ -32,9 +46,9 @@ def seed():
     return m
 
 
-def test_two_separate_analyses_resolve_exact_formula_ids_without_model():
+def test_two_separate_analyses_resolve_exact_formula_ids_after_task_recognition():
     m=seed()
-    with patch.object(ctx,'_model',side_effect=AssertionError('unnecessary model')):
+    with patch.object(ctx,'_model',return_value={'relation':'continue','task':'compare'}):
         decision=ctx.decide('帮我对比一下前面两款粮',m)
     assert decision['product_ids']==[11,22]
     assert decision['source_ids']==[f'{4:032x}',f'{6:032x}']
@@ -46,7 +60,7 @@ def test_two_separate_analyses_resolve_exact_formula_ids_without_model():
 
 
 def test_health_effect_question_does_not_repeat_the_comparison_report():
-    with patch.object(ctx,'_model',side_effect=AssertionError('unnecessary route model')):
+    with patch.object(ctx,'_model',return_value={'relation':'combine','task':'synthesize','source_ids':[f'{2:032x}']}):
         assert ctx.decide('这两款粮里，哪款肯定能解决便臭？',seed())['action']=='synthesize'
 
 
@@ -90,10 +104,10 @@ def test_model_route_never_invents_sources_or_products(reply):
 
 def test_return_to_topic_and_explicit_source_are_forwarded():
     m=seed();m['source_id']=f'{2:032x}'
-    with patch.object(ctx,'_model',return_value={'action':'resume','source_ids':[f'{2:032x}'],'product_ids':[]}) as model:
+    with patch.object(ctx,'_model',return_value={'relation':'resume','task':'explain','source_ids':[f'{2:032x}'],'product_ids':[]}) as model:
         assert ctx.decide('如何核对换粮时间？',m)['action']=='resume'
-    assert model.call_args.args[1]['source_id']==f'{2:032x}'
-    with patch.object(ctx,'_model',return_value={'action':'new'}):
+    assert model.call_args.args[1]['source_message_id']==f'{2:032x}'
+    with patch.object(ctx,'_model',return_value={'relation':'new','task':'business'}):
         assert ctx.decide('那我们换个话题聊玩具',seed())['action']=='new'
 
 
@@ -295,7 +309,7 @@ def test_independent_topics_can_later_be_combined_and_replayed():
 
 def test_plain_independent_question_is_classified_with_topic_index():
     m = seed()
-    with patch.object(ctx, '_model', return_value={'action': 'new'}) as model:
+    with patch.object(ctx, '_model', return_value={'relation': 'new','task':'business'}) as model:
         assert ctx.decide('帮我分析一下历史粮和当前粮', m)['action'] == 'new'
     assert model.call_args.args[1]['topics'] == m['topics']
 
@@ -338,7 +352,7 @@ def test_switch_history_synthesis_beats_food_switch_keyword_in_real_entry():
 def test_continuation_can_select_topic_without_repeating_message_ids():
     m = seed()
     topic = m['topics'][0]
-    with patch.object(ctx, '_model', return_value={'action': 'resume', 'topic_ids': [topic['id']]}):
+    with patch.object(ctx, '_model', return_value={'relation':'resume','task':'explain', 'topic_ids': [topic['id']]}):
         d = ctx.decide('回到便臭的问题', m)
     assert d['action'] == 'resume' and d['topic_ids'] == [topic['id']]
 
@@ -347,7 +361,30 @@ def test_multiple_health_topics_require_semantic_selection():
     m = seed()
     ctx.remember(m, msg(9, '另外问一下皮肤痒的原因', role='user'))
     ctx.remember(m, msg(10, '皮肤问题的可能机制', health=True))
-    with patch.object(ctx, '_model', return_value={'action': 'synthesize', 'topic_ids': [m['topics'][0]['id']]} ) as model:
+    with patch.object(ctx, '_model', return_value={'relation':'combine','task':'synthesize', 'topic_ids': [m['topics'][0]['id']]} ) as model:
         d = ctx.decide('结合前面的资料看看便臭原因', m)
     model.assert_called_once()
     assert d['topic_ids'] == [m['topics'][0]['id']]
+
+
+def test_feeding_meaning_followup_does_not_regenerate_comparison():
+    state = chat._default_state('c'); m = seed(); m['source_id'] = f'{6:032x}'
+    source_topic = m['events'][-1]['topic_ids'][0]
+    with ExitStack() as stack:
+        def mock(obj, key, **kw): return stack.enter_context(patch.object(obj, key, **kw))
+        mock(chat, '_get_conversation', return_value=CONV); mock(chat, '_load_state', return_value=state)
+        mock(chat, '_save_state'); mock(chat, '_connect', return_value=MagicMock())
+        saved = []
+        def save(**kw):
+            item = dict(id=f'{100+len(saved):032x}', **kw); saved.append(item); return item
+        mock(chat, '_save_message', side_effect=save)
+        mock(ctx, 'load', return_value=m); mock(ctx, 'contextual_questions')
+        mock(ctx, '_model', return_value={'relation': 'continue', 'task': 'explain', 'source_ids': [f'{6:032x}']})
+        mock(chat, '_resolve_scene', return_value=(None, [], None))
+        mock(chat, '_context_comparison', side_effect=AssertionError('must not rebuild report'))
+        mock(chat, '_recognize_guardian_turn', side_effect=AssertionError('must not reroute explanation'))
+        answer = mock(ctx, 'answer', return_value={'reply': '这些差异在日常喂养中的意义', 'result': {'pipeline': 'conversation_context'}})
+        r = chat.handle_message('owner', 'c', {'message': '这两款粮的配方差异，日常喂养时怎么理解？', 'source_message_id': f'{6:032x}'})
+    assert answer.call_args.args[2]['task'] == 'explain'
+    assert r['message']['result']['task_decision']['task'] == 'explain'
+    assert r['message']['result']['discussion']['topic_ids'] == [source_topic]

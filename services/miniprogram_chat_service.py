@@ -1675,9 +1675,9 @@ def _context_comparison(user_id, conversation, state, memory, decision, client_c
 
 
 def _context_answer(user_id, conversation, message, state, memory, decision, client_context):
-    """Retrieve detailed evidence only when combining topics, never regenerate scores."""
+    """Retrieve detailed evidence for synthesis or supplements; never regenerate scores."""
     products, diet = [], {}
-    if decision['action'] == 'synthesize':
+    if decision['action'] == 'synthesize' or decision.get('task') == 'supplement':
         context = _build_context(user_id, conversation, state, [], client_context)
         diet = {k: context.get(k) for k in ('current_food', 'diet_history', 'diet_history_status',
                                            'recent_daily_records')}
@@ -1785,7 +1785,7 @@ def handle_message(user_id: Any, conversation_id: Any, payload: dict[str, Any]) 
                 and not ingredient_assembly.is_request(message, state, conversation.get('pet_id'))
                 and not state['slots'].get(ingredient_guide.SLOT)
                 ):
-            context_decision = dialogue_context.decide(message, context_memory)
+            context_decision = dialogue_context.decide(message, context_memory, state)
             relation_decision = context_decision
             if context_decision and context_decision['action'] == 'new':
                 _pause_soft_stool(state)
@@ -1794,6 +1794,8 @@ def handle_message(user_id: Any, conversation_id: Any, payload: dict[str, Any]) 
                 snapshot = state['slots'].get(health_flow.STATE_KEY) or {}
                 if snapshot.get('stage') == 'pending':
                     snapshot['stage'] = 'superseded'
+                context_decision = None
+            elif context_decision and context_decision['action'] == 'workflow':
                 context_decision = None
     scene, photos, photo_subject = _resolve_scene(user_id, conversation, state, message, photos, prior_photo,
         external_subject, client_context, allow_text=not (context_decision or attachments or interaction or ambiguous or subject_choice
@@ -1956,8 +1958,10 @@ def handle_message(user_id: Any, conversation_id: Any, payload: dict[str, Any]) 
         item['result'] = dict(item.get('result') or reply.get('result') or {})
         item['result']['context_scope'] = 'external' if external_subject or ambiguous else 'profile'
         if not external_subject and not ambiguous:
-            item['result']['discussion'] = {'relation': (relation_decision or {}).get('action', 'new'),
+            item['result']['discussion'] = {'relation': (relation_decision or {}).get('relation') or (relation_decision or {}).get('action', 'new'),
                 'topic_ids': next((e.get('topic_ids', []) for e in context_memory['events'] if e['id'] == user_message['id']), [])}
+        if relation_decision:
+            item['result']['task_decision'] = relation_decision
         saved = _save_message(conversation_id=conversation_id, user_id=user_id, role="assistant",
                              content=item["reply"], response_type=item.get("response_type"),
                              interaction=item.get("interaction"), result=item.get("result") or reply.get("result"),
