@@ -187,6 +187,30 @@ def switch_health_links(points, key, direction):
     return links
 
 
+# Colloquial expressions identify symptoms only; the original question is preserved.
+STOOL_WORD = r'(?:便便|大便|粪便|粑粑|巴巴|屎)'
+SYMPTOM_EXPRESSIONS = {
+    'STOOL_ODOR': [STOOL_WORD + r'(?:特别|非常|超级|越来越|有点|很|好|太|变得|变|比较|有)?(?:臭|异味)',
+                   STOOL_WORD + r'(?:的)?(?:味道|气味)(?:特别|非常|很|好|太|比较|有点)?(?:重|大|臭|难闻)'],
+    'DIARRHEA': [r'拉稀', r'拉肚子', r'稀便', r'水样便', STOOL_WORD + r'(?:像水一样|跟水一样|水汪汪)'],
+    'SOFT_STOOL': [r'软便', STOOL_WORD + r'(?:特别|非常|很|有点|偏)?软',
+                   STOOL_WORD + r'(?:不成形|不成型|稀软|软趴趴)'],
+}
+
+
+def _affirmed_symptom(query, match):
+    # Limit negation to the current clause; another symptom's negation must not leak.
+    prefix = re.split(r'[，,。；;！？!?\n]|但是|不过|但', query[:match.start()])[-1]
+    if re.search(r'(?:没有|没再|不再|并不|没出现|无)(?:明显|再|出现|发生)?(?:拉)?$', prefix):
+        return False
+    if re.search(r'不臭|不太臭|没有异味|没异味|无异味|不软', match.group()):
+        return False
+    suffix = query[match.end():]
+    if re.match(r'(?:已经|现在)?(?:没有了|消失了|好了|改善了|缓解了|不再出现)', suffix):
+        return False
+    return True
+
+
 def identify_issues(query):
     db = database_name('GUARDIAN_DICTIONARY_DATABASE', 'chongxi_knowledge_dictionary')
     with _connect() as conn, conn.cursor() as cur:
@@ -195,11 +219,10 @@ def identify_issues(query):
     matches = []
     for row in dictionary:
         words = [row['issue_name'], *re.split(r'[、,，|]', row.get('aliases') or '')]
-        if row['issue_code'] == 'STOOL_ODOR':
-            words.extend(['便便臭', '便便很臭', '便便变臭', '屎很臭', '粪便臭'])
-            words.extend(re.findall(r'(?:便便|大便|粪便|屎).{0,4}(?:臭|异味)', query))
-        if any(len(word) > 1 and any(not re.search(r'没有|不再|并不', query[max(0, m.start()-3):m.start()])
-               for m in re.finditer(re.escape(word), query)) for word in words):
+        patterns = [re.escape(w) for w in words if len(w) > 1]
+        patterns.extend(SYMPTOM_EXPRESSIONS.get(row['issue_code'], []))
+        if any(_affirmed_symptom(query, match)
+               for pattern in patterns for match in re.finditer(pattern, query)):
             matches.append(row)
     return matches
 
