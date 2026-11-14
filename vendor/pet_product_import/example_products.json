@@ -1,0 +1,32 @@
+[
+  {
+    "content": "渴望（ORIJEN）；六种鱼全价猫粮（Six Fish）；含85%优质动物原料，六种野生捕捞鱼提供丰富Omega-3，美毛效果突出，动物蛋白占比超80%。",
+    "sources": [{
+      "id": 4807, "batch_id": 192, "need_codes": ["coat_health"],
+      "source_model": "doubao-seed-2-1-turbo-260628", "source_provider": "doubao",
+      "source_context": {
+        "question": "布偶猫推荐吃什么", "evidence_status": "supported",
+        "structured_item": {
+          "brand": "渴望（ORIJEN）", "product_name": "六种鱼全价猫粮（Six Fish）",
+          "reason": "含85%优质动物原料，六种野生捕捞鱼提供丰富Omega-3，美毛效果突出，动物蛋白占比超80%。",
+          "applicable_conditions": ["全生命阶段", "美毛需求、预算充足"]
+        }
+      }
+    }]
+  },
+  {
+    "content": "麦富迪；麦富迪布偶猫专用主食罐（三文鱼+鸡肝）；专为布偶设计，三文鱼提供高Omega-3，鸡肝强化牛磺酸与维生素A，无胶无淀粉，水分含量≥78%，辅助泌尿与毛发健康",
+    "sources": [{
+      "id": 4790, "batch_id": 191, "need_codes": ["coat_health", "hydration", "picky_eating"],
+      "source_model": "qwen-plus", "source_provider": "qwen",
+      "source_context": {
+        "question": "布偶猫推荐吃什么", "evidence_status": "pending_verification",
+        "structured_item": {
+          "brand": "麦富迪", "product_name": "麦富迪布偶猫专用主食罐（三文鱼+鸡肝）",
+          "reason": "专为布偶设计，三文鱼提供高Omega-3，鸡肝强化牛磺酸与维生素A，无胶无淀粉，水分含量≥78%，辅助泌尿与毛发健康",
+          "applicable_conditions": ["全年龄段布偶猫湿粮补充", "美毛需求突出", "挑食或饮水不足"]
+        }
+      }
+    }]
+  }
+]
