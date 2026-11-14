@@ -267,3 +267,87 @@ def test_new_topic_clears_pending_flow_but_keeps_memory():
         mock(chat,'_scene_reply',return_value={'reply':'玩具的新话题','result':{}})
         chat.handle_message('owner','c',{'message':'那换个话题聊玩具'})
     assert len(state['slots'][ctx.SLOT]['products'])==2
+
+
+def test_independent_topics_can_later_be_combined_and_replayed():
+    m = memory()
+    for event in [msg(1, '猫咪便便臭是什么原因', role='user'),
+                  msg(2, '蛋白发酵与纤维组成是可能线索', health=True),
+                  msg(3, '分析历史粮和当前粮', role='user'),
+                  msg(4, '两款粮的独立分析', fid=11)]:
+        ctx.remember(m, event)
+    assert len(m['topics']) == 2
+    a, b = m['topics']
+    assert '便便臭' in a['question'] and '历史粮' in b['question']
+    assert a['product_ids'] == [] and b['product_ids'] == [11]
+    d = ctx.decide('结合我的换粮历史帮我看看什么原因造成的', m)
+    assert d['action'] == 'synthesize'
+    assert set(d['topic_ids']) == {a['id'], b['id']}
+    follow = msg(5, '结合历史看看原因', role='user')
+    follow['result']['discussion'] = ctx.discussion(d)
+    ctx.remember(m, follow)
+    assert len(m['topics']) == 2
+    assert set(m['events'][-1]['topic_ids']) == {a['id'], b['id']}
+    again = deepcopy(m)
+    ctx.remember(again, follow)
+    assert again['topics'] == m['topics']
+
+
+def test_plain_independent_question_is_classified_with_topic_index():
+    m = seed()
+    with patch.object(ctx, '_model', return_value={'action': 'new'}) as model:
+        assert ctx.decide('帮我分析一下历史粮和当前粮', m)['action'] == 'new'
+    assert model.call_args.args[1]['topics'] == m['topics']
+
+
+def test_synthesis_enriches_only_selected_products_with_raw_ingredients():
+    m = seed()
+    decision = ctx.decide('结合换粮历史分析原因', m)
+    with patch.object(chat, '_build_context', return_value={'diet_history': [{'formula_id': 11}]}), \
+         patch.object(chat, '_food_analysis_by_formula', side_effect=lambda fid: {'ingredient_analysis': {'raw_ingredient_text': '复合原料(菊糖)'}}) as loader, \
+         patch.object(ctx, 'answer', return_value={'reply': '综合结论'}) as answer:
+        chat._context_answer('owner', CONV, '结合历史分析原因', chat._default_state('c'), m, decision, {})
+    assert [c.args[0] for c in loader.call_args_list] == [11, 22]
+    assert answer.call_args.kwargs['product_evidence'][0]['analysis']['ingredient_analysis']['raw_ingredient_text'] == '复合原料(菊糖)'
+    assert answer.call_args.kwargs['diet_context']['diet_history'] == [{'formula_id': 11}]
+
+
+def test_switch_history_synthesis_beats_food_switch_keyword_in_real_entry():
+    state = chat._default_state('c')
+    m = seed()
+    with ExitStack() as stack:
+        def mock(obj, key, **kw): return stack.enter_context(patch.object(obj, key, **kw))
+        mock(chat, '_get_conversation', return_value=CONV)
+        mock(chat, '_load_state', return_value=state)
+        mock(chat, '_save_state'); mock(chat, '_connect', return_value=MagicMock())
+        saved = []
+        def save(**kw):
+            item = dict(id=f'{100+len(saved):032x}', **kw); saved.append(item); return item
+        mock(chat, '_save_message', side_effect=save)
+        mock(ctx, 'load', return_value=m); mock(ctx, 'contextual_questions')
+        mock(chat, '_resolve_scene', return_value=(None, [], None))
+        mock(chat, '_build_context', return_value={})
+        mock(chat, '_food_analysis_by_formula', return_value={'ingredient_analysis': {}})
+        answer = mock(ctx, 'answer', return_value={'reply': '结合便臭与配方变化的推论', 'result': {'pipeline': 'conversation_context'}})
+        mock(chat, '_recognize_guardian_turn', side_effect=AssertionError('must not start selection'))
+        result = chat.handle_message('owner', 'c', {'message': '结合我的换粮历史帮我看看什么原因造成的'})
+    assert answer.call_args.args[2]['action'] == 'synthesize'
+    assert result['message']['result']['pipeline'] == 'conversation_context'
+
+
+def test_continuation_can_select_topic_without_repeating_message_ids():
+    m = seed()
+    topic = m['topics'][0]
+    with patch.object(ctx, '_model', return_value={'action': 'resume', 'topic_ids': [topic['id']]}):
+        d = ctx.decide('回到便臭的问题', m)
+    assert d['action'] == 'resume' and d['topic_ids'] == [topic['id']]
+
+
+def test_multiple_health_topics_require_semantic_selection():
+    m = seed()
+    ctx.remember(m, msg(9, '另外问一下皮肤痒的原因', role='user'))
+    ctx.remember(m, msg(10, '皮肤问题的可能机制', health=True))
+    with patch.object(ctx, '_model', return_value={'action': 'synthesize', 'topic_ids': [m['topics'][0]['id']]} ) as model:
+        d = ctx.decide('结合前面的资料看看便臭原因', m)
+    model.assert_called_once()
+    assert d['topic_ids'] == [m['topics'][0]['id']]

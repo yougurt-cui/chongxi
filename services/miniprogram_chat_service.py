@@ -1674,6 +1674,27 @@ def _context_comparison(user_id, conversation, state, memory, decision, client_c
     return reply
 
 
+def _context_answer(user_id, conversation, message, state, memory, decision, client_context):
+    """Retrieve detailed evidence only when combining topics, never regenerate scores."""
+    products, diet = [], {}
+    if decision['action'] == 'synthesize':
+        context = _build_context(user_id, conversation, state, [], client_context)
+        diet = {k: context.get(k) for k in ('current_food', 'diet_history', 'diet_history_status',
+                                           'recent_daily_records')}
+        sources = set(decision.get('source_ids') or [])
+        topics = set(decision.get('topic_ids') or [])
+        sources.update(i for t in memory.get('topics', []) if t['id'] in topics for i in t['source_ids'])
+        selected = [p for p in memory['products'] if p['message_id'] in sources
+                    or p['formula_id'] in (decision.get('product_ids') or [])]
+        for product in selected[-6:]:
+            analysis = _food_analysis_by_formula(product['formula_id'])
+            products.append({'source_message_id': product['message_id'], 'formula_id': product['formula_id'],
+                             'status': 'available' if analysis else 'unavailable',
+                             'analysis': analysis})
+    return dialogue_context.answer(message, memory, decision, state,
+                                   product_evidence=products, diet_context=diet)
+
+
 def handle_message(user_id: Any, conversation_id: Any, payload: dict[str, Any]) -> dict[str, Any]:
     user_id, conversation_id = _clean(user_id,128), _clean(conversation_id,32)
     conversation = _get_conversation(user_id, conversation_id)
@@ -1752,6 +1773,7 @@ def handle_message(user_id: Any, conversation_id: Any, payload: dict[str, Any]) 
         state['slots']['_external_subject'] = external_subject
     context_memory = dialogue_context.from_state(user_id, conversation, state)
     context_decision = None
+    relation_decision = None
     if not external_subject and not ambiguous and not subjects.urgent_message(message):
         try:
             context_memory = dialogue_context.load(_connect, user_id, conversation, state, source_id, message)
@@ -1759,11 +1781,12 @@ def handle_message(user_id: Any, conversation_id: Any, payload: dict[str, Any]) 
             if source_id:
                 raise ValueError('暂时无法读取追问来源，请稍后重试。')
         if (message and not interaction and not attachments and not subjects.urgent_message(message)
-                and not requested_flow(message) and not client_context.get('entry_point')
+                and not client_context.get('entry_point')
                 and not ingredient_assembly.is_request(message, state, conversation.get('pet_id'))
                 and not state['slots'].get(ingredient_guide.SLOT)
-                and (source_id or dialogue_context.SYNTHESIS.search(message) or not _should_route_soft_stool(message, state))):
+                ):
             context_decision = dialogue_context.decide(message, context_memory)
+            relation_decision = context_decision
             if context_decision and context_decision['action'] == 'new':
                 _pause_soft_stool(state)
                 state.update(primary_intent=None, secondary_intent=None, current_step=None,
@@ -1809,6 +1832,7 @@ def handle_message(user_id: Any, conversation_id: Any, payload: dict[str, Any]) 
                   interaction=recorded_interaction,attachments=attachments,
                   result={"turn_no": state["turn_count"] + 1, "sequence_no": 0,
                           'context_scope': 'external' if external_subject or ambiguous else 'profile',
+                          'discussion': dialogue_context.discussion(relation_decision),
                           **({'source_message_id': source_id} if source_id else {})})
     question_message_id = question_message_id or user_message['id']
     if not external_subject and not ambiguous:
@@ -1825,7 +1849,7 @@ def handle_message(user_id: Any, conversation_id: Any, payload: dict[str, Any]) 
         if context_decision['action'] == 'compare':
             reply = _context_comparison(user_id, conversation, state, context_memory, context_decision, client_context)
         else:
-            reply = dialogue_context.answer(message, context_memory, context_decision, state)
+            reply = _context_answer(user_id, conversation, message, state, context_memory, context_decision, client_context)
     elif ingredient_reply is not None:
         reply = ingredient_reply
     elif direct_scene:
@@ -1931,6 +1955,9 @@ def handle_message(user_id: Any, conversation_id: Any, payload: dict[str, Any]) 
     for item in reply.get("messages") or [reply]:
         item['result'] = dict(item.get('result') or reply.get('result') or {})
         item['result']['context_scope'] = 'external' if external_subject or ambiguous else 'profile'
+        if not external_subject and not ambiguous:
+            item['result']['discussion'] = {'relation': (relation_decision or {}).get('action', 'new'),
+                'topic_ids': next((e.get('topic_ids', []) for e in context_memory['events'] if e['id'] == user_message['id']), [])}
         saved = _save_message(conversation_id=conversation_id, user_id=user_id, role="assistant",
                              content=item["reply"], response_type=item.get("response_type"),
                              interaction=item.get("interaction"), result=item.get("result") or reply.get("result"),
