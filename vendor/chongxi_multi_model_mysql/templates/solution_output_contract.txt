@@ -1,0 +1,16 @@
+【解决方案入库输出约束：若前文的输出格式与此冲突，以此约束为准】
+只输出一个完整合法JSON对象，不要前言、思考过程、Markdown、SQL或尾部说明。字符串中的英文双引号必须用反斜杠转义；禁止尾逗号、注释和JSON外的文字。
+顶层必须包含knowledge_base="solution"、question（原始问题原文）、solutions（方案对象数组，最多30条）。不能仅输出solutions数组，也不能改成dimensions或knowledge_points。
+每个场景对象必填：species、breed、life_stage、need、scenario_code、scenario、possible_causes、solution、verification。
+- species只允许cat或dog，不能使用feline/canine/unknown；不能明确种类时不生成该条方案。
+- breed和life_stage未明确且不能确认通用时填unspecified，只有明确适用全部才填all。
+- species、breed、life_stage、need、scenario_code均为小写英文编码，允许下划线和数字，且首字符为英文字母；长度上限依次为32、64、32、64、100。
+- need沿用任务明确给出的需求编码，未提供时按问题生成简明编码。
+- scenario_code必须提供稳定且描述观测场景的小写英文下划线编码，例如stool_odor_normal_stool；相同场景沿用编码，不用模型名、批次、随机数或序号作编码。
+- scenario为非空观测场景原文；possible_causes为可能原因字符串数组，可为空；solution为非空行动字符串数组。不能用null、对象或单个字符串代替数组。
+- verification为对象，必须且只能含review_condition、expected_result、failure_condition、next_action四个非空字符串。信息不明确时写条件性的复核办法，不能编造已经发生的日期或结果。
+- source_urls为HTTP/HTTPS网址数组，没有可靠来源时填[]；evidence_status只允许supported、uncertain、pending_verification，默认pending_verification。不得自行返回approved、verified、common_sense_pending_review等其他状态。
+- 不输出review_status；所有内容仍需人工审核，不将可能原因写成确诊，不编造研究或来源，不凭空推定必须换粮或提供自行用药指令。
+无可靠方案时solutions=[]。不要为凑数量生成重复场景。
+结构示例（内容仅为字段示意，不作为本题的事实）：
+{"knowledge_base":"solution","question":"原始问题","solutions":[{"species":"cat","breed":"unspecified","life_stage":"unspecified","need":"digestive_health","scenario_code":"stool_odor_normal_stool","scenario":"明确的观测场景","possible_causes":["可能原因"],"solution":["可执行动作"],"verification":{"review_condition":"何时复核","expected_result":"预期变化","failure_condition":"无效或恶化表现","next_action":"下一步行动"},"source_urls":[],"evidence_status":"pending_verification"}]}

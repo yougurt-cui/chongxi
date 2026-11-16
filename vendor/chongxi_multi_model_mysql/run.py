@@ -103,7 +103,7 @@ def check_configuration():
     return complete and sdk_present
 
 
-def extract_json(text: str) -> dict[str, Any]:
+def extract_json(text: str, *, knowledge_base=None, question=None) -> dict[str, Any]:
     value = text.strip()
     if value.startswith('```'):
         value = re.sub(r'^```(?:json)?\s*', '', value, flags=re.I)
@@ -111,23 +111,19 @@ def extract_json(text: str) -> dict[str, Any]:
     try:
         obj = json.loads(value)
     except json.JSONDecodeError:
-        # 部分模型会添加前言；只寻找首个合法完整对象，避免贪婪正则截断。
-        decoder = json.JSONDecoder()
-        obj = None
-        for i, char in enumerate(value):
-            if char != '{':
-                continue
-            try:
-                trial, _ = decoder.raw_decode(value[i:])
-            except json.JSONDecodeError:
-                continue
-            if isinstance(trial, dict):
-                obj = trial
-                break
-        if obj is None:
+        # Decode only the outer object: a broken parent must not become a valid child.
+        start = value.find('{')
+        if start < 0:
             raise ValueError('模型未输出可解析的 JSON 对象')
-    if isinstance(obj, dict) and ('solutions' in obj or obj.get('knowledge_base') == 'solution'):
+        try:
+            obj, _ = json.JSONDecoder().raw_decode(value[start:])
+        except json.JSONDecodeError as exc:
+            raise ValueError(f'模型JSON格式错误：第{exc.lineno}行第{exc.colno}列，{exc.msg}；请检查双引号转义或输出是否完整') from exc
+    if isinstance(obj, dict) and (knowledge_base == 'solution' or 'solutions' in obj or obj.get('knowledge_base') == 'solution'):
         from services.solution_knowledge_service import validate_document
+        if knowledge_base == 'solution':
+            from services.solution_output_contract import adapt_document
+            obj = adapt_document(obj, question=question)
         return validate_document(obj)
     if isinstance(obj, dict) and 'knowledge_points' in obj:
         from vendor.chongxi_health_pipeline.structured_parser import validate_document
@@ -166,7 +162,7 @@ def extract_json(text: str) -> dict[str, Any]:
     return obj
 
 
-def call_provider(provider: Provider, prompt: str, web_search: bool = False) -> dict[str, Any]:
+def call_provider(provider: Provider, prompt: str, web_search: bool = False, *, knowledge_base=None, question=None) -> dict[str, Any]:
     started = time.perf_counter()
     response_text = None
     usage = {}
@@ -201,7 +197,7 @@ def call_provider(provider: Provider, prompt: str, web_search: bool = False) -> 
                     'completion_tokens': response.usage.completion_tokens,
                 }
         try:
-            parsed = extract_json(response_text)
+            parsed = extract_json(response_text, knowledge_base=knowledge_base, question=question)
             status, error = 'success', None
         except Exception as exc:
             parsed, status, error = None, 'parse_failed', str(exc)
@@ -257,12 +253,14 @@ def count_points(parsed):
     return sum(len(items) for items in parsed.get('dimensions', {}).values())
 
 
-def execute_task(task_id: int, prompt: str, providers: list[Provider], on_result=None, web_search=False):
+def execute_task(task_id: int, prompt: str, providers: list[Provider], on_result=None, web_search=False, *, knowledge_base=None, question=None):
     """Shared CLI/web execution path; each provider result is committed separately."""
     statuses = []
     try:
         with concurrent.futures.ThreadPoolExecutor(max_workers=len(providers)) as pool:
-            futures = {pool.submit(call_provider, p, prompt, **({'web_search': True} if web_search else {})): p for p in providers}
+            options = {'web_search': True} if web_search else {}
+            if knowledge_base == 'solution':options.update(knowledge_base=knowledge_base, question=question)
+            futures = {pool.submit(call_provider, p, prompt, **options): p for p in providers}
             for future in concurrent.futures.as_completed(futures):
                 result = future.result()
                 persist_result(task_id, result)

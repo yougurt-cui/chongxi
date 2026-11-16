@@ -228,8 +228,13 @@ def run_worker(task_id):
         if task.get('knowledge_base') == 'health' and 'knowledge_points' in task['template_text']:
             from services.health_knowledge_import_service import render_prompt
             prompt = render_prompt(task['template_text'],task['question'])
+        options = {}
+        if task.get('knowledge_base') == 'solution':
+            from services.solution_output_contract import render_prompt
+            prompt = render_prompt(task['template_text'], task['question'])
+            options = {'knowledge_base': 'solution', 'question': task['question']}
         collector.execute_task(task_id,prompt,providers,
-                               web_search=task['web_search'])
+                               web_search=task['web_search'], **options)
     finally:
         if acquired:
             with conn.cursor() as cur:cur.execute('SELECT RELEASE_LOCK(%s)',(lock_name,))

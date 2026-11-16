@@ -12,3 +12,5 @@ JSON格式：
 {"knowledge_base":"solution","question":"原始问题","solutions":[{"species":"cat","breed":"all","life_stage":"all","need":"digestive_health","scenario_code":"stool_odor_normal_stool","scenario":"具体观测场景原文","possible_causes":["可能原因原文"],"solution":["具体动作原文"],"verification":{"review_condition":"复核条件","expected_result":"预期结果","failure_condition":"失败条件","next_action":"后续行动"},"source_urls":[],"evidence_status":"pending_verification"}]}
 各编码使用小写英文和下划线，solutions最多30条。没有可靠方案时solutions=[]。
 重点区分成形便异味、软便、伴随胀气、老年便秘、腹泻等不同观测场景，再给相应行动与复核条件。
+
+输出前逐项核对：顶层knowledge_base、question、solutions齐全；每条scenario_code非空；species仅cat/dog；evidence_status仅supported/uncertain/pending_verification；英文双引号正确转义。不能省略必填字段，不以null替代必填字段。

@@ -62,3 +62,13 @@ python -m pytest tests/test_health_solution.py tests/test_solution_knowledge.py 
 ```
 
 MySQL 集成验证使用隔离临时数据库执行原始 SQL，覆盖 5 条示例、已有表升级、重复导入、多模型同场景归并、新场景创建和人工审核冲突回滚；不向正式库写入示例数据。
+
+## 自定义模板兼容约束
+
+解决方案调用模型前，会在选定模板（包括历史自定义模板）末尾附加 `templates/solution_output_contract.txt`，明确顶层包装、场景编码、枚举、验证条件和 JSON 转义规则。用户模板原文及已保存的历史任务快照保持不变；`{{question}}` 替换为原始问题，旧模板中的可选参数占位符替换为未提供说明，`scenario_count` 默认 5。
+
+解析器仅在任务明确属于 solution 时启用兼容：从任务补齐缺失的知识库和问题，归一 feline/canine 等明确种类别名；两种历史 pending_review 证据值降为 pending_verification，其他非法枚举仍拒绝。缺少场景编码的旧回答使用 `legacy_` 加规范化场景原文的 SHA256 前 32 位作为临时身份，仅支持同原文重试去重，不代表不同措辞的语义归并。明确给出的场景编码不改写。
+
+JSON 有前言或代码围栏时可提取完整外层对象；外层损坏时不再尝试把内部 verification 等对象当作完整响应，会报告 JSON 错误行列。不得自动修改医疗正文中的双引号来猜测修复。原始回答保留。
+
+页面“重试解析入库”会对 solution 的 parse_failed 批次重新解析保存的原文，成功后继续共享入库流程；失败则保留原文与准确错误，不调用模型，不改写历史提示词。

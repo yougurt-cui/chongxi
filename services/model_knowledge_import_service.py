@@ -218,16 +218,41 @@ def persist_model_result(task_id,result):
                 conn.commit()
 
 
+def reparse_solution_batch(batch_id):
+    """Retry saved text without another model call or changing the historical prompt."""
+    from vendor.chongxi_multi_model_mysql.run import extract_json
+    error = None
+    with connect() as conn, conn.cursor() as cur:
+        cur.execute('SELECT knowledge_base,status,question,raw_response FROM knowledge_import_batch WHERE id=%s FOR UPDATE', (batch_id,))
+        batch = cur.fetchone()
+        if not batch:raise LookupError('采集批次不存在')
+        if batch['knowledge_base'] != 'solution' or batch['status'] != 'parse_failed':return
+        try:
+            parsed = extract_json(batch['raw_response'] or '', knowledge_base='solution', question=batch['question'])
+        except ValueError as exc:
+            error = exc
+            cur.execute('UPDATE knowledge_import_batch SET error_message=%s WHERE id=%s', (str(exc),batch_id))
+        else:
+            cur.execute("UPDATE knowledge_import_batch SET status='success',parsed_response=%s,error_message=NULL WHERE id=%s", (dumps(parsed),batch_id))
+        conn.commit()
+    if error:raise error
+
+
 def import_task(task_id):
     ensure_database()
     with connect() as conn:
         with conn.cursor() as cur:
-            cur.execute('SELECT id,status FROM knowledge_import_batch WHERE task_id=%s ORDER BY id',(task_id,))
+            cur.execute('SELECT id,status,knowledge_base FROM knowledge_import_batch WHERE task_id=%s ORDER BY id',(task_id,))
             rows=cur.fetchall()
     if not rows:raise LookupError('采集任务不存在')
     results=[];errors=[]
     for row in rows:
-        if row['status']!='success':continue
+        if row['status']=='parse_failed' and row.get('knowledge_base')=='solution':
+            try:reparse_solution_batch(row['id'])
+            except ValueError as exc:
+                errors.append({'batch_id':row['id'],'message':str(exc)})
+                continue
+        elif row['status']!='success':continue
         try:results.append(process_batch_pipeline(row['id']))
         except Exception:
             LOGGER.exception('model_response_reimport_failed batch_id=%s',row['id'])
