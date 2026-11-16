@@ -20,8 +20,9 @@ def document():
 def db(existing=None, imported=False):
     conn=MagicMock();conn.__enter__.return_value=conn
     cur=conn.cursor.return_value.__enter__.return_value
-    cur.fetchone.return_value={'id':5,'knowledge_base':'solution','status':'success',
+    batch={'id':5,'knowledge_base':'solution','status':'success',
         'parsed_response':json.dumps(document()),'imported_at':'old' if imported else None}
+    cur.fetchone.side_effect=lambda: {'acquired':1} if cur.execute.call_args.args[0].startswith('SELECT GET_LOCK') else batch
     cur.fetchall.return_value=existing or []
     return conn,cur
 

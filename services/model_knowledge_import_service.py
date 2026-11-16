@@ -52,8 +52,8 @@ def _ensure_database(name):
                     if exc.args[0] != 1060: raise
             from services.knowledge_source_assembly_service import DDL
             cur.execute(DDL)
-            from services.solution_knowledge_service import DDL as SOLUTION_DDL
-            cur.execute(SOLUTION_DDL)
+            from services.solution_knowledge_service import ensure_schema as ensure_solution_schema
+            ensure_solution_schema(cur)
             cur.execute('SHOW COLUMNS FROM knowledge_point_source_detail')
             if not {'id','batch_id','source_provider','original_condition','species_code','breed_code','life_stage_codes','need_scene_code','need_scene_name','need_scene_codes','need_relation','scene_meta','need_codes','category_code','topic_code','content','standardization_meta'}.issubset({r['Field'] for r in cur.fetchall()}):
                 raise RuntimeError('知识库字段尚未升级，请先执行对应字段扩展脚本')
