@@ -77,7 +77,7 @@ def test_solution_context_does_not_accept_other_library_or_invalid_actions():
 
 
 def test_malformed_outer_json_never_falls_back_to_verification_or_other_child():
-    raw='前言\n```json\n{"solutions":[{"scenario":"气味似乎"跟着猫走"","verification":{"next_action":"观察"}}]}\n```'
+    raw='前言\n```json\n{"solutions":[{"scenario":"气味似乎\"跟着猫走\"","verification":{"next_action":"观察"}}'
     with pytest.raises(ValueError,match='JSON格式错误'):
         run.extract_json(raw,knowledge_base='solution',question='test')
     valid='前言\n```json\n'+json.dumps({'solutions':[scenario()]})+'\n```'
@@ -148,3 +148,25 @@ def test_provider_applies_solution_context_to_native_search_response():
     assert result['status']=='success'
     assert result['parsed']['question']=='问题'
     assert result['parsed']['solutions'][0]['species']=='cat'
+
+
+def test_unescaped_paired_chinese_quotes_repair_preserves_text_and_records_offsets():
+    point=scenario();point['scenario']='气味似乎"跟着猫走"、不局限于猫砂盆。'
+    good=json.dumps({'solutions':[point]},ensure_ascii=False)
+    broken=good.replace('\\"跟着猫走\\"','"跟着猫走"')
+    metadata={}
+    parsed=run.extract_json('前言\n```json\n'+broken+'\n```',knowledge_base='solution',question='问题',parse_metadata=metadata)
+    assert parsed['solutions'][0]['scenario']==point['scenario']
+    assert parsed['solutions'][0]['solution']==point['solution']
+    assert metadata['json_format_repairs'][0]['type']=='escape_paired_cjk_quotes'
+    with pytest.raises(ValueError,match='JSON格式错误'):run.extract_json(broken)
+
+
+@pytest.mark.parametrize('raw',[
+    '{"solutions": [{"scenario": "观察" "solution": []}]}',
+    '{"solutions": [{"scenario": "观察"}',
+    '{"solutions": [{"scenario": "气味似乎"跟着猫走"、未结束',
+])
+def test_quote_repair_does_not_accept_missing_commas_or_truncation(raw):
+    with pytest.raises(ValueError,match='JSON格式错误'):
+        run.extract_json(raw,knowledge_base='solution',question='问题')

@@ -223,17 +223,18 @@ def reparse_solution_batch(batch_id):
     from vendor.chongxi_multi_model_mysql.run import extract_json
     error = None
     with connect() as conn, conn.cursor() as cur:
-        cur.execute('SELECT knowledge_base,status,question,raw_response FROM knowledge_import_batch WHERE id=%s FOR UPDATE', (batch_id,))
+        cur.execute('SELECT knowledge_base,status,question,raw_response,search_metadata FROM knowledge_import_batch WHERE id=%s FOR UPDATE', (batch_id,))
         batch = cur.fetchone()
         if not batch:raise LookupError('采集批次不存在')
         if batch['knowledge_base'] != 'solution' or batch['status'] != 'parse_failed':return
         try:
-            parsed = extract_json(batch['raw_response'] or '', knowledge_base='solution', question=batch['question'])
+            metadata = decode(batch.get('search_metadata')) or {}
+            parsed = extract_json(batch['raw_response'] or '', knowledge_base='solution', question=batch['question'], parse_metadata=metadata)
         except ValueError as exc:
             error = exc
             cur.execute('UPDATE knowledge_import_batch SET error_message=%s WHERE id=%s', (str(exc),batch_id))
         else:
-            cur.execute("UPDATE knowledge_import_batch SET status='success',parsed_response=%s,error_message=NULL WHERE id=%s", (dumps(parsed),batch_id))
+            cur.execute("UPDATE knowledge_import_batch SET status='success',parsed_response=%s,error_message=NULL,search_metadata=%s WHERE id=%s", (dumps(parsed),dumps(metadata),batch_id))
         conn.commit()
     if error:raise error
 

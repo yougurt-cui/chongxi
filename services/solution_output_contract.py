@@ -44,3 +44,27 @@ def adapt_document(document, *, question=None):
             point['evidence_status']='pending_verification'
         if point.get('source_urls') is None:point['source_urls']=[]
     return result
+
+
+def decode_quoted_solution(value):
+    """Repair only paired unescaped CJK quotation marks in a JSON string value.
+
+    No text is deleted/rephrased. Missing commas, brackets, truncation and other
+    JSON errors remain failures. Returned offsets refer to each repair's input.
+    """
+    repairs=[]
+    decoder=json.JSONDecoder()
+    for _ in range(8):
+        try:
+            obj,_=decoder.raw_decode(value)
+            return obj,repairs
+        except json.JSONDecodeError as exc:
+            if exc.msg != "Expecting ',' delimiter":raise
+            opening=exc.pos-1
+            if opening<1 or value[opening]!='"' or not re.fullmatch(r'[\u3400-\u9fff]',value[opening-1]):raise
+            match=re.match(r'[\u3400-\u9fff]{1,80}"(?=[\u3400-\u9fff，、。；：！？（）])',value[exc.pos:])
+            if not match:raise
+            closing=exc.pos+len(match.group())-1
+            repairs.append({'type':'escape_paired_cjk_quotes','opening_offset':opening,'closing_offset':closing})
+            value=value[:opening]+'\\'+value[opening:closing]+'\\'+value[closing:]
+    raise ValueError('模型JSON引号修复超过上限，请重新生成合法JSON')

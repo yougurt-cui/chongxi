@@ -103,7 +103,7 @@ def check_configuration():
     return complete and sdk_present
 
 
-def extract_json(text: str, *, knowledge_base=None, question=None) -> dict[str, Any]:
+def extract_json(text: str, *, knowledge_base=None, question=None, parse_metadata=None) -> dict[str, Any]:
     value = text.strip()
     if value.startswith('```'):
         value = re.sub(r'^```(?:json)?\s*', '', value, flags=re.I)
@@ -118,7 +118,17 @@ def extract_json(text: str, *, knowledge_base=None, question=None) -> dict[str, 
         try:
             obj, _ = json.JSONDecoder().raw_decode(value[start:])
         except json.JSONDecodeError as exc:
-            raise ValueError(f'模型JSON格式错误：第{exc.lineno}行第{exc.colno}列，{exc.msg}；请检查双引号转义或输出是否完整') from exc
+            if knowledge_base == 'solution':
+                from services.solution_output_contract import decode_quoted_solution
+                try:
+                    obj, repairs = decode_quoted_solution(value[start:])
+                except json.JSONDecodeError as repaired_error:
+                    exc = repaired_error
+                else:
+                    if parse_metadata is not None:parse_metadata['json_format_repairs'] = repairs
+                    exc = None
+            if exc is not None:
+                raise ValueError(f'模型JSON格式错误：第{exc.lineno}行第{exc.colno}列，{exc.msg}；请检查双引号转义或输出是否完整') from exc
     if isinstance(obj, dict) and (knowledge_base == 'solution' or 'solutions' in obj or obj.get('knowledge_base') == 'solution'):
         from services.solution_knowledge_service import validate_document
         if knowledge_base == 'solution':
@@ -197,7 +207,7 @@ def call_provider(provider: Provider, prompt: str, web_search: bool = False, *, 
                     'completion_tokens': response.usage.completion_tokens,
                 }
         try:
-            parsed = extract_json(response_text, knowledge_base=knowledge_base, question=question)
+            parsed = extract_json(response_text, knowledge_base=knowledge_base, question=question, parse_metadata=search_metadata)
             status, error = 'success', None
         except Exception as exc:
             parsed, status, error = None, 'parse_failed', str(exc)
