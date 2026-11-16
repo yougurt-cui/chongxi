@@ -126,6 +126,9 @@ def extract_json(text: str) -> dict[str, Any]:
                 break
         if obj is None:
             raise ValueError('模型未输出可解析的 JSON 对象')
+    if isinstance(obj, dict) and ('solutions' in obj or obj.get('knowledge_base') == 'solution'):
+        from services.solution_knowledge_service import validate_document
+        return validate_document(obj)
     if isinstance(obj, dict) and 'knowledge_points' in obj:
         from vendor.chongxi_health_pipeline.structured_parser import validate_document
         return validate_document(obj)
@@ -247,6 +250,8 @@ def count_points(parsed):
     """Count validated health groups or dimension items without assuming one schema."""
     if not parsed:
         return 0
+    if 'solutions' in parsed:
+        return len(parsed['solutions'])
     if 'knowledge_points' in parsed:
         return len(parsed['knowledge_points'])
     return sum(len(items) for items in parsed.get('dimensions', {}).values())

@@ -153,6 +153,8 @@ def list_tasks(page=1,knowledge_base=''):
                 MAX(b.finished_at) AS finished_at,
                 CASE WHEN MAX(b.knowledge_base)='health' THEN
                 (SELECT COUNT(*) FROM health_knowledge_point_detail h JOIN knowledge_import_batch b2 ON b2.id=h.batch_id WHERE b2.task_id=b.task_id)
+                WHEN MAX(b.knowledge_base)='solution' THEN
+                (SELECT COUNT(*) FROM solution_knowledge_point s JOIN knowledge_import_batch b2 ON b2.id=s.batch_id WHERE b2.task_id=b.task_id)
                 ELSE (SELECT COUNT(*) FROM knowledge_point_source_detail s JOIN knowledge_import_batch b2 ON b2.id=s.batch_id
                  WHERE b2.task_id=b.task_id) END AS point_count
                 FROM knowledge_import_batch b'''+where+''' GROUP BY b.task_id ORDER BY b.task_id DESC LIMIT 20 OFFSET %s''',params+[(page-1)*20])
@@ -190,8 +192,13 @@ def task_detail(task_id):
     if task['knowledge_base'] == 'health':
         from services.health_knowledge_import_service import task_result
         result['health_structured'] = task_result(task_id)
-    from services.knowledge_source_assembly_service import task_objects
-    result['assembled_points'] = task_objects(task_id)
+    if task['knowledge_base'] == 'solution':
+        from services.solution_knowledge_service import task_result
+        result['solution_structured'] = task_result(task_id)
+        result['assembled_points'] = []
+    else:
+        from services.knowledge_source_assembly_service import task_objects
+        result['assembled_points'] = task_objects(task_id)
     if task['knowledge_base'] == 'selection':
         from services.product_recommendation_import_service import task_recommendations
         completed = [row['id'] for row in rows if (store.decode(row.get('product_import_result')) or {}).get('status') == 'completed']

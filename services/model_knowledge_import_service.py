@@ -52,6 +52,8 @@ def _ensure_database(name):
                     if exc.args[0] != 1060: raise
             from services.knowledge_source_assembly_service import DDL
             cur.execute(DDL)
+            from services.solution_knowledge_service import DDL as SOLUTION_DDL
+            cur.execute(SOLUTION_DDL)
             cur.execute('SHOW COLUMNS FROM knowledge_point_source_detail')
             if not {'id','batch_id','source_provider','original_condition','species_code','breed_code','life_stage_codes','need_scene_code','need_scene_name','need_scene_codes','need_relation','scene_meta','need_codes','category_code','topic_code','content','standardization_meta'}.issubset({r['Field'] for r in cur.fetchall()}):
                 raise RuntimeError('知识库字段尚未升级，请先执行对应字段扩展脚本')
@@ -119,6 +121,9 @@ def import_batch(batch_id):
             cur.execute('SELECT knowledge_base FROM knowledge_import_batch WHERE id=%s',(batch_id,))
             batch=cur.fetchone()
             if not batch:raise LookupError('采集批次不存在')
+            if batch['knowledge_base'] == 'solution':
+                from services.solution_knowledge_service import import_batch as import_solution
+                return import_solution(batch_id)
             is_health = batch['knowledge_base'] == 'health'
     if not is_health:
         return _import_batch_source(batch_id)
@@ -237,7 +242,8 @@ def task_status(task_id):
         with conn.cursor() as cur:
             cur.execute('''SELECT b.id,b.provider AS source_provider,b.status,b.import_error,b.knowledge_base,
                 b.finished_at,CASE WHEN b.knowledge_base='health' THEN
-                (SELECT COUNT(*) FROM health_knowledge_point_detail h WHERE h.batch_id=b.id) ELSE
+                (SELECT COUNT(*) FROM health_knowledge_point_detail h WHERE h.batch_id=b.id)
+                WHEN b.knowledge_base='solution' THEN (SELECT COUNT(*) FROM solution_knowledge_point s WHERE s.batch_id=b.id) ELSE
                 (SELECT COUNT(*) FROM knowledge_point_source_detail s WHERE s.batch_id=b.id) END AS total_count
                 FROM knowledge_import_batch b WHERE b.task_id=%s AND b.imported_at IS NOT NULL ORDER BY b.id''',(task_id,))
             batches=list(cur.fetchall())

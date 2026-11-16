@@ -64,6 +64,27 @@
           "file": "templates/nutrition_ingredient.txt"
         }
       ]
+    },
+    {
+      "code": "solution",
+      "label": "解决方案知识库",
+      "tagline": "操作步骤、记录方法与效果验证",
+      "description": "面向“具体该怎么做”的问题，采集适用条件、执行步骤、记录字段、验证方式与停止条件，保留依据和模型来源。",
+      "question_placeholder": "例如：怎样记录猫咪换粮开始时间和每天的变化？怎样建立饮食与排便观察记录？",
+      "templates": [
+        {
+          "code": "solution_steps",
+          "title": "问题解决与执行步骤",
+          "description": "围绕具体问题整理目标、适用条件、分步行动、验证方法和停止条件。",
+          "file": "templates/solution_steps.txt"
+        },
+        {
+          "code": "solution_recording",
+          "title": "记录与验证方法",
+          "description": "整理需要记录的字段、时间节点、操作方法和回顾方式，适合日常观察与记录问题。",
+          "file": "templates/solution_recording.txt"
+        }
+      ]
     }
   ]
 }
