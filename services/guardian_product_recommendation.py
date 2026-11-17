@@ -172,7 +172,7 @@ def recommend(pet, slots, history=(), *, limit=3):
             if slots.get('food_health_state') not in (None, 'none', 'unknown'):
                 item['cautions'].append('当前有健康问题，资料推荐不代表已核验恢复期适配')
         count = max(1, min(int(limit), 3))
-        return {**base, 'status': 'ready' if items else 'no_match', 'items': items[:count],
+        return {**base, **followup_questions(items[:count]), 'status': 'ready' if items else 'no_match', 'items': items[:count],
                 'has_more': len(items) > count, 'matched_count': len(items),
                 'note': NOTE if items else '当前条件下没有更多匹配的推荐资料，可以调整需求后再试；不会用其他物种或无关需求补足数量。'}
     except Exception as exc:
@@ -192,3 +192,55 @@ def reply_text(result):
     if result.get('has_more'):
         lines.append('可以说“换一组”查看其他推荐。')
     return '\n\n'.join(lines)
+
+
+def followup_questions(items):
+    if not items:
+        return {'questions': [], 'question_topics': {}}
+    products = [i for i in items if i.get('entity_level') != 'brand']
+    compare = ('这几款产品的功能描述有什么区别？' if len(products) > 1 else
+               '这款产品的功能描述说明了什么？' if products else '这些品牌还需要补充哪些具体产品资料？')
+    topics = {compare: 'compare', '比较蛋白质和脂肪时，要看哪些资料？': 'nutrition',
+              '判断是否适合我家宠物，还缺哪些信息？': 'fit'}
+    return {'questions': list(topics), 'question_topics': topics}
+
+
+def followup(question, memory, state):
+    """Answer a saved card's buttons from that card, including after refresh."""
+    packet = memory.get('recommendation_source')
+    if not isinstance(packet, dict):
+        return None
+    topic = (packet.get('question_topics') or {}).get(question)
+    if topic not in ('compare', 'nutrition', 'fit'):
+        return None
+    items = packet['items']
+    labels = ['%s · %s' % (p['brand'], '具体产品未明确' if p.get('entity_level') == 'brand' else p['product_name']) for p in items]
+    if topic == 'compare':
+        lines = ['先对照这条推荐里的原始功能描述：']
+        for label, p in zip(labels, items):
+            lines.extend([label, p['function_summary']])
+        lines.append('这些描述说明资料推荐它的理由，不能据此判断哪款更好。具体版本、配料表与营养标签未齐全，暂不能做配方评分或营养数值对比。')
+    elif topic == 'nutrition':
+        lines = ['对比这组推荐的蛋白质和脂肪，需要先补齐同一具体版本的资料：',
+                 '、'.join(labels),
+                 '· 完整产品名称、适用物种与生命阶段。',
+                 '· 包装上的粗蛋白、粗脂肪、水分及其单位、保证值或实测值标识。',
+                 '· 热量和建议喂食量；比较实际摄入时还需记录每天吃多少。',
+                 '干粮和湿粮的含水量不同，标签百分比需统一口径再比较。当前推荐只有功能描述，不能推测含量，也不能仅按蛋白或脂肪高低判断适合程度。',
+                 '可以发具体产品的清晰营养标签和配料表，再继续分析。']
+    else:
+        lines = ['判断这组推荐是否适合，还需要核对：', '、'.join(labels)]
+        for label, p in zip(labels, items):
+            lines.append(label + '：' + '；'.join(p.get('cautions') or []))
+        lines.extend(['· 宠物的年龄、体重与体况、当前食物及耐受情况。',
+                      '· 具体产品版本、完整配料表、营养标签与适用阶段。',
+                      '· 疾病、过敏及兽医提出的饮食限制；有这些情况时需先结合诊疗要求确认。'])
+    lines.append(packet.get('note') or NOTE)
+    state.update(primary_intent='general_pet_qa', current_step=None, missing_slots=[], followup_count=0,
+                 turn_count=state['turn_count'] + 1)
+    return {'response_type': 'text', 'reply': '\n\n'.join(lines), 'result': {
+        'pipeline': 'recommendation_followup', 'intent': 'general_pet_qa',
+        'turn_no': state['turn_count'], 'sequence_no': 1,
+        'recommendation_followup': {'version': 1, 'topic': topic,
+            'source_message_id': memory['source_id'], 'source_table': SOURCE,
+            'product_keys': [p['product_key'] for p in items]}}}

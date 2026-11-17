@@ -39,6 +39,8 @@ def from_state(user_id, conversation, state):
     valid = (all(prior.get(k) == v for k, v in scope(user_id, conversation).items()) and prior.get('version') == 1
              and isinstance(prior.get('events'), list) and isinstance(prior.get('products'), list))
     memory = deepcopy(prior) if valid else empty(user_id, conversation)
+    # Click sources must be revalidated from server-owned history on every turn.
+    memory.pop('recommendation_source', None)
     memory.setdefault('topics', [])
     return memory
 
@@ -105,7 +107,7 @@ def remember(memory, message):
              'turn': result.get('turn_no'), 'time': str(message.get('created_at') or ''),
              'kind': 'user_statement' if role == 'user' else result.get('pipeline') or result.get('intent') or 'assistant_answer'}
     evidence = {}
-    for key in ('health_knowledge', 'health_analysis', 'ingredient_assembly', 'context_answer'):
+    for key in ('health_knowledge', 'health_analysis', 'ingredient_assembly', 'context_answer', 'product_recommendations'):
         value = result.get(key)
         if isinstance(value, dict):
             # Context answers are hypotheses, not independent corroborating evidence.
@@ -189,6 +191,12 @@ def load(connect, user_id, conversation, state, source_id=None, question=''):
             allowed = list((result.get('health_knowledge') or {}).get('questions') or [])
             allowed += list(((result.get('guardian_report') or {}).get('next_steps') or {}).get('questions') or [])
             allowed += list((result.get('context_answer') or {}).get('questions') or [])
+            recommendation = result.get('product_recommendations') or {}
+            if (recommendation.get('version') == 1 and recommendation.get('status') == 'ready'
+                    and recommendation.get('pet_id') == conversation.get('pet_id') and recommendation.get('items')):
+                allowed += list(recommendation.get('questions') or [])
+                if question in (recommendation.get('questions') or []):
+                    memory['recommendation_source'] = deepcopy(recommendation)
             for card in result.get('data') or []:
                 if isinstance(card, dict):
                     allowed += list(card.get('questions') or [])

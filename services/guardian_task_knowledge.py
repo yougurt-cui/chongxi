@@ -280,6 +280,8 @@ def health_answer(plan, *, consultation=False):
         if not rows:
             return packet | {'status': 'no_match', 'text': '健康知识库暂未覆盖这个问题或当前物种，请补充具体表现；持续或加重时请联系兽医。'}
         groups = summarize_health(plan['query'], rows)
+        from services.guardian_health_solution import enrich
+        enrich(plan, groups, rows)
         used = {i for item in groups for i in item['source_ids']}
         return packet | {'status': 'matched', 'groups': groups,
             'questions': question_pool(('猫咪' if plan['species'] == 'cat' else '狗狗') + issues[0]['issue_name']),

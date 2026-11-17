@@ -419,9 +419,12 @@ def handle_question(user_id, conversation, message, state, *, report_scene=None,
             'pet_id': conversation.get('pet_id'), 'turn_no': state['turn_count'],
             'external_subject': external_subject, 'source_table': 'health_knowledge_point_detail'}
         lines = [health['text']]
+        from services.guardian_health_solution import plain_text as solution_text
         for group in health['groups']:
             lines.append(group['cause'] + '\n' + group['mechanism'] + '\n伴随表现：' +
                          '；'.join(group['manifestations']) + '\n判断依据：' + '；'.join(group['supporting']))
+            if group.get('solution'):
+                lines.append(solution_text(group['solution']))
         return {'response_type': 'risk_alert' if health['status'] == 'risk_alert' else 'text',
                 'reply': '\n\n'.join(lines), 'result': {'intent': 'symptom_consult',
                     'pipeline': 'health_knowledge', 'turn_no': state['turn_count'], 'sequence_no': 1,

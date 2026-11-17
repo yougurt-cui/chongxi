@@ -1877,6 +1877,7 @@ def handle_message(user_id: Any, conversation_id: Any, payload: dict[str, Any]) 
                 and not client_context.get('entry_point')
                 and not ingredient_assembly.is_request(message, state, conversation.get('pet_id'))
                 and not state['slots'].get(ingredient_guide.SLOT)
+                and not context_memory.get('recommendation_source')
                 ):
             context_decision = dialogue_context.decide(message, context_memory, state)
             relation_decision = context_decision
@@ -1891,7 +1892,7 @@ def handle_message(user_id: Any, conversation_id: Any, payload: dict[str, Any]) 
             elif context_decision and context_decision['action'] == 'workflow':
                 context_decision = None
     scene, photos, photo_subject = _resolve_scene(user_id, conversation, state, message, photos, prior_photo,
-        external_subject, client_context, allow_text=not (context_decision or (relation_decision or {}).get('business_intent') or attachments or interaction or ambiguous or subject_choice
+        external_subject, client_context, allow_text=not (context_memory.get('recommendation_source') or context_decision or (relation_decision or {}).get('business_intent') or attachments or interaction or ambiguous or subject_choice
             or ingredient_assembly.is_request(message, state, conversation.get('pet_id'))))
     if scene and photos:
         ambiguous = False
@@ -1939,7 +1940,14 @@ def handle_message(user_id: Any, conversation_id: Any, payload: dict[str, Any]) 
         ingredient_context = _build_context(user_id, conversation, state, attachments, client_context)
         ingredient_reply = ingredient_assembly.handle_question(
             message, ingredient_context, state, conversation.get('pet_id'))
-    if context_decision and not (direct_scene or ambiguous or external_subject):
+    from services.guardian_product_recommendation import followup as recommendation_followup
+    recommendation_reply = (recommendation_followup(message, context_memory, state)
+        if source_id and not (direct_scene or ambiguous or external_subject or interaction or attachments
+                              or subjects.urgent_message(message)) else None)
+    if recommendation_reply is not None:
+        _pause_soft_stool(state)
+        reply = recommendation_reply
+    elif context_decision and not (direct_scene or ambiguous or external_subject):
         _pause_soft_stool(state)
         if context_decision['action'] == 'product_analysis':
             reply = _saved_product_analysis(user_id, conversation, state, context_decision, client_context)
@@ -2070,6 +2078,7 @@ def handle_message(user_id: Any, conversation_id: Any, payload: dict[str, Any]) 
     if not external_subject and not ambiguous:
         if (not context_decision or context_decision.get('action') == 'product_analysis') and saved_messages:
             context_memory['focus'] = {'question': message[:300], 'source_ids': [saved_messages[-1]['id']]}
+        context_memory.pop('recommendation_source', None)
         state['slots'][dialogue_context.SLOT] = context_memory
     _save_state(state)
     return {"ok": True, "message": saved_messages[-1], "messages": saved_messages}
