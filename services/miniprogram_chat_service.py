@@ -23,7 +23,7 @@ from services.miniprogram_food_change_service import (
 from services.miniprogram_food_submission_service import get_food_submission, list_food_submissions
 from services.miniprogram_diet_history_service import list_diet_history, compact_diet_context, list_diet_references
 from services.guardian_recommendation_service import explicit_preferences, recommendation_goal
-from services.recommendation_availability import unavailable_recommendation
+from services import guardian_product_recommendation as product_recommendations
 from services.guardian_food_flow_service import handle_food_flow, STATE_KEY as FOOD_FLOW_STATE_KEY
 from services.guardian_food_goals import GOALS, goals_in_text, goal_options
 from services.guardian_food_analysis_service import recommendation_text
@@ -1108,6 +1108,11 @@ def _handle_context_message(user_id, conversation, message, state, source_messag
                     'catalog_key', 'food_name', '_food_analysis_choices', ingredient_guide.SLOT):
             state['slots'].pop(key, None)
         state['current_step'] = None
+    if interaction and interaction.get('slot') == 'product_recommendation_refresh':
+        if not interaction.get('value') or interaction['value'] != state['slots'].get('_product_recommendation_token'):
+            raise ValueError('这组推荐已失效，请重新发起推荐。')
+        interaction, message, forced_intent = None, '换一组', 'food_switch'
+        intent_result = ({'primary_intent': 'food_switch', 'slots': {}, '_target_flow': 'food_switch'}, None)
     previous_food_name = state['slots'].get('food_name')
     interaction = interaction or health_flow.confirmation_interaction(message, state)
     if interaction and interaction.get('slot') in {health_flow.CONFIRM_SLOT, health_flow.RECOMMEND_SLOT}:
@@ -1402,17 +1407,25 @@ def _handle_context_message(user_id, conversation, message, state, source_messag
                         (state['slots'].get('_recommendation_exclude_ids') or []) + previous))
                 packet = context.get('guardian_context') or {}
                 state['slots']['_confirmed_history_text'] = (packet.get('facts') or {}).get('history_foods_reviewed') or ''
-                # Keep the full requirement-collection flow, but do not compute or
-                # expose ranked products until the recommendation module opens.
-                recommendation = unavailable_recommendation()
+                recommendation = product_recommendations.recommend(
+                    context.get('pet_profile') or {}, state['slots'],
+                    context.get('diet_reference_history', context.get('diet_history')) or [])
+                recommendation['refresh_token'] = uuid.uuid4().hex
+                recommendation['pet_id'] = conversation.get('pet_id')
+                state['slots']['_product_recommendation_token'] = recommendation['refresh_token']
                 context["recommendation"] = recommendation
-                context["food_candidates"] = recommendation["items"]
-                state['slots']['_recommendation_last_ids'] = [item['formula_id'] for item in recommendation['items']]
+                # Knowledge products have no verified formula identity. Keep
+                # them outside the catalogue selection/feeding-write workflow.
+                context["food_candidates"] = []
+                state['slots']['_recommendation_last_ids'] = [item['product_key'] for item in recommendation['items']]
                 food_state = state["slots"].setdefault(FOOD_FLOW_STATE_KEY, {"stage": "selection"})
-                food_state["candidates"] = recommendation["items"]
+                food_state["candidates"] = []
+                state['slots']['_food_dialogue_status'] = 'awaiting_candidate_action'
                 food_state['reference_food_text'] = state['slots'].get('current_food')
             recommendation = context.get('recommendation') or {}
-            if state.get('primary_intent') == 'food_switch' and not context.get('food_candidates'):
+            if state.get('primary_intent') == 'food_switch' and recommendation.get('source_table') == 'product_recommendation':
+                text, answer_model = product_recommendations.reply_text(recommendation), None
+            elif state.get('primary_intent') == 'food_switch' and not context.get('food_candidates'):
                 text, answer_model = recommendation.get('note') or '暂未找到可核验的候选。', None
             elif state.get('primary_intent') == 'food_switch':
                 text, answer_model = recommendation_text(recommendation), None
@@ -1425,10 +1438,12 @@ def _handle_context_message(user_id, conversation, message, state, source_messag
                 state['slots']['_food_dialogue_status'] = 'awaiting_candidate_action'
             model_name = answer_model or model_name
             reply = {"response_type":"result_card","reply":text,
-                     "result":{"intent":state.get("primary_intent"),"slots":state.get("slots"),
+                     "result":{"intent":state.get("primary_intent"),"slots":deepcopy(state.get("slots")),
                                "limited_info":flow["status"]=="answer_with_limited_info",
                                "food_candidates":context.get("food_candidates") or [],
                                "recommendation":context.get("recommendation"),
+                               "product_recommendations": (context.get("recommendation")
+                                   if recommendation.get('source_table') == 'product_recommendation' else None),
                                "health_recommendation_context": state['slots'].get(health_flow.RECOMMENDATION_KEY),
                                "actions": [{"type": "diet_history", "label": "查看历史口粮", "pet_id": conversation.get("pet_id")}] if conversation.get("pet_id") else [],
                                "food_submission":submission},
@@ -1657,7 +1672,12 @@ def _scene_reply(user_id, conversation, message, state, scene, photos, subject, 
         if not subject:
             return _handle_food_selection_message(user_id, conversation, question, state, message_id,
                                                   intent_result=(selection, None))
-        text, kind = unavailable_recommendation()['message'], 'text'
+        recommendation = product_recommendations.recommend(
+            {'animal_type': subject}, {'food_goal': 'general', 'target_requirement': message})
+        state.update(primary_intent='general_pet_qa', current_step=None, turn_count=state['turn_count'] + 1)
+        return {'reply': product_recommendations.reply_text(recommendation), 'response_type': 'result_card',
+                'result': {'intent': 'product_recommend', 'product_recommendations': recommendation,
+                           'turn_no': state['turn_count'], 'sequence_no': 1}}
     else:
         text, kind = scene['reply'], 'text'
     intent = {'product_analysis': 'food_analysis', 'product_compare': 'food_analysis',
