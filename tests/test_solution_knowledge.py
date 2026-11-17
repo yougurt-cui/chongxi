@@ -34,7 +34,9 @@ def db(existing=None, imported=False):
     return conn,cur
 
 
-def test_solution_library_has_active_editable_templates_with_expected_schema():
+def test_solution_library_has_active_editable_templates_with_expected_schema(monkeypatch, tmp_path):
+    # This asserts the bundled schema, independently of editable production prompts.
+    monkeypatch.setattr(prompts, 'SETTINGS_PATH', tmp_path / 'prompt_templates.json')
     base=next(b for b in prompts.collection_bases()['bases'] if b['code']=='solution')
     assert base['label']=='解决方案知识库' and len(base['templates'])==2
     for template in base['templates']:
