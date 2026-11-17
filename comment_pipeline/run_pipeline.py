@@ -38,6 +38,9 @@ from scripts.filter_catfood_choice_comments import (
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--flow", choices=("legacy", "food-health"), default="legacy", help="food-health使用大模型分类并写病症候选；legacy保留原流程")
+    parser.add_argument("--scan-limit", type=int, default=1000)
+    parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--limit", type=int, default=0, help="每个来源表最多读取数量，0表示全部")
     parser.add_argument("--min-id", type=int, default=-1, help="只读取源表 id 大于此值的评论")
     parser.add_argument(
@@ -68,6 +71,14 @@ def _write_preference_csv(path: Path, rows: list[dict[str, Any]]) -> None:
 
 
 def run(args: argparse.Namespace) -> dict[str, Any]:
+    if getattr(args, 'flow', 'legacy') == 'food-health':
+        if args.dry_run:
+            return {'dry_run': True, 'flow': 'food-health', 'target_pet_food': args.limit or 100,
+                    'steps': ['公共去噪', '双维度模型分类', '猫食品健康观察', '病症候选打标'],
+                    'writes': False, 'llm_calls': 0}
+        from comment_pipeline.food_health import run as run_food_health
+        return run_food_health(limit=args.limit or 100, scan_limit=args.scan_limit, workers=args.workers,
+                               output_dir=args.output_dir if args.output_dir != str(ARTIFACT_ROOT) else 'var/comment-food-health')
     run_id = "comment_pipeline_{}".format(datetime.now().strftime("%Y%m%d_%H%M%S_%f"))
     run_dir = Path(args.output_dir) / run_id
     run_dir.mkdir(parents=True, exist_ok=True)

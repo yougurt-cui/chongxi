@@ -111,3 +111,7 @@ python -m comment_pipeline.run_pipeline --limit 100 --dry-run
 | decision | 0（现存是 qwen_v2 版本） | 18970 | 0 | 0 |
 | experience | 17727 | 1120 | 0 | 0 |
 | switch | 5196 | 261 | 0 | 0 |
+
+## 双维度分类与食品病症试跑
+
+新增可选 `--flow food-health`：公共去噪 → 大模型五领域/五处理器分类 → 猫的食品健康观察 → 待审核病症候选。`--limit 100` 按模型确认的食品评论计数，未发生症状的评论不强行生成候选。执行、存储、来源字段和增量缓存说明见 `docs/comment-food-health.md`。旧模式仍为 `--flow legacy`，不自动恢复已暂停的增长引擎任务。
