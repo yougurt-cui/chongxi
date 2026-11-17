@@ -37,6 +37,7 @@ try:
     from .api.process_signal_api import process_signal_api
     from .api.taobao_sku_api import taobao_sku_api
     from .api.miniprogram_api import miniprogram_api
+    from .api.miniprogram_image_generation_api import image_generation_api
     from .api.db_sync_api import db_sync_api
     from .api.enterprise_api import enterprise_api
     from .api.formula_profile_api import formula_profile_api
@@ -64,6 +65,7 @@ except ImportError:
     from api.process_signal_api import process_signal_api
     from api.taobao_sku_api import taobao_sku_api
     from api.miniprogram_api import miniprogram_api
+    from api.miniprogram_image_generation_api import image_generation_api
     from api.db_sync_api import db_sync_api
     from api.enterprise_api import enterprise_api
     from api.formula_profile_api import formula_profile_api
@@ -1955,6 +1957,7 @@ def create_app() -> Flask:
     flask_app.register_blueprint(process_signal_api)
     flask_app.register_blueprint(taobao_sku_api)
     flask_app.register_blueprint(miniprogram_api)
+    flask_app.register_blueprint(image_generation_api)
     flask_app.register_blueprint(db_sync_api)
     flask_app.register_blueprint(enterprise_api)
     flask_app.register_blueprint(formula_profile_api)
