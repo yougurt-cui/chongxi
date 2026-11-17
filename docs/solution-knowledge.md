@@ -1,5 +1,41 @@
 # 解决方案知识库
 
+## 当前数据粒度（2026-11-17）
+
+`solution_knowledge_point` 是场景主表，唯一键为 `species_code + breed_code + life_stage_code + need_code + scenario_code`。五项均为独立列；`scenario` 是保留原文的具体场景描述。一组对象与需求下的不同观测前提分别成行，同一组合的不同模型或不同任务只增加来源变体。
+
+原候选表完整迁移到 `solution_knowledge_point_detail`，原 ID、batch_id、point_key、审核状态、raw_json 和 scenario_data 均不改写。`health_solution` 暂保留为兼容投影，新页面和任务列表使用新主表；模型批次计数使用明细表。
+
+主表独立保存 possible_causes、steps、record_fields、verification、stop_conditions、source_count、model_count、sources、source_urls、审核状态。verification 直接保存四项验证对象；不再依赖隐藏在 scenario_data 中的字段。代表方案选最早的未拒绝完整来源，所有其他方案连同验证前提在 sources 中保留，不交叉拼接，不自动认定为共识或通过审核。
+
+场景来源或内容未变时保留主表 ID 和审核状态；已审核主记录发生变化时整个导入事务回滚。未知范围保留 unspecified，不扩大成适用全部；all 生命阶段规范为 all_stages。通用旧格式无法明确对象/场景时仅保留在明细层，不虚构主表维度。
+
+显式需求及历史场景编码映射保存在 `vendor/chongxi_health_solution/scene_aliases.json`。迁移只按登记映射统一编码，不改写来源，不做模糊文本合并。现有 15 条场景因时间、年龄或伴随表现不同分别保留；相同五维组合由数据库唯一键确保不会重复。
+
+### 迁移命令
+
+先停止 API 和采集写入进程，再执行：
+
+```bash
+python scripts/migrate_solution_scene_grain.py  # 只读预览
+python scripts/migrate_solution_scene_grain.py --apply --backup-dir var/backups/solution-scene-唯一时间戳
+```
+
+脚本会检查没有运行中的解决方案采集，取得导入锁，备份原表与批次快照（before.json）并生成 restore.sql。复制候选后逐字段校验，再构建临时主表，检查每条来源均被覆盖，最后用 RENAME TABLE 原子切换。旧候选主表另保留为 solution_knowledge_point_legacy_scene_v1。完成后启动更新后的 API。重复导入不会重复生成主记录。
+
+回退时停止写入，使用迁移前代码并执行备份目录的 restore.sql；原模型批次未被迁移改写。归档表仍可用于人工核对。若迁移在切换前失败，旧主表不变，先核对明细/暂存表，不覆盖或删除已有数据。
+
+### 验证
+
+```bash
+python -m pytest tests/test_solution_scene.py tests/test_solution_knowledge.py tests/test_health_solution.py -q
+SOLUTION_SCENE_MYSQL_TEST=1 python -m pytest tests/test_solution_scene_mysql.py -q
+```
+
+MySQL 集成测试仅只读复制正式库的解决方案到随机 test_solution_scene_* 临时库，测试备份迁移、逐字段来源保留、重复导入、跨模型同场景归并、不同场景隔离、主表任务计数及审核冲突回滚，最后清除临时库。
+
+以下为旧格式与兼容投影的说明：
+
 多模型知识采集页的 `solution`（解决方案知识库）复用问题提交、模型选择、联网开关、任务筛选及提示词模板管理。自动采集和页面“重试解析入库”进入同一个专用导入器，不经过选粮标准化或产品推荐路径。
 
 ## 场景格式

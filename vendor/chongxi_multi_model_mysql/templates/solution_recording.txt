@@ -1,6 +1,6 @@
 你是宠物解决方案知识整理员。围绕以下问题收集场景级方案，严格只输出JSON。
 问题：{{question}}
-目标表为health_solution，按species、breed、life_stage、need、scenario_code唯一定位一个场景。
+目标主表为solution_knowledge_point，按species_code、breed_code、life_stage_code、need_code、scenario_code唯一定位一个场景；模型原始方案另外保留来源明细。
 species明确为cat或dog；breed、life_stage、need沿用已知编码，不擅自改变原始需求编码。未限定品种或年龄但不能确认通用时用unspecified，只有明确适用于全部才用all。
 scenario_code必须是稳定、简明的小写英文下划线编码，例如stool_odor_normal_stool；同一观测场景保持一致，不使用随机数、模型名或批次号。
 scenario保留具体观测场景，明确已知表现与适用前提；possible_causes保留可能原因数组，不写成确诊事实；solution是按顺序执行的动作字符串数组。

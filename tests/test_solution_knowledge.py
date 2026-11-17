@@ -7,6 +7,13 @@ from services import multi_model_knowledge_service as multi, multi_model_prompt_
 from vendor.chongxi_multi_model_mysql import run
 
 
+@pytest.fixture(autouse=True)
+def isolate_scene_aggregation():
+    # Candidate-import tests use a cursor stub for the detail table only.
+    with patch('services.solution_scene_service.refresh', return_value={'scene_count':1,'changed_count':0}):
+        yield
+
+
 def document():
     return {'knowledge_base':'solution','question':'怎样记录换粮开始时间？','solutions':[{
         'title':'建立换粮时间记录','problem':'换粮后便臭，需要记录时间供回顾',

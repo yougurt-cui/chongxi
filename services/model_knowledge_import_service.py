@@ -269,7 +269,7 @@ def task_status(task_id):
             cur.execute('''SELECT b.id,b.provider AS source_provider,b.status,b.import_error,b.knowledge_base,
                 b.finished_at,CASE WHEN b.knowledge_base='health' THEN
                 (SELECT COUNT(*) FROM health_knowledge_point_detail h WHERE h.batch_id=b.id)
-                WHEN b.knowledge_base='solution' THEN (SELECT COUNT(*) FROM solution_knowledge_point s WHERE s.batch_id=b.id) ELSE
+                WHEN b.knowledge_base='solution' THEN (SELECT COUNT(*) FROM solution_knowledge_point_detail s WHERE s.batch_id=b.id) ELSE
                 (SELECT COUNT(*) FROM knowledge_point_source_detail s WHERE s.batch_id=b.id) END AS total_count
                 FROM knowledge_import_batch b WHERE b.task_id=%s AND b.imported_at IS NOT NULL ORDER BY b.id''',(task_id,))
             batches=list(cur.fetchall())

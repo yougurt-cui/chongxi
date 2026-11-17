@@ -4532,10 +4532,29 @@
       return `<article style="padding:16px;margin:12px 0;border:1px solid var(--line);border-radius:10px;"><h4>${escapeHtml(scene.scenario_code)}</h4><p>${escapeHtml(scene.species)} / ${escapeHtml(scene.breed)} / ${escapeHtml(scene.life_stage)} · ${escapeHtml(scene.need)}</p><strong>观测场景</strong><p style="white-space:pre-wrap;">${escapeHtml(scene.scenario)}</p><strong>可能原因</strong>${list(scene.possible_causes)}<strong>解决动作</strong><ol>${(scene.solution || []).map(action => '<li>' + escapeHtml(action) + '</li>').join('')}</ol><strong>验证与后续行动</strong>${Object.entries(labels).map(([key,label]) => '<p><strong>' + label + '：</strong>' + escapeHtml(scene.verification?.[key] || '') + '</p>').join('')}<details><summary>来源与审核状态</summary><p>场景方案 #${Number(point.health_solution_id || 0)} · 批次 #${Number(point.batch_id)}<br>${escapeHtml(multiLabels[point.source_provider] || point.source_provider)} · ${escapeHtml(point.source_model)}<br>原始问题：${escapeHtml(point.source_question)}<br>场景审核：${escapeHtml(point.scenario_review_status || 'pending_review')} · 来源审核：${escapeHtml(point.review_status)}<br>证据状态：${escapeHtml(point.evidence_status)}</p>${list(point.source_urls)}</details></article>`;
     }
 
+    function renderMultiSolutionScene(point) {
+      const list = items => '<ul>' + (items || []).map(value => '<li>' + escapeHtml(value) + '</li>').join('') + '</ul>';
+      const labels = {review_condition:'复核条件',expected_result:'预期结果',failure_condition:'失败条件',next_action:'后续行动'};
+      const variants = (point.sources || []).map(source => renderMultiHealthScenario({
+        ...source, scenario_data:source.scenario_data, source_urls:source.source_urls,
+        scenario_review_status:point.review_status, health_solution_id:point.id
+      })).join('');
+      return `<article style="padding:16px;margin:12px 0;border:1px solid var(--line);border-radius:10px;">
+        <h4>场景 #${Number(point.id)} · ${escapeHtml(point.scenario_code)}</h4>
+        <p>物种：${escapeHtml(point.species_code)} · 品种：${escapeHtml(point.breed_code)} · 阶段：${escapeHtml(point.life_stage_code)} · 需求：${escapeHtml(point.need_code)}</p>
+        <strong>观测场景</strong><p style="white-space:pre-wrap;">${escapeHtml(point.scenario)}</p>
+        <strong>可能原因</strong>${list(point.possible_causes)}
+        <strong>代表方案（完整来源方案，待审核）</strong><ol>${(point.steps || []).map(step => '<li>' + escapeHtml(step.action) + '</li>').join('')}</ol>
+        ${Object.entries(labels).map(([key,label]) => '<p><strong>' + label + '：</strong>' + escapeHtml(point.verification?.[key] || '') + '</p>').join('')}
+        <strong>记录字段</strong>${list(point.record_fields)}<strong>停止条件</strong>${list(point.stop_conditions)}
+        <p>${Number(point.source_count)} 条来源 / ${Number(point.model_count)} 个模型 · 审核：${escapeHtml(point.review_status)}</p>
+        <details><summary>查看各模型完整方案与来源</summary>${variants}</details></article>`;
+    }
+
     function renderMultiSolutions(packet) {
       const items = packet.points || [];
       const list = values => (values || []).length ? '<ul>' + values.map(value => '<li>' + escapeHtml(value) + '</li>').join('') + '</ul>' : '<p class="muted">未提供</p>';
-      return `<h3>解决方案知识（${items.length}）</h3><p class="muted">展示场景、可能原因、解决动作和验证条件，保留各模型完整方案及原始批次来源。</p>` + (items.length ? items.map(point => point.scenario_data ? renderMultiHealthScenario(point) : `<article style="padding:16px;margin:12px 0;border:1px solid var(--line);border-radius:10px;"><h4>${escapeHtml(point.title)}</h4><p><strong>问题：</strong>${escapeHtml(point.problem)}<br><strong>目标：</strong>${escapeHtml(point.goal)}</p><strong>适用条件</strong>${list(point.applicable_conditions)}<strong>执行步骤</strong><ol>${(point.steps || []).map(step => `<li style="margin:8px 0;white-space:pre-wrap;">${escapeHtml(step.action)}<br><small class="muted">${escapeHtml(step.reason)}</small></li>`).join('')}</ol><strong>需要记录的字段</strong>${list(point.record_fields)}<strong>验证方式</strong>${list(point.verification)}<strong>停止或转交条件</strong>${list(point.stop_conditions)}<details><summary>知识来源与审核状态</summary><p>批次 #${Number(point.batch_id)} · ${escapeHtml(multiLabels[point.source_provider] || point.source_provider)} · ${escapeHtml(point.source_model)}<br>原始问题：${escapeHtml(point.source_question)}<br>证据状态：${escapeHtml(point.evidence_status)}<br>审核状态：${escapeHtml(({pending:'待审核',verified:'已审核',rejected:'已拒绝'})[point.review_status] || point.review_status)}</p>${list(point.source_urls)}</details></article>`).join('') : '<p class="muted">尚无解决方案解析结果；可等待处理完成或重试解析入库。</p>');
+      return `<h3>解决方案知识（${items.length}）</h3><p class="muted">按物种、品种、阶段、需求和场景合并，同一组合一行；来源中保留各模型完整方案，步骤不交叉拼接。</p>` + (items.length ? items.map(point => point.species_code ? renderMultiSolutionScene(point) : point.scenario_data ? renderMultiHealthScenario(point) : `<article style="padding:16px;margin:12px 0;border:1px solid var(--line);border-radius:10px;"><h4>${escapeHtml(point.title)}</h4><p><strong>问题：</strong>${escapeHtml(point.problem)}<br><strong>目标：</strong>${escapeHtml(point.goal)}</p><strong>适用条件</strong>${list(point.applicable_conditions)}<strong>执行步骤</strong><ol>${(point.steps || []).map(step => `<li style="margin:8px 0;white-space:pre-wrap;">${escapeHtml(step.action)}<br><small class="muted">${escapeHtml(step.reason)}</small></li>`).join('')}</ol><strong>需要记录的字段</strong>${list(point.record_fields)}<strong>验证方式</strong>${list(point.verification)}<strong>停止或转交条件</strong>${list(point.stop_conditions)}<details><summary>知识来源与审核状态</summary><p>批次 #${Number(point.batch_id)} · ${escapeHtml(multiLabels[point.source_provider] || point.source_provider)} · ${escapeHtml(point.source_model)}<br>原始问题：${escapeHtml(point.source_question)}<br>证据状态：${escapeHtml(point.evidence_status)}<br>审核状态：${escapeHtml(({pending:'待审核',verified:'已审核',rejected:'已拒绝'})[point.review_status] || point.review_status)}</p>${list(point.source_urls)}</details></article>`).join('') : '<p class="muted">尚无解决方案解析结果；可等待处理完成或重试解析入库。</p>');
     }
 
     async function loadMultiDetail(id) {

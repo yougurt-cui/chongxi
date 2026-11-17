@@ -13,7 +13,13 @@ def render_prompt(template, question):
     for key in ('species', 'breed', 'life_stage', 'need'):
         prompt = prompt.replace('{{'+key+'}}', '未提供；仅根据问题明确的信息填写')
     prompt = prompt.replace('{{scenario_count}}', '5')
-    return prompt + '\n\n' + CONTRACT_PATH.read_text(encoding='utf-8') + '\n原始问题（question须原样返回）：' + json.dumps(question, ensure_ascii=False)
+    from services.solution_scene_service import registry
+    aliases = registry()
+    catalog = {'need_aliases': aliases.get('need_aliases', {}),
+               'known_scenario_codes': sorted(set(aliases.get('scenario_aliases', {}).values()))}
+    if question.strip() in aliases.get('question_needs', {}):
+        catalog['required_need_code'] = aliases['question_needs'][question.strip()]
+    return prompt + '\n\n' + CONTRACT_PATH.read_text(encoding='utf-8') + '\n已登记编码（场景适用前提不同则不能强行套用）：' + json.dumps(catalog, ensure_ascii=False) + '\n原始问题（question须原样返回）：' + json.dumps(question, ensure_ascii=False)
 
 
 def adapt_document(document, *, question=None):
@@ -28,6 +34,11 @@ def adapt_document(document, *, question=None):
     if not isinstance(points,list):return result
     for point in points:
         if not isinstance(point,dict) or not ('scenario' in point or 'scenario_code' in point):continue
+        for old, new in (('species','species_code'),('breed','breed_code'),('life_stage','life_stage_code'),('need','need_code')):
+            if new in point:
+                if old in point and point[old] != point[new]:
+                    raise ValueError('解决方案对象字段冲突：'+old+'/'+new)
+                point[old]=point.pop(new)
         species=point.get('species')
         if isinstance(species,str):
             species=species.strip().lower()

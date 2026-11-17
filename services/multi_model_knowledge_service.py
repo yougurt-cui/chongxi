@@ -154,7 +154,7 @@ def list_tasks(page=1,knowledge_base=''):
                 CASE WHEN MAX(b.knowledge_base)='health' THEN
                 (SELECT COUNT(*) FROM health_knowledge_point_detail h JOIN knowledge_import_batch b2 ON b2.id=h.batch_id WHERE b2.task_id=b.task_id)
                 WHEN MAX(b.knowledge_base)='solution' THEN
-                (SELECT COUNT(*) FROM solution_knowledge_point s JOIN knowledge_import_batch b2 ON b2.id=s.batch_id WHERE b2.task_id=b.task_id)
+                (SELECT COUNT(DISTINCT s.id) FROM solution_knowledge_point s JOIN JSON_TABLE(s.sources, '$[*]' COLUMNS(task_id BIGINT PATH '$.task_id')) refs ON refs.task_id=b.task_id)
                 ELSE (SELECT COUNT(*) FROM knowledge_point_source_detail s JOIN knowledge_import_batch b2 ON b2.id=s.batch_id
                  WHERE b2.task_id=b.task_id) END AS point_count
                 FROM knowledge_import_batch b'''+where+''' GROUP BY b.task_id ORDER BY b.task_id DESC LIMIT 20 OFFSET %s''',params+[(page-1)*20])

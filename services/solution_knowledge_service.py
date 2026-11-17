@@ -3,7 +3,7 @@ import hashlib
 from urllib.parse import urlparse
 from services import model_knowledge_import_service as store
 
-DDL = """CREATE TABLE IF NOT EXISTS solution_knowledge_point (
+DDL = """CREATE TABLE IF NOT EXISTS solution_knowledge_point_detail (
  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
  batch_id BIGINT UNSIGNED NOT NULL,
  point_key CHAR(64) NOT NULL,
@@ -44,14 +44,16 @@ def strings(value,label,limit=20):
 
 def ensure_schema(cur):
     cur.execute(DDL)
-    cur.execute("SHOW COLUMNS FROM solution_knowledge_point LIKE 'scenario_data'")
+    cur.execute("SHOW COLUMNS FROM solution_knowledge_point_detail LIKE 'scenario_data'")
     if not cur.fetchone():
         import pymysql
-        try:cur.execute('ALTER TABLE solution_knowledge_point ADD COLUMN scenario_data JSON NULL')
+        try:cur.execute('ALTER TABLE solution_knowledge_point_detail ADD COLUMN scenario_data JSON NULL')
         except pymysql.err.OperationalError as exc:
             if exc.args[0]!=1060:raise
     from services.health_solution_service import ensure_schema as ensure_health_schema
     ensure_health_schema(cur)
+    from services.solution_scene_service import ensure_schema as ensure_scene_schema
+    ensure_scene_schema(cur)
 
 
 def scenario_point(item):
@@ -64,6 +66,8 @@ def scenario_point(item):
     evidence=item.get('evidence_status','pending_verification')
     if evidence not in {'supported','uncertain','pending_verification'}:raise ValueError('解决方案证据状态无效')
     result['evidence_status']=evidence
+    for key in ('record_fields','stop_conditions'):
+        if key in item:result[key]=strings(item[key],key)
     return result
 
 
@@ -135,7 +139,7 @@ def import_batch(batch_id):
                     raise ValueError('只能导入成功的解决方案知识批次')
                 document=validate_document(store.decode(batch['parsed_response']))
                 points={hashlib.sha256(store.dumps(p).encode()).hexdigest():p for p in document['solutions']}
-                cur.execute('SELECT point_key,review_status,scenario_data FROM solution_knowledge_point WHERE batch_id=%s',(batch_id,))
+                cur.execute('SELECT point_key,review_status,scenario_data FROM solution_knowledge_point_detail WHERE batch_id=%s',(batch_id,))
                 existing=list(cur.fetchall())
                 from services.health_solution_service import scenario_key, refresh_groups
                 affected={scenario_key(store.decode(p['scenario_data'])) for p in existing if p.get('scenario_data')}
@@ -147,16 +151,18 @@ def import_batch(batch_id):
                     if any(p['review_status']!='pending' for p in existing):
                         raise ValueError('解决方案发生变化且已有人工审核记录，请人工处理')
                     for key in old_keys-set(points):
-                        cur.execute('DELETE FROM solution_knowledge_point WHERE batch_id=%s AND point_key=%s',(batch_id,key))
+                        cur.execute('DELETE FROM solution_knowledge_point_detail WHERE batch_id=%s AND point_key=%s',(batch_id,key))
                     for key,point in points.items():
                         if key in old_keys:continue
                         columns=('title','problem','goal',*JSON_FIELDS,'evidence_status')
                         candidate=candidate_values(point)
                         values=[store.dumps(candidate[k]) if k in JSON_FIELDS and candidate[k] is not None else candidate[k] for k in columns]
-                        cur.execute('INSERT INTO solution_knowledge_point (batch_id,point_key,'+','.join(columns)+',raw_json) VALUES ('+','.join(['%s']*(len(columns)+3))+')',
+                        cur.execute('INSERT INTO solution_knowledge_point_detail (batch_id,point_key,'+','.join(columns)+',raw_json) VALUES ('+','.join(['%s']*(len(columns)+3))+')',
                                     (batch_id,key,*values,store.dumps(point)))
                         inserted+=1
                 scenario_updates=refresh_groups(conn,affected)
+                from services.solution_scene_service import refresh
+                scene_result=refresh(conn)
                 cur.execute('UPDATE knowledge_import_batch SET imported_at=COALESCE(imported_at,NOW()),import_error=NULL WHERE id=%s',(batch_id,))
             conn.commit()
         except Exception:
@@ -165,14 +171,15 @@ def import_batch(batch_id):
             if acquired:
                 with conn.cursor() as cur:cur.execute('SELECT RELEASE_LOCK(%s)',(lock,))
     return {'database':store.database_name(),'batch_id':batch_id,'status':'already_imported' if unchanged else 'completed',
-            'total_count':len(points),'inserted_count':inserted,'source_table':'solution_knowledge_point',
-            'scenario_table':'health_solution','scenario_count':len(affected),'scenario_updates':scenario_updates}
+            'total_count':len(points),'inserted_count':inserted,'source_table':'solution_knowledge_point_detail',
+            'scenario_table':'solution_knowledge_point','scenario_count':scene_result['scene_count'],
+            'scenario_updates':scene_result['changed_count'],'legacy_scenario_updates':scenario_updates}
 
 
 def task_result(task_id):
     with store.connect() as conn,conn.cursor() as cur:
         cur.execute('''SELECT s.*,b.provider source_provider,b.model source_model,b.question source_question
-            FROM solution_knowledge_point s JOIN knowledge_import_batch b ON b.id=s.batch_id
+            FROM solution_knowledge_point_detail s JOIN knowledge_import_batch b ON b.id=s.batch_id
             WHERE b.task_id=%s AND b.knowledge_base='solution' ORDER BY s.id''',(task_id,))
         rows=list(cur.fetchall())
     for row in rows:
@@ -188,5 +195,8 @@ def task_result(task_id):
             scene=native.get(scenario_key(row['scenario_data'])) or {}
             row['health_solution_id']=scene.get('id')
             row['scenario_review_status']=scene.get('review_status')
-    return {'points':rows,'source_table':'solution_knowledge_point','scenario_table':'health_solution',
-            'scenario_count':len({r.get('health_solution_id') for r in scenes if r.get('health_solution_id')})}
+    from services.solution_scene_service import task_points
+    points=task_points(task_id)
+    return {'points':points,'source_table':'solution_knowledge_point',
+            'source_points':rows,'source_detail_table':'solution_knowledge_point_detail',
+            'scenario_table':'solution_knowledge_point','scenario_count':len(points)}

@@ -14,3 +14,10 @@
 无可靠方案时solutions=[]。不要为凑数量生成重复场景。
 结构示例（内容仅为字段示意，不作为本题的事实）：
 {"knowledge_base":"solution","question":"原始问题","solutions":[{"species":"cat","breed":"unspecified","life_stage":"unspecified","need":"digestive_health","scenario_code":"stool_odor_normal_stool","scenario":"明确的观测场景","possible_causes":["可能原因"],"solution":["可执行动作"],"verification":{"review_condition":"何时复核","expected_result":"预期变化","failure_condition":"无效或恶化表现","next_action":"下一步行动"},"source_urls":[],"evidence_status":"pending_verification"}]}
+
+【场景粒度与独立对象字段】
+目标主表为solution_knowledge_point，每行是物种＋品种＋生命阶段＋需求＋一个观测场景。
+新输出使用species_code、breed_code、life_stage_code、need_code，替代前文示例中的species、breed、life_stage、need；不要同时输出两套冲突字段。取值规则和长度限制不变；全生命阶段统一使用all_stages，未明确时使用unspecified，不能把未知扩大成all或all_stages。
+need_code沿用登记的标准编码，不把可能原因、检查项目、用药审查等替代为当前需求。末尾有required_need_code时必须使用它。
+同一场景不同模型共享scenario_code；场景的时间、年龄、危险表现或前提不同则分开，不能为减少行数而合并。已登记编码仅在适用前提相同的情况下复用，新场景使用稳定且具体的英文编码。
+solution和verification必须针对同一个场景，保留一套完整方案，不把不同适用场景的动作交叉拼接。可另外提供record_fields和stop_conditions字符串数组，不明确时填[]，不编造内容。

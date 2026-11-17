@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "need_aliases": {
+    "fecal_odor_reduction": "fecal_odor_management",
+    "digestive_health_odor_control": "fecal_odor_management"
+  },
+  "question_needs": {
+    "猫咪便便臭怎么解决": "fecal_odor_management"
+  },
+  "scenario_aliases": {
+    "legacy_8293394867d6720fa412870c99ec2a8f": "stool_odor_formed_normal_appetite_2_to_3_days",
+    "legacy_ac358586efde7ed792d3d5175fcbb929": "stool_odor_soft_frequent_over_3_days",
+    "legacy_23a002f02825bee7f5a30b62e1453bb0": "stool_odor_senior_constipation_low_water",
+    "legacy_17f287d8d2360d964f5c0ebc14a275b6": "stool_odor_kitten_bloating_recent_diet_change",
+    "legacy_455d77750b699e3c174a25894f440828": "stool_odor_blood_or_melena_with_lethargy",
+    "legacy_2df26dfd88342cf64fe0f5ebc4c0f37f": "stool_odor_formed_recent_food_change",
+    "legacy_4da7c3a7cf9f461d40d6c1dfa2dbc8b5": "stool_odor_diarrhea_24_to_48_hours",
+    "legacy_c1e59470fabfaeee9860defef1f0efcf": "stool_odor_kitten_mucus_or_segments_weight_loss",
+    "legacy_a07b79f23dc01109ee94a8a45853662d": "stool_odor_soft_after_antibiotics",
+    "legacy_96a49afcbe514450c814e00e8e824ca7": "stool_odor_senior_weight_loss_other_symptoms",
+    "legacy_9dab70be9f20cbb0bde9af1aab13eeb2": "stool_odor_short_term_diet_change_or_ingestion",
+    "legacy_694f3905ea5832d2a23aa4aa378374ae": "stool_odor_recurrent_diarrhea_exposure_history",
+    "legacy_4105042d2d2d6ad4a4b6a100494b2307": "stool_odor_chronic_digestive_symptoms_weight_loss",
+    "legacy_eb60681565f1a8c11af1f82cd08e21c7": "body_odor_perianal_discomfort_or_discharge",
+    "legacy_a7e8b2c2956bbf335fe202f56ded8eca": "stool_odor_after_medication_or_supplements"
+  }
+}
