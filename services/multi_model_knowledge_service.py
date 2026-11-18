@@ -237,6 +237,8 @@ def run_worker(task_id):
             prompt = render_prompt(task['template_text'],task['question'])
         options = {}
         if task.get('knowledge_base') == 'behavior':
+            from services.behavior_knowledge_service import render_prompt
+            prompt = render_prompt(task['template_text'], task['question'])
             options = {'knowledge_base': 'behavior', 'question': task['question']}
         if task.get('knowledge_base') == 'solution':
             from services.solution_output_contract import render_prompt

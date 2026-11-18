@@ -156,3 +156,58 @@ def test_task_detail_uses_behavior_candidates_without_selection_assembly():
         result = multi.task_detail(5)
     assert result['behavior_structured']['total'] == 0 and result['assembled_points'] == []
     points.assert_called_once_with(task_id=5); assembly.assert_not_called()
+
+
+def observation_document():
+    return {'question': '猫咪吐毛球', 'species': 'felis_catus', 'breed': '', 'life_stage': '',
+        'observations': [{'observation_code': 'vomiting_hairball', 'observation_name': '吐毛球',
+        'domain_code': 'digestive', 'category_code': 'vomiting', 'observation_type': 'physiological_event',
+        'aliases': ['吐毛团'], 'observable_features': ['吐出毛发团'], 'related_observations': ['呕吐'],
+        'normal_scenarios': [{'scenario': '偶发情况', 'mechanism': '模型原文', 'conditions': ['其他状态正常'],
+                              'observable_signs': ['吐出毛发团'], 'source_ids': ['unverified-source']}],
+        'abnormal_scenarios': [{'boundary_id': 'B1', 'scenario': '持续不适', 'conditions': ['反复出现'],
+            'warning_signs': ['精神变化'], 'risk_level': 'veterinary_review', 'source_ids': [],
+            'health_relations': [{'health_issue_code': None, 'health_issue_name': '待核验问题',
+                'relation_type': 'possible_manifestation', 'mechanism_summary': '可能机制，待审核',
+                'supporting_signs': ['持续不适'], 'differentiating_signs': [], 'verification': ['兽医评估'],
+                'source_knowledge_ids': []}]}],
+        'unmapped_health_issues': [{'health_issue_name': '待核验问题', 'status': 'pending_review'}],
+        'evidence_status': 'pending_review'}]}
+
+
+def test_observation_contract_preserves_scenes_boundaries_and_candidates_losslessly():
+    original = observation_document()
+    original['observations'][0]['related_observations'].append({'observation_code':'dry_heaving', 'observation_name':'干呕', 'relation':'鉴别现象'})
+    parsed = run.extract_json('搜索说明\n```json\n' + json.dumps(original) + '\n```', knowledge_base='behavior')
+    point = parsed['behaviors'][0]
+    assert point['observation'] == original['observations'][0]
+    assert point['species'] == 'cat' and point['life_stage'] == '未限定'
+    assert point['evidence_status'] == 'pending_verification'
+    assert point['record_type'] == 'observation' and 'interventions' not in point
+    assert behavior.validate_document(parsed) == parsed
+    assert run.count_points(parsed) == 1
+
+
+def test_invalid_observation_boundary_is_rejected():
+    doc = observation_document()
+    doc['observations'][0]['abnormal_scenarios'][0]['risk_level'] = 'diagnosed'
+    with pytest.raises(ValueError, match='risk_level'):
+        behavior.validate_document(doc)
+
+
+def test_observation_retry_and_import_do_not_create_formal_health_relations():
+    conn, cur = db()
+    cur.fetchone.return_value['parsed_response'] = json.dumps(observation_document())
+    with patch.object(store, 'ensure_database'), patch.object(store, 'connect', return_value=conn):
+        result = behavior.import_batch(5)
+    assert result['inserted_count'] == 1
+    writes = [c.args for c in cur.execute.call_args_list if c.args[0].startswith('INSERT')]
+    assert len(writes) == 1 and 'behavior_knowledge_point_detail' in writes[0][0]
+    assert json.loads(writes[0][1][-1])['observation'] == observation_document()['observations'][0]
+
+
+def test_observation_prompt_placeholders_are_explicit_without_invented_context():
+    rendered = behavior.render_prompt('问题{{question}} 物种{{species}} 品种{{breed}} 阶段{{life_stage}} 字典{{existing_observations}} 疾病{{disease_candidates}} 来源{{reference_materials}}', '猫咪吐毛球')
+    assert '{{' not in rendered and '猫咪吐毛球' in rendered
+    assert '疾病[]' in rendered and '字典[]' in rendered and '未提供' in rendered
+    assert behavior.render_prompt('{{question}}', '{{species}}') == '{{species}}'

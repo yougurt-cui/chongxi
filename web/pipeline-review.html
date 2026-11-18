@@ -4540,10 +4540,27 @@
       return `<h3>产品推荐标准化（${Number(packet.total || 0)}）</h3><p class="muted">按种类、品种、年龄阶段、需求、品牌和产品合并。下列组合包含本任务的来源，相同组合也保留其他任务的推荐来源。</p>${packet.message ? '<p>' + escapeHtml(packet.message) + '</p>' : ''}${rows ? '<div class="table-wrap"><table><thead><tr><th>种类 / 品种 / 年龄阶段</th><th>需求</th><th>品牌 / 产品</th><th>推荐理由</th><th>推荐来源</th><th>审核状态</th></tr></thead><tbody>' + rows + '</tbody></table></div>' : '<p class="muted">尚无已入库的产品推荐；请查看各模型的处理状态。</p>'}${packet.truncated ? '<p class="muted">当前展示前200个推荐组合。</p>' : ''}`;
     }
 
+    function renderBehaviorObservation(row) {
+      const p = row.point_data, o = p.observation;
+      const list = values => (values || []).length ? '<ul>' + values.map(v => '<li>' + escapeHtml(typeof v === 'string' ? v : JSON.stringify(v)) + '</li>').join('') + '</ul>' : '<p class="muted">未提供</p>';
+      const risk = {routine:'常规观察',veterinary_review:'建议兽医评估',urgent:'需要紧急就医'};
+      const relations = values => (values || []).map(r => `<article style="padding:12px;border:1px solid var(--line);margin:8px 0;border-radius:8px;"><strong>${escapeHtml(r.health_issue_name)}（候选关联，待核验）</strong><p>${escapeHtml(({possible_manifestation:'可能的健康问题表现',supporting_sign:'辅助判断线索',nonspecific_sign:'非特异性表现'})[r.relation_type] || r.relation_type)}</p><p>${escapeHtml(r.mechanism_summary)}</p><strong>支持表现</strong>${list(r.supporting_signs)}<strong>鉴别表现</strong>${list(r.differentiating_signs)}<strong>进一步判断依据</strong>${list(r.verification)}<details><summary>模型声明的编码和本地知识引用（未核验）</summary><p>${escapeHtml(r.health_issue_code || '无已匹配编码')}</p>${list(r.source_knowledge_ids)}</details></article>`).join('') || '<p class="muted">无已提供关联。</p>';
+      return `<article style="padding:16px;margin:12px 0;border:1px solid var(--line);border-radius:10px;">
+        <h4>${escapeHtml(o.observation_name)} · 观察现象</h4><p>${escapeHtml(o.observation_code)} · ${escapeHtml(o.domain_code)} / ${escapeHtml(o.category_code)} · ${escapeHtml(o.observation_type)}</p>
+        <p>模型给出的适用范围：${escapeHtml(p.species)} / ${escapeHtml(p.breed)} / ${escapeHtml(p.life_stage)}。需审核，不代表用户个体事实。</p>
+        <strong>常见表达</strong>${list(o.aliases)}<strong>可观察特征</strong>${list(o.observable_features)}<strong>相关鉴别现象</strong>${list(o.related_observations)}
+        <h4>正常或低风险场景（待核查）</h4>${(o.normal_scenarios || []).map(s => `<section style="padding:12px;margin:8px 0;background:var(--bg);border-radius:8px;"><strong>${escapeHtml(s.scenario)}</strong><p>${escapeHtml(s.mechanism)}</p><strong>适用条件</strong>${list(s.conditions)}<strong>可观察表现</strong>${list(s.observable_signs)}<details><summary>模型声明的参考来源（未核验）</summary>${list(s.source_ids)}</details></section>`).join('') || '<p class="muted">未提供合理的正常解释。</p>'}
+        <h4>异常边界与健康候选关联</h4>${(o.abnormal_scenarios || []).map(s => `<section style="padding:12px;margin:8px 0;border:1px solid var(--line);border-radius:8px;"><strong>${escapeHtml(s.scenario)}</strong><p>${escapeHtml(s.boundary_id)} · 风险：${escapeHtml(risk[s.risk_level] || s.risk_level)}（模型输出，待审核）</p><strong>触发条件</strong>${list(s.conditions)}<strong>警示表现</strong>${list(s.warning_signs)}${relations(s.health_relations)}<details><summary>模型声明的参考来源（未核验）</summary>${list(s.source_ids)}</details></section>`).join('') || '<p class="muted">暂无异常边界。</p>'}
+        <h4>未映射健康问题（待审核）</h4>${list(o.unmapped_health_issues)}
+        <p class="muted">健康关联、阈值和来源均为模型候选内容，尚未与本地疾病知识核验，未建立正式疾病关联。</p>
+        <details><summary>模型来源与审核状态</summary><p>任务 #${Number(row.task_id)} · 批次 #${Number(row.batch_id)} · ${escapeHtml(multiLabels[row.source_provider] || row.source_provider)} · ${escapeHtml(row.source_model)}<br>问题：${escapeHtml(row.source_question)}<br>审核：${escapeHtml(({pending:'待审核',verified:'已审核',rejected:'已拒绝'})[row.review_status] || row.review_status)}</p><pre style="white-space:pre-wrap;overflow-wrap:anywhere;">${escapeHtml(JSON.stringify(o, null, 2))}</pre></details>
+      </article>`;
+    }
     function renderBehaviorPoints(packet) {
       const list = values => (values || []).length ? '<ul>' + values.map(v => '<li>' + escapeHtml(v) + '</li>').join('') + '</ul>' : '<p class="muted">未提供</p>';
       return (packet.items || []).map(row => {
         const p = row.point_data;
+        if (p.record_type === 'observation') return renderBehaviorObservation(row);
         return `<article style="padding:16px;margin:12px 0;border:1px solid var(--line);border-radius:10px;">
           <h4>${escapeHtml(p.behavior_name)}</h4>
           <p>${escapeHtml(({cat:'猫',dog:'狗',unknown:'物种待确认'})[p.species] || p.species)} / ${escapeHtml(p.breed)} / ${escapeHtml(p.life_stage)} · ${escapeHtml(packet.categories?.[p.category] || p.category)}</p>
