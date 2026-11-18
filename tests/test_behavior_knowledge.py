@@ -11,6 +11,15 @@ from services import multi_model_prompt_service as prompts
 from vendor.chongxi_multi_model_mysql import run
 
 
+@pytest.fixture(autouse=True)
+def dimension_dictionary(monkeypatch):
+    from services import behavior_knowledge_dimensions as dimensions
+    monkeypatch.setattr(dimensions, 'load_dictionary', lambda: {
+        'species':[{'species_code':'cat'},{'species_code':'dog'}],
+        'breeds':[{'species_code':sp,'breed_code':'unknown_'+sp,'breed_name':'未知'} for sp in ('cat','dog')],
+        'stages':[{'species_code':sp,'stage_code':stage} for sp in ('cat','dog') for stage in ('adult','unspecified','all_stages')]})
+
+
 def document():
     return {'knowledge_base': 'behavior', 'question': '猫半夜叫如何观察？', 'behaviors': [{
         'behavior_name': '夜间鸣叫', 'species': 'cat', 'breed': '未限定', 'life_stage': '成年',
@@ -25,7 +34,7 @@ def db(existing=None):
     conn = MagicMock(); conn.__enter__.return_value = conn
     cur = conn.cursor.return_value.__enter__.return_value
     cur.fetchone.return_value = {'id': 5, 'knowledge_base': 'behavior', 'status': 'success',
-                                'parsed_response': json.dumps(document())}
+                                'provider':'qwen', 'model':'test', 'parsed_response': json.dumps(document())}
     cur.fetchall.return_value = existing or []
     return conn, cur
 

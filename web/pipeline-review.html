@@ -4545,6 +4545,14 @@
       const rows = (packet.calls || []).map(c => `<tr><td>调用 #${Number(c.source_call_id)} / 批次 #${Number(c.batch_id)}</td><td>${escapeHtml(multiLabels[c.provider] || c.provider)}</td><td>${escapeHtml(c.call_status === 'success' ? '调用成功' : '调用失败')}</td><td>${escapeHtml(states[c.parse_status] || c.parse_status)}${c.parse_error ? '<br>' + escapeHtml(c.parse_error) : ''}</td><td>${Number(c.point_count || 0)}</td></tr>`).join('');
       return `<section style="margin:16px 0;padding:12px;background:#f0f7ff;border-radius:8px;"><strong>采集与解析</strong><p>采集只保存大模型原始回答；解析单独生成知识记录。重试解析不会调用模型或产生新的模型用量。</p><div class="table-wrap"><table><thead><tr><th>调用记录 / 批次</th><th>模型</th><th>采集状态</th><th>解析状态</th><th>知识条数</th></tr></thead><tbody>${rows}</tbody></table></div><button class="button secondary" type="button" data-import-task="${taskId}">解析已保存的回答 / 重试</button><span id="modelImportMessage" role="status" style="margin-left:12px;"></span></section>`;
     }
+    function behaviorScopeLabel(row) {
+      const p = row.point_data;
+      const species = 'species_code' in row ? row.species_code : p.species;
+      const breed = 'breed_code' in row ? row.breed_code : p.breed;
+      const stage = 'life_stage_code' in row ? row.life_stage_code : p.life_stage;
+      const stages = {all_stages:'全生命阶段',unspecified:'阶段未指明',kitten:'幼猫',puppy:'幼犬',adult:'成年',senior:'老年',neonatal:'新生期',weaning:'断奶过渡期'};
+      return [({cat:'猫',dog:'狗'})[species] || '物种待确认', breed || '品种待确认', stages[stage] || stage || '阶段待确认'].map(escapeHtml).join(' / ');
+    }
     function renderBehaviorObservation(row) {
       const p = row.point_data, o = p.observation;
       const list = values => (values || []).length ? '<ul>' + values.map(v => '<li>' + escapeHtml(typeof v === 'string' ? v : JSON.stringify(v)) + '</li>').join('') + '</ul>' : '<p class="muted">未提供</p>';
@@ -4552,7 +4560,7 @@
       const relations = values => (values || []).map(r => `<article style="padding:12px;border:1px solid var(--line);margin:8px 0;border-radius:8px;"><strong>${escapeHtml(r.health_issue_name)}（候选关联，待核验）</strong><p>${escapeHtml(({possible_manifestation:'可能的健康问题表现',supporting_sign:'辅助判断线索',nonspecific_sign:'非特异性表现'})[r.relation_type] || r.relation_type)}</p><p>${escapeHtml(r.mechanism_summary)}</p><strong>支持表现</strong>${list(r.supporting_signs)}<strong>鉴别表现</strong>${list(r.differentiating_signs)}<strong>进一步判断依据</strong>${list(r.verification)}<details><summary>模型声明的编码和本地知识引用（未核验）</summary><p>${escapeHtml(r.health_issue_code || '无已匹配编码')}</p>${list(r.source_knowledge_ids)}</details></article>`).join('') || '<p class="muted">无已提供关联。</p>';
       return `<article style="padding:16px;margin:12px 0;border:1px solid var(--line);border-radius:10px;">
         <h4>${escapeHtml(o.observation_name)} · 观察现象</h4><p>${escapeHtml(o.observation_code)} · ${escapeHtml(o.domain_code)} / ${escapeHtml(o.category_code)} · ${escapeHtml(o.observation_type)}</p>
-        <p>模型给出的适用范围：${escapeHtml(p.species)} / ${escapeHtml(p.breed)} / ${escapeHtml(p.life_stage)}。需审核，不代表用户个体事实。</p>
+        <p>标准维度：${behaviorScopeLabel(row)}。需审核，不代表用户个体事实。</p>
         <strong>常见表达</strong>${list(o.aliases)}<strong>可观察特征</strong>${list(o.observable_features)}<strong>相关鉴别现象</strong>${list(o.related_observations)}
         <h4>正常或低风险场景（待核查）</h4>${(o.normal_scenarios || []).map(s => `<section style="padding:12px;margin:8px 0;background:var(--bg);border-radius:8px;"><strong>${escapeHtml(s.scenario)}</strong><p>${escapeHtml(s.mechanism)}</p><strong>适用条件</strong>${list(s.conditions)}<strong>可观察表现</strong>${list(s.observable_signs)}<details><summary>模型声明的参考来源（未核验）</summary>${list(s.source_ids)}</details></section>`).join('') || '<p class="muted">未提供合理的正常解释。</p>'}
         <h4>异常边界与健康候选关联</h4>${(o.abnormal_scenarios || []).map(s => `<section style="padding:12px;margin:8px 0;border:1px solid var(--line);border-radius:8px;"><strong>${escapeHtml(s.scenario)}</strong><p>${escapeHtml(s.boundary_id)} · 风险：${escapeHtml(risk[s.risk_level] || s.risk_level)}（模型输出，待审核）</p><strong>触发条件</strong>${list(s.conditions)}<strong>警示表现</strong>${list(s.warning_signs)}${relations(s.health_relations)}<details><summary>模型声明的参考来源（未核验）</summary>${list(s.source_ids)}</details></section>`).join('') || '<p class="muted">暂无异常边界。</p>'}
@@ -4568,7 +4576,7 @@
         if (p.record_type === 'observation') return renderBehaviorObservation(row);
         return `<article style="padding:16px;margin:12px 0;border:1px solid var(--line);border-radius:10px;">
           <h4>${escapeHtml(p.behavior_name)}</h4>
-          <p>${escapeHtml(({cat:'猫',dog:'狗',unknown:'物种待确认'})[p.species] || p.species)} / ${escapeHtml(p.breed)} / ${escapeHtml(p.life_stage)} · ${escapeHtml(packet.categories?.[p.category] || p.category)}</p>
+          <p>${behaviorScopeLabel(row)} · ${escapeHtml(row.category_name || packet.categories?.[p.category] || p.category)}</p>
           <strong>行为表现与触发情境</strong>${list(p.manifestations)}
           <strong>可能原因（待核查）</strong>${list(p.possible_causes)}
           <strong>判断所需信息</strong>${list(p.assessment)}

@@ -41,11 +41,11 @@ python scripts/parse_behavior_observations.py --apply --archive-only
 
 支持`behaviors`结构（行为理解、训练与环境调整）和`observations`结构（观察现象、正常场景、异常边界、候选健康关联）。不为观察现象补造训练步骤；来源、阈值、健康编码和关联均待审核，不写正式疾病关联表。
 
-`behavior_knowledge_point_detail`一条模型来源知识一行，不强行合并不同模型的编码。可直接查询`species`、`breed`、`life_stage`、`observation_code`、`observation_name`、`normal_scenarios`、`abnormal_scenarios`、`unmapped_health_issues`。后三列保存完整JSON数组。展开列从本表的**解析结果快照**`point_data`生成，不从调用表动态取值；采集新回答不会触发本表生成。未定义字段保留SQL NULL，未知品种和阶段不推断。
+`behavior_knowledge_point_detail`一条模型来源知识一行，不强行合并不同模型的编码。可直接查询`species_code`、`breed_code`、`life_stage_code`、`observation_code`、`observation_name`、`normal_scenarios`、`abnormal_scenarios`、`unmapped_health_issues`。后三列保存完整JSON数组。展开列从本表的**解析结果快照**`point_data`生成，不从调用表动态取值；采集新回答不会触发本表生成。未定义字段保留SQL NULL，未知品种和阶段不推断。
 
 ```sql
 SELECT p.id, p.source_call_id, c.provider, c.model, c.task_id,
-       p.species, p.breed, p.life_stage, p.observation_code, p.observation_name,
+       p.species_code, p.breed_code, p.life_stage_code, p.observation_code, p.observation_name,
        p.normal_scenarios, p.abnormal_scenarios, p.unmapped_health_issues,
        p.review_status, p.parser_version
 FROM chongxi_model_knowledge.behavior_knowledge_point_detail p
@@ -62,3 +62,14 @@ ORDER BY p.id;
 ```bash
 python -m pytest tests/test_behavior_model_pipeline.py tests/test_behavior_knowledge.py tests/test_parse_behavior_observations.py tests/test_multi_model_prompts.py tests/test_solution_knowledge.py -q
 ```
+
+
+### 与健康知识表的维度对齐
+
+运行 `python scripts/align_behavior_knowledge_dimensions.py` 预览，停止解析写入后加 `--apply` 执行。脚本备份原表数据和建表语句，验证原文、ID、审核状态及场景数组不变后切换表；重复运行无变化时不重建。
+
+物理字段顺序为：`id` → `species_code` → `breed_code` → `life_stage_code` → `observation_code` → `observation_name` → `category_code` → `category_name` → 三个场景/未映射问题字段 → `evidence_status` → `review_status` → `source_count` → `model_count` → `sources` → `source_urls` → `summary_meta` → `updated_at` → 来源追溯字段、原始快照和创建时间。
+
+物种、品种、生命阶段使用健康知识相同的已启用字典。未知猫/狗品种分别为 `unknown_cat` / `unknown_dog`；未指明阶段为 `unspecified`，明确全阶段才用 `all_stages`；无法准确映射的值为 SQL NULL，原值及原因保存在 `summary_meta`。原始模型字段仍保存在 `point_data`，不会改写模型原文。
+
+共享状态使用 `evidence_status=candidate`、`review_status=pending/verified/rejected`；既有审核状态保留。行为明细每行只代表一个来源，`source_count=1`，模型来源的 `model_count=1`，文件来源为 0；不冒充健康知识表的跨模型聚合。`category_code/category_name` 是行为分类；`observation_code` 是观察现象编码，不改为健康问题的 `issue_code`。

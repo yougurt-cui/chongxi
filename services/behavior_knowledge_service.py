@@ -11,19 +11,8 @@ CATEGORIES = {
     'play': '游戏与活动', 'feeding': '进食行为', 'repetitive': '重复与异常行为',
     'training': '训练与习惯', 'other': '其他行为',
 }
-DDL = '''CREATE TABLE IF NOT EXISTS behavior_knowledge_point_detail (
- id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
- batch_id BIGINT UNSIGNED NOT NULL,
- point_key CHAR(64) NOT NULL,
- behavior_name VARCHAR(160) NOT NULL,
- species VARCHAR(16) NOT NULL,
- category VARCHAR(32) NOT NULL,
- point_data JSON NOT NULL,
- review_status ENUM('pending','verified','rejected') NOT NULL DEFAULT 'pending',
- created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
- UNIQUE KEY uk_behavior_source (batch_id,point_key),
- KEY idx_behavior_filters (species,category), KEY idx_behavior_review (review_status)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4'''
+from services.behavior_knowledge_schema import create_ddl, WRITE_FIELDS, JSON_FIELDS
+DDL = create_ddl()
 
 
 def validate_document(value):
@@ -175,6 +164,8 @@ def import_batch(batch_id):
 
 def _import_points(batch_id, document, *, call_id=None, source_hash=None, parser_version=None):
     store.ensure_database()
+    from services.behavior_knowledge_dimensions import load_dictionary, values_for
+    dictionary = load_dictionary()
     with store.connect() as conn:
         try:
             with conn.cursor() as cur:
@@ -193,12 +184,18 @@ def _import_points(batch_id, document, *, call_id=None, source_hash=None, parser
                     raise ValueError('行为知识发生变化且已有人工审核记录，请人工处理')
                 for key in old - set(points):
                     cur.execute('DELETE FROM behavior_knowledge_point_detail WHERE batch_id=%s AND point_key=%s', (batch_id, key))
-                for key in set(points) - old:
-                    p = points[key]
-                    cur.execute('''INSERT INTO behavior_knowledge_point_detail
-                        (batch_id,point_key,behavior_name,species,category,point_data)
-                        VALUES (%s,%s,%s,%s,%s,%s)''',
-                        (batch_id, key, p['behavior_name'], p['species'], p['category'], store.dumps(p)))
+                for key, p in points.items():
+                    dims = values_for(p, batch, dictionary, call_id=call_id,
+                                      source_hash=source_hash, parser_version=parser_version)
+                    values = tuple(store.dumps(dims[k]) if k in JSON_FIELDS else dims[k] for k in WRITE_FIELDS)
+                    if key not in old:
+                        columns = ('batch_id','point_key','behavior_name',*WRITE_FIELDS,'point_data')
+                        cur.execute('INSERT INTO behavior_knowledge_point_detail ('+','.join(columns)+') VALUES ('+
+                                    ','.join(['%s']*len(columns))+')',
+                                    (batch_id,key,p['behavior_name'],*values,store.dumps(p)))
+                    else:
+                        cur.execute('UPDATE behavior_knowledge_point_detail SET '+','.join(k+'=%s' for k in WRITE_FIELDS)+
+                                    ' WHERE batch_id=%s AND point_key=%s', (*values,batch_id,key))
                 if call_id is not None:
                     cur.execute('''UPDATE behavior_knowledge_point_detail
                         SET source_call_id=%s,source_hash=%s,parser_version=%s WHERE batch_id=%s''',
@@ -224,8 +221,10 @@ def list_points(*, page=1, query='', species='', category='', task_id=None):
         raise ValueError('行为分类无效')
     store.ensure_database()
     clauses = ["b.knowledge_base='behavior'", "b.status='success'"]; params = []
-    for column, value in (('p.species', species), ('p.category', category), ('b.task_id', task_id)):
-        if value is not None and value != '':
+    for column, value in (('p.species_code', species), ('p.category_code', category), ('b.task_id', task_id)):
+        if column == 'p.species_code' and value == 'unknown':
+            clauses.append('p.species_code IS NULL')
+        elif value is not None and value != '':
             clauses.append(column + '=%s'); params.append(value)
     if query:
         clauses.append("(p.behavior_name LIKE %s OR CAST(p.point_data AS CHAR) LIKE %s)")
@@ -241,5 +240,6 @@ def list_points(*, page=1, query='', species='', category='', task_id=None):
             b.question source_question''' + join + ' ORDER BY p.id DESC LIMIT %s OFFSET %s', params + [page_size, (page - 1) * page_size])
         rows = list(cur.fetchall())
     for row in rows:
-        row['point_data'] = store.decode(row['point_data'])
+        for key in ('point_data','sources','source_urls','summary_meta'):
+            row[key] = store.decode(row.get(key))
     return {'items': rows, 'total': total, 'page': page, 'page_size': page_size, 'categories': CATEGORIES}

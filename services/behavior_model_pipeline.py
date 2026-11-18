@@ -46,20 +46,8 @@ def ensure_schema(cur):
     for name, definition in PARSE_FIELDS.items():
         if name not in existing:
             cur.execute('ALTER TABLE behavior_model_call ADD COLUMN `' + name + '` ' + definition)
-    cur.execute('SHOW COLUMNS FROM behavior_knowledge_point_detail')
-    columns = {r['Field'] for r in cur.fetchall()}
-    additions = {'source_call_id': 'BIGINT UNSIGNED NULL',
-                 'source_hash': 'CHAR(64) NULL', 'parser_version': 'VARCHAR(64) NULL'}
-    for name, path, length in [('breed', '$.breed', 120), ('life_stage', '$.life_stage', 120),
-                              ('observation_code', '$.observation.observation_code', 160),
-                              ('observation_name', '$.observation.observation_name', 160)]:
-        additions[name] = f"VARCHAR({length}) GENERATED ALWAYS AS (CASE WHEN JSON_TYPE(JSON_EXTRACT(point_data,'{path}'))='STRING' THEN JSON_UNQUOTE(JSON_EXTRACT(point_data,'{path}')) ELSE NULL END) STORED"
-    for name in ('normal_scenarios', 'abnormal_scenarios', 'unmapped_health_issues'):
-        path = '$.observation.' + name
-        additions[name] = f"JSON GENERATED ALWAYS AS (CASE WHEN JSON_TYPE(JSON_EXTRACT(point_data,'{path}'))='ARRAY' THEN JSON_EXTRACT(point_data,'{path}') ELSE NULL END) STORED"
-    for name, definition in additions.items():
-        if name not in columns:
-            cur.execute('ALTER TABLE behavior_knowledge_point_detail ADD COLUMN `' + name + '` ' + definition)
+    from services.behavior_knowledge_schema import require_aligned
+    require_aligned(cur)
 
 
 def snapshot_call(cur, batch_id, request_prompt=None):
