@@ -9,15 +9,18 @@
 | 表 | 用途 |
 |---|---|
 | `knowledge_import_batch` | 现有共享任务与批次记录；保留历史内容 |
-| `behavior_model_call` | 行为库专属的原始模型调用快照：问题、模型、模板、实际请求提示词、原始回答、搜索来源、Token、耗时、调用结果 |
+| `behavior_model_call` | 行为库专属的原始模型调用快照：问题、模型、模板、实际请求提示词、原始回答、搜索来源、Token、耗时、调用结果，以及解析状态、版本、次数、错误与历史 |
 | `behavior_knowledge_point_detail` | 独立解析结果，通过`source_call_id`关联调用记录，保留`batch_id` |
-| `behavior_knowledge_parse_run` | 解析版本、来源哈希、尝试次数、解析状态、错误和知识条数 |
 
 点击“开始运行”只调用所选模型并保存原始回答。即使返回文字不是合法JSON，API调用成功仍显示采集成功，解析状态为待解析；不会自动创建知识记录。
 
-点击任务中的“解析已保存的回答 / 重试”，或运行以下脚本，才会从`behavior_model_call.raw_response`解析知识。解析过程不调用大模型，不修改原始调用快照。解析失败单独记录，不将调用成功改成失败。重复解析相同内容不新增重复知识，既有人工审核状态保留；已审核内容发生变化时拒绝覆盖。
+点击任务中的“解析已保存的回答 / 重试”，或运行以下脚本，才会从`behavior_model_call.raw_response`解析知识。解析过程不调用大模型，不修改原始调用快照。解析状态写入同一调用记录的`parse_status`等字段，不改变`call_status`；历史保存在`parse_history` JSON数组中。重复解析相同内容不新增重复知识，既有人工审核状态保留；已审核内容发生变化时拒绝覆盖。
 
 `behavior_model_call.request_prompt`记录新采集的实际请求全文；历史记录无法确定当时运行时的占位符替换细节，因此该列留NULL，同时保留原始`prompt_template`和问题，不伪造历史请求。
+
+合并迁移脚本：`python scripts/merge_behavior_call_parse_records.py --apply`。执行前备份调用记录、旧解析记录及DDL；将旧解析历史完整保存到`behavior_model_call.parse_history`，核对后移除旧`behavior_knowledge_parse_run`表。可不加`--apply`先预览，重复执行不会重复计数。
+
+常用解析字段：`parse_status`、`parse_source_hash`、`parser_version`、`parse_attempts`、`point_count`、`parse_error`、`parse_started_at`、`parsed_at`、`parse_history`。一条调用记录一行，最新解析结果直接查列，历史通过JSON数组查看。
 
 ## 独立解析脚本
 

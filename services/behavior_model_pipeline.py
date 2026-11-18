@@ -25,23 +25,27 @@ CALL_DDL = '''CREATE TABLE IF NOT EXISTS behavior_model_call (
  finished_at DATETIME NULL,
  UNIQUE KEY uk_behavior_call_batch (batch_id), KEY idx_behavior_call_task (task_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4'''
-PARSE_DDL = '''CREATE TABLE IF NOT EXISTS behavior_knowledge_parse_run (
- id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
- source_call_id BIGINT UNSIGNED NOT NULL,
- source_hash CHAR(64) NOT NULL,
- parser_version VARCHAR(64) NOT NULL,
- status ENUM('running','completed','failed') NOT NULL,
- attempts INT NOT NULL DEFAULT 1,
- point_count INT NOT NULL DEFAULT 0,
- error_message TEXT NULL,
- started_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
- finished_at DATETIME NULL,
- UNIQUE KEY uk_behavior_parse (source_call_id,source_hash,parser_version)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4'''
+PARSE_FIELDS = {
+    'parse_status': "ENUM('pending','running','completed','failed') NOT NULL DEFAULT 'pending'",
+    'parse_source_hash': 'CHAR(64) NULL', 'parser_version': 'VARCHAR(64) NULL',
+    'parse_attempts': 'INT NOT NULL DEFAULT 0', 'point_count': 'INT NOT NULL DEFAULT 0',
+    'parse_error': 'TEXT NULL', 'parse_started_at': 'DATETIME NULL', 'parsed_at': 'DATETIME NULL',
+    'parse_history': 'JSON NULL',
+}
+
+
+def parse_lock_name(call_id):
+    value = 'behavior-parse:' + store.database_name() + ':' + str(call_id)
+    return 'behavior-parse:' + hashlib.sha256(value.encode()).hexdigest()[:40]
 
 
 def ensure_schema(cur):
-    cur.execute(CALL_DDL); cur.execute(PARSE_DDL)
+    cur.execute(CALL_DDL)
+    cur.execute('SHOW COLUMNS FROM behavior_model_call')
+    existing = {r['Field'] for r in cur.fetchall()}
+    for name, definition in PARSE_FIELDS.items():
+        if name not in existing:
+            cur.execute('ALTER TABLE behavior_model_call ADD COLUMN `' + name + '` ' + definition)
     cur.execute('SHOW COLUMNS FROM behavior_knowledge_point_detail')
     columns = {r['Field'] for r in cur.fetchall()}
     additions = {'source_call_id': 'BIGINT UNSIGNED NULL',
@@ -93,12 +97,11 @@ def ensure_call(batch_id):
 
 
 def parse_batch(batch_id):
-    """Explicit stage: read the saved call only; never invoke a model or edit its log."""
+    """Explicit stage: parse saved text and update parsing metadata only."""
     store.ensure_database()
     call_id = ensure_call(batch_id)
     with store.connect() as conn, conn.cursor() as cur:
-        lock = 'behavior-parse:' + store.database_name() + ':' + str(call_id)
-        lock = 'behavior-parse:' + hashlib.sha256(lock.encode()).hexdigest()[:40]
+        lock = parse_lock_name(call_id)
         cur.execute('SELECT GET_LOCK(%s,0) acquired', (lock,))
         if not cur.fetchone()['acquired']:
             return {'batch_id': batch_id, 'source_call_id': call_id, 'status': 'running'}
@@ -107,12 +110,11 @@ def parse_batch(batch_id):
             call = cur.fetchone()
             if call['call_status'] != 'success':
                 raise ValueError('模型调用失败，无法解析；需创建新的采集任务')
-            cur.execute('''INSERT INTO behavior_knowledge_parse_run
-                (source_call_id,source_hash,parser_version,status) VALUES (%s,%s,%s,'running')
-                ON DUPLICATE KEY UPDATE id=LAST_INSERT_ID(id),status='running',attempts=attempts+1,
-                error_message=NULL,started_at=NOW(),finished_at=NULL''',
-                (call_id, call['response_hash'], PARSER_VERSION))
-            run_id = cur.lastrowid; conn.commit()
+            attempt = call.get('parse_attempts', 0) + 1
+            cur.execute("""UPDATE behavior_model_call SET parse_status='running',parse_source_hash=%s,
+                parser_version=%s,parse_attempts=%s,parse_error=NULL,parse_started_at=NOW(),parsed_at=NULL
+                WHERE id=%s""", (call['response_hash'], PARSER_VERSION, attempt, call_id))
+            conn.commit()
             try:
                 from vendor.chongxi_multi_model_mysql.run import extract_json
                 from services.behavior_knowledge_service import _import_points
@@ -120,25 +122,31 @@ def parse_batch(batch_id):
                 result = _import_points(batch_id, document, call_id=call_id,
                                         source_hash=call['response_hash'], parser_version=PARSER_VERSION)
             except Exception as exc:
-                cur.execute("UPDATE behavior_knowledge_parse_run SET status='failed',error_message=%s,finished_at=NOW() WHERE id=%s",
-                            (str(exc)[:2000], run_id)); conn.commit()
+                _finish_parse(cur, call_id, call['response_hash'], attempt, 'failed',
+                              call.get('point_count', 0), str(exc)[:2000])
+                conn.commit()
                 raise
-            cur.execute("UPDATE behavior_knowledge_parse_run SET status='completed',point_count=%s,finished_at=NOW() WHERE id=%s",
-                        (result['total_count'], run_id)); conn.commit()
-            return {**result, 'source_call_id': call_id, 'parse_run_id': run_id}
+            _finish_parse(cur, call_id, call['response_hash'], attempt, 'completed', result['total_count'], None)
+            conn.commit()
+            return {**result, 'source_call_id': call_id, 'parse_attempt': attempt}
         finally:
             cur.execute('SELECT RELEASE_LOCK(%s)', (lock,))
 
 
+def _finish_parse(cur, call_id, source_hash, attempt, status, count, error):
+    cur.execute("""UPDATE behavior_model_call SET parse_status=%s,point_count=%s,parse_error=%s,
+        parsed_at=NOW(),parse_history=JSON_ARRAY_APPEND(COALESCE(parse_history,JSON_ARRAY()),'$',
+        JSON_OBJECT('source_hash',%s,'parser_version',%s,'attempt',%s,'status',%s,
+                    'point_count',%s,'error_message',%s,'finished_at',NOW())) WHERE id=%s""",
+        (status,count,error,source_hash,PARSER_VERSION,attempt,status,count,error,call_id))
+
+
 def task_status(task_id):
     with store.connect() as conn, conn.cursor() as cur:
-        cur.execute('''SELECT c.id source_call_id,c.batch_id,c.provider,c.model,c.call_status,
-            c.prompt_tokens,c.completion_tokens,c.latency_ms,c.call_error,c.raw_response,c.search_metadata,
-            COALESCE(p.status,'pending') parse_status,p.error_message parse_error,p.point_count,
-            p.parser_version,p.finished_at parsed_at
-            FROM behavior_model_call c LEFT JOIN behavior_knowledge_parse_run p
-              ON p.source_call_id=c.id AND p.source_hash=c.response_hash AND p.parser_version=%s
-            WHERE c.task_id=%s ORDER BY c.batch_id''', (PARSER_VERSION, task_id))
+        cur.execute('''SELECT id source_call_id,batch_id,provider,model,call_status,
+            prompt_tokens,completion_tokens,latency_ms,call_error,raw_response,search_metadata,
+            parse_status,parse_error,point_count,parser_version,parsed_at,parse_attempts
+            FROM behavior_model_call WHERE task_id=%s ORDER BY batch_id''', (task_id,))
         calls = list(cur.fetchall())
     return {'calls': calls, 'collection_table': 'behavior_model_call',
-            'knowledge_table': 'behavior_knowledge_point_detail', 'parse_log_table': 'behavior_knowledge_parse_run'}
+            'knowledge_table': 'behavior_knowledge_point_detail', 'parse_log_table': 'behavior_model_call'}

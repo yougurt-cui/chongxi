@@ -58,8 +58,8 @@ def test_explicit_parse_reads_saved_response_and_logs_success_without_calling_mo
     writer.assert_called_once_with(5,document(),call_id=7,source_hash='a'*64,parser_version=pipeline.PARSER_VERSION)
     model.assert_not_called()
     statements=[c.args[0] for c in cur.execute.call_args_list]
-    assert any("status='completed'" in s for s in statements)
-    assert not any(s.startswith(('UPDATE behavior_model_call','UPDATE knowledge_import_batch')) for s in statements)
+    assert any(c.args[0].startswith('UPDATE behavior_model_call SET parse_status=%s') and c.args[1][0]=='completed' for c in cur.execute.call_args_list)
+    assert not any(s.startswith('UPDATE knowledge_import_batch') or 'SET call_status=' in s or 'SET raw_response=' in s for s in statements)
 
 
 def test_parse_failure_is_logged_separately_and_does_not_change_successful_call():
@@ -69,8 +69,8 @@ def test_parse_failure_is_logged_separately_and_does_not_change_successful_call(
         with pytest.raises(ValueError):pipeline.parse_batch(5)
     model.assert_not_called()
     statements=[c.args[0] for c in cur.execute.call_args_list]
-    assert any("UPDATE behavior_knowledge_parse_run SET status='failed'" in s for s in statements)
-    assert not any(s.startswith(('UPDATE behavior_model_call','UPDATE knowledge_import_batch')) for s in statements)
+    assert any(c.args[0].startswith('UPDATE behavior_model_call SET parse_status=%s') and c.args[1][0]=='failed' for c in cur.execute.call_args_list)
+    assert not any(s.startswith('UPDATE knowledge_import_batch') or 'SET call_status=' in s or 'SET raw_response=' in s for s in statements)
 
 
 def test_manual_task_import_does_not_rewrite_raw_call_status_or_reinvoke_model():
