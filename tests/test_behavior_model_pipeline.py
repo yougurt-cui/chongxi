@@ -23,14 +23,16 @@ def test_behavior_collection_records_successful_api_text_without_parsing_it():
     parse.assert_not_called()
 
 
-def test_persisting_behavior_call_never_automatically_parses_or_inserts_knowledge():
+def test_behavior_auto_parse_runs_only_after_raw_call_commit():
     conn,cur=connection();cur.fetchone.return_value={'id':5,'knowledge_base':'behavior'}
     result={'provider':'qwen','status':'success','raw_text':'not JSON','parsed':None,
             'search_metadata':{},'error':None,'latency_ms':1,'request_prompt':'actual request'}
     with patch.object(store,'ensure_database'),patch.object(store,'connect',return_value=conn), \
-         patch.object(pipeline,'snapshot_call') as snapshot,patch.object(store,'process_batch_pipeline') as parse:
+         patch.object(pipeline,'snapshot_call') as snapshot,patch.object(store,'process_batch_pipeline') as parse, \
+         patch.object(pipeline,'parse_batch',side_effect=lambda batch_id: conn.commit.assert_called_once()) as behavior_parse:
         store.persist_model_result(1,result)
     snapshot.assert_called_once_with(cur,5,request_prompt='actual request');parse.assert_not_called()
+    behavior_parse.assert_called_once_with(5)
     assert all('behavior_knowledge_point_detail' not in c.args[0] for c in cur.execute.call_args_list)
 
 
@@ -81,3 +83,17 @@ def test_manual_task_import_does_not_rewrite_raw_call_status_or_reinvoke_model()
         result=store.import_task(1)
     assert result['status']=='completed'
     parse.assert_called_once_with(5);legacy.assert_not_called();model.assert_not_called()
+
+
+@pytest.mark.parametrize('status,raises,expected',[('api_failed',False,0),('success',True,1)])
+def test_auto_parse_failure_preserves_call_and_failed_calls_are_skipped(status,raises,expected):
+    conn,cur=connection();cur.fetchone.return_value={'id':5,'knowledge_base':'behavior'}
+    result={'provider':'qwen','status':status,'raw_text':'not JSON','parsed':None,
+            'error':None,'latency_ms':1}
+    with patch.object(store,'ensure_database'),patch.object(store,'connect',return_value=conn), \
+         patch.object(pipeline,'snapshot_call'),patch.object(pipeline,'parse_batch',side_effect=ValueError('bad JSON') if raises else None) as parse, \
+         patch.object(store.LOGGER,'exception') as log:
+        store.persist_model_result(1,result)
+    assert parse.call_count==expected
+    conn.commit.assert_called_once();conn.rollback.assert_not_called()
+    assert log.call_count==int(raises)

@@ -4543,7 +4543,7 @@
     function renderBehaviorPipeline(packet, taskId) {
       const states = {pending:'待解析',running:'解析中',completed:'解析完成',failed:'解析失败'};
       const rows = (packet.calls || []).map(c => `<tr><td>调用 #${Number(c.source_call_id)} / 批次 #${Number(c.batch_id)}</td><td>${escapeHtml(multiLabels[c.provider] || c.provider)}</td><td>${escapeHtml(c.call_status === 'success' ? '调用成功' : '调用失败')}</td><td>${escapeHtml(states[c.parse_status] || c.parse_status)}${c.parse_error ? '<br>' + escapeHtml(c.parse_error) : ''}</td><td>${Number(c.point_count || 0)}</td></tr>`).join('');
-      return `<section style="margin:16px 0;padding:12px;background:#f0f7ff;border-radius:8px;"><strong>采集与解析</strong><p>采集只保存大模型原始回答；解析单独生成知识记录。重试解析不会调用模型或产生新的模型用量。</p><div class="table-wrap"><table><thead><tr><th>调用记录 / 批次</th><th>模型</th><th>采集状态</th><th>解析状态</th><th>知识条数</th></tr></thead><tbody>${rows}</tbody></table></div><button class="button secondary" type="button" data-import-task="${taskId}">解析已保存的回答 / 重试</button><span id="modelImportMessage" role="status" style="margin-left:12px;"></span></section>`;
+      return `<section style="margin:16px 0;padding:12px;background:#f0f7ff;border-radius:8px;"><strong>采集与解析</strong><p>模型回答保存后自动解析入库；采集和解析分别记录状态。解析失败可重试，不会调用模型或产生新的模型用量。</p><div class="table-wrap"><table><thead><tr><th>调用记录 / 批次</th><th>模型</th><th>采集状态</th><th>解析状态</th><th>知识条数</th></tr></thead><tbody>${rows}</tbody></table></div><button class="button secondary" type="button" data-import-task="${taskId}">解析已保存的回答 / 重试</button><span id="modelImportMessage" role="status" style="margin-left:12px;"></span></section>`;
     }
     function behaviorScopeLabel(row) {
       const p = row.point_data;
@@ -4584,7 +4584,7 @@
           <strong>观察记录</strong>${list(p.observation_fields)}<strong>停止或专业评估条件</strong>${list(p.stop_conditions)}
           <details><summary>模型来源、证据与审核状态</summary><p>任务 #${Number(row.task_id)} · 批次 #${Number(row.batch_id)} · ${escapeHtml(multiLabels[row.source_provider] || row.source_provider)} · ${escapeHtml(row.source_model)}<br>原始问题：${escapeHtml(row.source_question)}<br>证据：${escapeHtml(({supported:'有依据，待核验',uncertain:'不确定',pending_verification:'待核验'})[p.evidence_status] || p.evidence_status)} · 审核：${escapeHtml(({pending:'待审核',verified:'已审核',rejected:'已拒绝'})[row.review_status] || row.review_status)}</p>${list(p.source_urls)}</details>
         </article>`;
-      }).join('') || '<p class="muted">暂无符合条件的已解析行为知识；采集完成后请进入任务，点击“解析已保存的回答 / 重试”，或调整检索条件。</p>';
+      }).join('') || '<p class="muted">暂无符合条件的已解析行为知识；模型回答保存后将自动解析。若解析失败，请进入任务重试，或调整检索条件。</p>';
     }
     let behaviorPage = 1, behaviorTotal = 0, behaviorVersion = 0;
     async function loadBehaviorLibrary() {

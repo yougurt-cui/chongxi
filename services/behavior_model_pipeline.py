@@ -1,4 +1,4 @@
-"""Independent raw model-call snapshots and explicit, repeatable behavior parsing."""
+"""Independent raw model-call snapshots and repeatable behavior parsing."""
 import hashlib
 from services import model_knowledge_import_service as store
 
@@ -85,7 +85,7 @@ def ensure_call(batch_id):
 
 
 def parse_batch(batch_id):
-    """Explicit stage: parse saved text and update parsing metadata only."""
+    """Parse the committed response, automatically after collection or on manual retry."""
     store.ensure_database()
     call_id = ensure_call(batch_id)
     with store.connect() as conn, conn.cursor() as cur:

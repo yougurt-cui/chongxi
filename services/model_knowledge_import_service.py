@@ -220,7 +220,14 @@ def persist_model_result(task_id,result):
                 snapshot_call(cur, batch_id, request_prompt=result.get('request_prompt'))
         conn.commit()
     if is_behavior:
-        return  # Collection only. Explicit parsing uses the saved call snapshot.
+        if result['status'] == 'success':
+            try:
+                from services.behavior_model_pipeline import parse_batch
+                parse_batch(batch_id)
+            except Exception:
+                # The raw call is already committed; parsing has its own status/history.
+                LOGGER.exception('behavior_auto_parse_failed batch_id=%s', batch_id)
+        return
     if result['status']=='success':
         try:
             process_batch_pipeline(batch_id)
