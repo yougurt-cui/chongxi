@@ -169,6 +169,11 @@ def render_prompt(template, question):
 
 
 def import_batch(batch_id):
+    from services.behavior_model_pipeline import parse_batch
+    return parse_batch(batch_id)
+
+
+def _import_points(batch_id, document, *, call_id=None, source_hash=None, parser_version=None):
     store.ensure_database()
     with store.connect() as conn:
         try:
@@ -178,9 +183,9 @@ def import_batch(batch_id):
                 batch = cur.fetchone()
                 if not batch:
                     raise LookupError('采集批次不存在')
-                if batch['knowledge_base'] != 'behavior' or batch['status'] != 'success':
+                if batch['knowledge_base'] != 'behavior' or batch['status'] not in {'success', 'parse_failed'}:
                     raise ValueError('只能导入成功的行为知识批次')
-                doc = validate_document(store.decode(batch['parsed_response']))
+                doc = validate_document(document)
                 points = {hashlib.sha256(store.dumps(p).encode()).hexdigest(): p for p in doc['behaviors']}
                 cur.execute('SELECT point_key,review_status FROM behavior_knowledge_point_detail WHERE batch_id=%s', (batch_id,))
                 existing = list(cur.fetchall()); old = {p['point_key'] for p in existing}
@@ -194,6 +199,10 @@ def import_batch(batch_id):
                         (batch_id,point_key,behavior_name,species,category,point_data)
                         VALUES (%s,%s,%s,%s,%s,%s)''',
                         (batch_id, key, p['behavior_name'], p['species'], p['category'], store.dumps(p)))
+                if call_id is not None:
+                    cur.execute('''UPDATE behavior_knowledge_point_detail
+                        SET source_call_id=%s,source_hash=%s,parser_version=%s WHERE batch_id=%s''',
+                        (call_id, source_hash, parser_version, batch_id))
                 cur.execute('UPDATE knowledge_import_batch SET imported_at=COALESCE(imported_at,NOW()),import_error=NULL WHERE id=%s', (batch_id,))
             conn.commit()
         except Exception:

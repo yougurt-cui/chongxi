@@ -56,6 +56,8 @@ def _ensure_database(name):
             ensure_solution_schema(cur)
             from services.behavior_knowledge_service import DDL as BEHAVIOR_DDL
             cur.execute(BEHAVIOR_DDL)
+            from services.behavior_model_pipeline import ensure_schema as ensure_behavior_pipeline
+            ensure_behavior_pipeline(cur)
             cur.execute('SHOW COLUMNS FROM knowledge_point_source_detail')
             if not {'id','batch_id','source_provider','original_condition','species_code','breed_code','life_stage_codes','need_scene_code','need_scene_name','need_scene_codes','need_relation','scene_meta','need_codes','category_code','topic_code','content','standardization_meta'}.issubset({r['Field'] for r in cur.fetchall()}):
                 raise RuntimeError('知识库字段尚未升级，请先执行对应字段扩展脚本')
@@ -202,7 +204,7 @@ def persist_model_result(task_id,result):
     ensure_database()
     with connect() as conn:
         with conn.cursor() as cur:
-            cur.execute('SELECT id FROM knowledge_import_batch WHERE task_id=%s AND provider=%s',(task_id,result['provider']))
+            cur.execute('SELECT id,knowledge_base FROM knowledge_import_batch WHERE task_id=%s AND provider=%s',(task_id,result['provider']))
             row=cur.fetchone()
             if not row:raise LookupError('采集任务不存在')
             batch_id=row['id']
@@ -212,7 +214,13 @@ def persist_model_result(task_id,result):
                 dumps(result['parsed']) if result['parsed'] is not None else None,
                 dumps(result.get('search_metadata') or {}),result['error'],result.get('prompt_tokens'),
                 result.get('completion_tokens'),result['latency_ms'],batch_id))
+            is_behavior = row.get('knowledge_base') == 'behavior'
+            if is_behavior:
+                from services.behavior_model_pipeline import snapshot_call
+                snapshot_call(cur, batch_id, request_prompt=result.get('request_prompt'))
         conn.commit()
+    if is_behavior:
+        return  # Collection only. Explicit parsing uses the saved call snapshot.
     if result['status']=='success':
         try:
             process_batch_pipeline(batch_id)
@@ -249,7 +257,8 @@ def reparse_solution_batch(batch_id):
 
 
 def reparse_behavior_batch(batch_id):
-    return _reparse_batch(batch_id, 'behavior')
+    from services.behavior_model_pipeline import parse_batch
+    return parse_batch(batch_id)
 
 
 def import_task(task_id):
@@ -261,9 +270,17 @@ def import_task(task_id):
     if not rows:raise LookupError('采集任务不存在')
     results=[];errors=[]
     for row in rows:
-        if row['status']=='parse_failed' and row.get('knowledge_base') in {'solution', 'behavior'}:
-            reparse = reparse_behavior_batch if row['knowledge_base'] == 'behavior' else reparse_solution_batch
-            try:reparse(row['id'])
+        if row.get('knowledge_base') == 'behavior':
+            if row['status'] in {'running', 'api_failed'}:continue
+            try:
+                from services.behavior_model_pipeline import parse_batch
+                results.append(parse_batch(row['id']))
+            except Exception as exc:
+                LOGGER.exception('behavior_parse_failed batch_id=%s', row['id'])
+                errors.append({'batch_id': row['id'], 'message': str(exc) if isinstance(exc, ValueError) else '行为知识解析失败，原始调用记录已保留'})
+            continue
+        if row['status']=='parse_failed' and row.get('knowledge_base') == 'solution':
+            try:reparse_solution_batch(row['id'])
             except ValueError as exc:
                 errors.append({'batch_id':row['id'],'message':str(exc)})
                 continue

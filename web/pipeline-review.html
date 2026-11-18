@@ -4540,6 +4540,11 @@
       return `<h3>产品推荐标准化（${Number(packet.total || 0)}）</h3><p class="muted">按种类、品种、年龄阶段、需求、品牌和产品合并。下列组合包含本任务的来源，相同组合也保留其他任务的推荐来源。</p>${packet.message ? '<p>' + escapeHtml(packet.message) + '</p>' : ''}${rows ? '<div class="table-wrap"><table><thead><tr><th>种类 / 品种 / 年龄阶段</th><th>需求</th><th>品牌 / 产品</th><th>推荐理由</th><th>推荐来源</th><th>审核状态</th></tr></thead><tbody>' + rows + '</tbody></table></div>' : '<p class="muted">尚无已入库的产品推荐；请查看各模型的处理状态。</p>'}${packet.truncated ? '<p class="muted">当前展示前200个推荐组合。</p>' : ''}`;
     }
 
+    function renderBehaviorPipeline(packet, taskId) {
+      const states = {pending:'待解析',running:'解析中',completed:'解析完成',failed:'解析失败'};
+      const rows = (packet.calls || []).map(c => `<tr><td>调用 #${Number(c.source_call_id)} / 批次 #${Number(c.batch_id)}</td><td>${escapeHtml(multiLabels[c.provider] || c.provider)}</td><td>${escapeHtml(c.call_status === 'success' ? '调用成功' : '调用失败')}</td><td>${escapeHtml(states[c.parse_status] || c.parse_status)}${c.parse_error ? '<br>' + escapeHtml(c.parse_error) : ''}</td><td>${Number(c.point_count || 0)}</td></tr>`).join('');
+      return `<section style="margin:16px 0;padding:12px;background:#f0f7ff;border-radius:8px;"><strong>采集与解析</strong><p>采集只保存大模型原始回答；解析单独生成知识记录。重试解析不会调用模型或产生新的模型用量。</p><div class="table-wrap"><table><thead><tr><th>调用记录 / 批次</th><th>模型</th><th>采集状态</th><th>解析状态</th><th>知识条数</th></tr></thead><tbody>${rows}</tbody></table></div><button class="button secondary" type="button" data-import-task="${taskId}">解析已保存的回答 / 重试</button><span id="modelImportMessage" role="status" style="margin-left:12px;"></span></section>`;
+    }
     function renderBehaviorObservation(row) {
       const p = row.point_data, o = p.observation;
       const list = values => (values || []).length ? '<ul>' + values.map(v => '<li>' + escapeHtml(typeof v === 'string' ? v : JSON.stringify(v)) + '</li>').join('') + '</ul>' : '<p class="muted">未提供</p>';
@@ -4571,7 +4576,7 @@
           <strong>观察记录</strong>${list(p.observation_fields)}<strong>停止或专业评估条件</strong>${list(p.stop_conditions)}
           <details><summary>模型来源、证据与审核状态</summary><p>任务 #${Number(row.task_id)} · 批次 #${Number(row.batch_id)} · ${escapeHtml(multiLabels[row.source_provider] || row.source_provider)} · ${escapeHtml(row.source_model)}<br>原始问题：${escapeHtml(row.source_question)}<br>证据：${escapeHtml(({supported:'有依据，待核验',uncertain:'不确定',pending_verification:'待核验'})[p.evidence_status] || p.evidence_status)} · 审核：${escapeHtml(({pending:'待审核',verified:'已审核',rejected:'已拒绝'})[row.review_status] || row.review_status)}</p>${list(p.source_urls)}</details>
         </article>`;
-      }).join('') || '<p class="muted">暂无符合条件的行为知识，可先提交采集任务，或调整检索条件。</p>';
+      }).join('') || '<p class="muted">暂无符合条件的已解析行为知识；采集完成后请进入任务，点击“解析已保存的回答 / 重试”，或调整检索条件。</p>';
     }
     let behaviorPage = 1, behaviorTotal = 0, behaviorVersion = 0;
     async function loadBehaviorLibrary() {
@@ -4644,7 +4649,8 @@
       multiEl('multiDetailTitle').textContent = `任务 #${id} · ${baseLabel(result.task.knowledge_base)} · ${multiStates[result.task.status] || result.task.status}`;
       const imported = result.knowledge_import || {batches: []};
       const importCount = imported.batches.reduce((n,b) => n + Number(b.total_count || 0), 0);
-      const importHtml = `<section style="margin:16px 0;padding:12px;background:#f0f7ff;border-radius:8px;"><strong>独立知识库解析</strong><p>${escapeHtml(imported.database || multiConfig?.knowledge_database || 'chongxi_model_knowledge')} · 已导入 ${imported.batches.length} 个模型响应 / ${importCount} 条来源知识</p>${imported.error ? `<p>${escapeHtml(imported.error)}</p>` : ''}<button class="button secondary" type="button" data-import-task="${id}">解析 / 重试入新库</button><span id="modelImportMessage" role="status" style="margin-left:12px;"></span></section>`;
+      let importHtml = `<section style="margin:16px 0;padding:12px;background:#f0f7ff;border-radius:8px;"><strong>独立知识库解析</strong><p>${escapeHtml(imported.database || multiConfig?.knowledge_database || 'chongxi_model_knowledge')} · 已导入 ${imported.batches.length} 个模型响应 / ${importCount} 条来源知识</p>${imported.error ? `<p>${escapeHtml(imported.error)}</p>` : ''}<button class="button secondary" type="button" data-import-task="${id}">解析 / 重试入新库</button><span id="modelImportMessage" role="status" style="margin-left:12px;"></span></section>`;
+      if (result.behavior_pipeline) importHtml = renderBehaviorPipeline(result.behavior_pipeline, id);
       const points = result.points || [];
       const pointRows = points.map(c => `<tr><td>#${c.batch_id}<br>${escapeHtml(multiLabels[c.source_provider || c.provider] || c.source_provider || c.provider)}</td><td>${standardMappingHtml(c)}</td><td>${topicMappingHtml(c)}</td><td style="white-space:pre-wrap;min-width:260px;">${escapeHtml(c.content)}</td></tr>`).join('');
       multiEl('multiDetailBody').innerHTML = importHtml + `<p style="white-space:pre-wrap;">${escapeHtml(result.task.question)}</p><details><summary>本次提示词模板</summary><pre style="white-space:pre-wrap;overflow-wrap:anywhere;">${escapeHtml(result.task.template_text)}</pre></details>` + result.responses.map(r => `<div style="margin-top:16px;"><strong>批次 #${r.id} · ${escapeHtml(multiLabels[r.provider] || r.provider)} · ${escapeHtml(r.model_name)}</strong><p>${escapeHtml(multiStates[r.status] || r.status)} · 输入 Token ${r.prompt_tokens ?? '—'} / 输出 Token ${r.completion_tokens ?? '—'}</p>${multiSearchHtml(r.search_metadata)}${result.task.knowledge_base === 'selection' ? multiProductImportHtml(r.product_import) : ''}${r.error_message || r.import_error ? `<p style="color:#b42318;white-space:pre-wrap;">${escapeHtml(r.error_message || r.import_error)}</p>` : ''}<details><summary>查看模型原始回答</summary><pre style="white-space:pre-wrap;overflow-wrap:anywhere;max-height:400px;overflow:auto;">${escapeHtml(r.raw_text || '暂无回答')}</pre></details></div>`).join('') + (['solution', 'behavior'].includes(result.task.knowledge_base) ? '' : `<h3>拆解结果（${points.length}）</h3>` + (pointRows ? `<div class="table-wrap"><table><thead><tr><th>批次 / 模型</th><th>适用条件映射</th><th>知识分类 / 主题</th><th>正文</th></tr></thead><tbody>${pointRows}</tbody></table></div>` : '<p class="muted">暂无拆解内容；处理中任务稍后自动刷新。</p>'));
@@ -4677,7 +4683,7 @@
         const data = await api(`/api/admin/multi-model/tasks/${button.dataset.importTask}/import`, {method:'POST'});
         if (data.errors.length) { message.textContent = data.errors.map(e => `${multiLabels[e.provider] || e.provider || '批次 #' + e.batch_id}：${e.message}`).join('；'); }
         else if (!data.results.length) { message.textContent = '还没有成功的模型响应可导入'; }
-        else { await loadMultiDetail(Number(button.dataset.importTask)); multiEl('modelImportMessage').textContent = data.status === 'running' ? '任务仍在处理中，请等待自动刷新' : '解析与标准化入库完成，重复执行不会新增相同记录'; }
+        else { await loadMultiDetail(Number(button.dataset.importTask)); multiEl('modelImportMessage').textContent = data.status === 'running' ? '任务仍在处理中，请等待自动刷新' : (currentBase()?.code === 'behavior' ? '行为知识解析入库完成，未调用模型；重复解析不会新增相同记录' : '解析与标准化入库完成，重复执行不会新增相同记录'); }
       } catch (error) { message.textContent = error.message; }
       finally { button.disabled = false; }
     });

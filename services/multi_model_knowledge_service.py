@@ -148,8 +148,8 @@ def list_tasks(page=1,knowledge_base=''):
             cur.execute('''SELECT b.task_id AS id,MAX(b.question) AS question,MIN(b.created_at) AS created_at,
                 MAX(b.knowledge_base) AS knowledge_base,
                 CASE WHEN SUM(b.status='running')>0 THEN 'running'
-                     WHEN SUM(b.status='success')=COUNT(*) THEN 'completed'
-                     WHEN SUM(b.status='success')>0 THEN 'partial_failed' ELSE 'failed' END AS status,
+                     WHEN SUM(b.status='success' OR (b.knowledge_base='behavior' AND b.status='parse_failed'))=COUNT(*) THEN 'completed'
+                     WHEN SUM(b.status='success' OR (b.knowledge_base='behavior' AND b.status='parse_failed'))>0 THEN 'partial_failed' ELSE 'failed' END AS status,
                 MAX(b.finished_at) AS finished_at,
                 CASE WHEN MAX(b.knowledge_base)='health' THEN
                 (SELECT COUNT(*) FROM health_knowledge_point_detail h JOIN knowledge_import_batch b2 ON b2.id=h.batch_id WHERE b2.task_id=b.task_id)
@@ -193,7 +193,18 @@ def task_detail(task_id):
     result = {'task':task,'responses':responses,'points':points,'knowledge_import':store.task_status(task_id)}
     if task['knowledge_base'] == 'behavior':
         from services.behavior_knowledge_service import list_points
+        from services.behavior_model_pipeline import task_status
         result['behavior_structured'] = list_points(task_id=task_id)
+        result['behavior_pipeline'] = task_status(task_id)
+        calls = {c['batch_id']: c for c in result['behavior_pipeline']['calls']}
+        for response in responses:
+            call = calls.get(response['id'])
+            if not call:continue
+            response.update(status='success' if call['call_status'] == 'success' else 'api_failed',
+                raw_text=call.pop('raw_response'), search_metadata=store.decode(call.pop('search_metadata')) or {},
+                parsed_json=None, error_message=call['call_error'], import_error=call['parse_error'],
+                source_call_id=call['source_call_id'])
+        task['status'] = aggregate_status(responses)
         result['assembled_points'] = []
         return result
     if task['knowledge_base'] == 'health':

@@ -65,7 +65,7 @@ def test_malformed_behavior_is_rejected(field, value):
 def test_behavior_import_uses_dedicated_table_and_preserves_provenance():
     conn, cur = db()
     with patch.object(store, 'ensure_database'), patch.object(store, 'connect', return_value=conn):
-        result = behavior.import_batch(5)
+        result = behavior._import_points(5, document())
     assert result['inserted_count'] == 1
     inserts = [c.args for c in cur.execute.call_args_list if c.args[0].startswith('INSERT')]
     assert len(inserts) == 1 and 'behavior_knowledge_point_detail' in inserts[0][0]
@@ -78,12 +78,12 @@ def test_retry_preserves_review_and_rejects_changed_reviewed_content():
     key = hashlib.sha256(store.dumps(document()['behaviors'][0]).encode()).hexdigest()
     conn, cur = db([{'point_key': key, 'review_status': 'verified'}])
     with patch.object(store, 'ensure_database'), patch.object(store, 'connect', return_value=conn):
-        assert behavior.import_batch(5)['status'] == 'already_imported'
+        assert behavior._import_points(5, document())['status'] == 'already_imported'
     assert not any(c.args[0].startswith(('DELETE', 'INSERT')) for c in cur.execute.call_args_list)
     conn, cur = db([{'point_key': 'old', 'review_status': 'verified'}])
     with patch.object(store, 'ensure_database'), patch.object(store, 'connect', return_value=conn):
         with pytest.raises(ValueError, match='人工审核'):
-            behavior.import_batch(5)
+            behavior._import_points(5, document())
     conn.rollback.assert_called_once(); conn.commit.assert_not_called()
 
 
@@ -132,13 +132,10 @@ def test_worker_passes_behavior_contract_to_all_selected_providers(monkeypatch):
 
 
 def test_failed_behavior_response_can_be_reparsed_without_model_calls():
-    conn, cur = db()
-    cur.fetchone.return_value = {'knowledge_base': 'behavior', 'status': 'parse_failed',
-        'question': document()['question'], 'raw_response': json.dumps(document()), 'search_metadata': None}
-    with patch.object(store, 'connect', return_value=conn), patch.object(run, 'call_provider') as model:
-        store.reparse_behavior_batch(5)
-    model.assert_not_called()
-    assert any("status='success'" in c.args[0] for c in cur.execute.call_args_list)
+    with patch('services.behavior_model_pipeline.parse_batch', return_value={'status':'completed'}) as parse, \
+         patch.object(run, 'call_provider') as model:
+        assert store.reparse_behavior_batch(5)['status'] == 'completed'
+    parse.assert_called_once_with(5); model.assert_not_called()
 
 
 def test_task_detail_uses_behavior_candidates_without_selection_assembly():
@@ -151,6 +148,7 @@ def test_task_detail_uses_behavior_candidates_without_selection_assembly():
     cur.fetchall.side_effect = [[batch], []]
     with patch.object(multi, 'ensure_tables'), patch.object(store, 'connect', return_value=conn), \
          patch.object(store, 'task_status', return_value={}), \
+         patch('services.behavior_model_pipeline.task_status', return_value={'calls':[]}), \
          patch.object(behavior, 'list_points', return_value={'items':[], 'total':0}) as points, \
          patch('services.knowledge_source_assembly_service.task_objects') as assembly:
         result = multi.task_detail(5)
@@ -199,7 +197,7 @@ def test_observation_retry_and_import_do_not_create_formal_health_relations():
     conn, cur = db()
     cur.fetchone.return_value['parsed_response'] = json.dumps(observation_document())
     with patch.object(store, 'ensure_database'), patch.object(store, 'connect', return_value=conn):
-        result = behavior.import_batch(5)
+        result = behavior._import_points(5, observation_document())
     assert result['inserted_count'] == 1
     writes = [c.args for c in cur.execute.call_args_list if c.args[0].startswith('INSERT')]
     assert len(writes) == 1 and 'behavior_knowledge_point_detail' in writes[0][0]

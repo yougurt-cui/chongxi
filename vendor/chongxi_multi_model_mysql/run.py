@@ -213,7 +213,7 @@ def call_provider(provider: Provider, prompt: str, web_search: bool = False, *, 
                     'completion_tokens': response.usage.completion_tokens,
                 }
         try:
-            parsed = extract_json(response_text, knowledge_base=knowledge_base, question=question, parse_metadata=search_metadata)
+            parsed = None if knowledge_base == 'behavior' else extract_json(response_text, knowledge_base=knowledge_base, question=question, parse_metadata=search_metadata)
             status, error = 'success', None
         except Exception as exc:
             parsed, status, error = None, 'parse_failed', str(exc)
@@ -222,6 +222,7 @@ def call_provider(provider: Provider, prompt: str, web_search: bool = False, *, 
         parsed, status, error = None, 'api_failed', f'{type(exc).__name__}: {safe_message}'
     return {
         'provider': provider.name, 'model': provider.model,
+        'request_prompt': prompt if knowledge_base == 'behavior' else None,
         'status': status, 'raw_text': response_text, 'parsed': parsed,
         'error': error, 'search_metadata': search_metadata,
         'latency_ms': int((time.perf_counter() - started) * 1000),
