@@ -54,6 +54,8 @@ def _ensure_database(name):
             cur.execute(DDL)
             from services.solution_knowledge_service import ensure_schema as ensure_solution_schema
             ensure_solution_schema(cur)
+            from services.behavior_knowledge_service import DDL as BEHAVIOR_DDL
+            cur.execute(BEHAVIOR_DDL)
             cur.execute('SHOW COLUMNS FROM knowledge_point_source_detail')
             if not {'id','batch_id','source_provider','original_condition','species_code','breed_code','life_stage_codes','need_scene_code','need_scene_name','need_scene_codes','need_relation','scene_meta','need_codes','category_code','topic_code','content','standardization_meta'}.issubset({r['Field'] for r in cur.fetchall()}):
                 raise RuntimeError('知识库字段尚未升级，请先执行对应字段扩展脚本')
@@ -121,6 +123,9 @@ def import_batch(batch_id):
             cur.execute('SELECT knowledge_base FROM knowledge_import_batch WHERE id=%s',(batch_id,))
             batch=cur.fetchone()
             if not batch:raise LookupError('采集批次不存在')
+            if batch['knowledge_base'] == 'behavior':
+                from services.behavior_knowledge_service import import_batch as import_behavior
+                return import_behavior(batch_id)
             if batch['knowledge_base'] == 'solution':
                 from services.solution_knowledge_service import import_batch as import_solution
                 return import_solution(batch_id)
@@ -218,7 +223,7 @@ def persist_model_result(task_id,result):
                 conn.commit()
 
 
-def reparse_solution_batch(batch_id):
+def _reparse_batch(batch_id, knowledge_base):
     """Retry saved text without another model call or changing the historical prompt."""
     from vendor.chongxi_multi_model_mysql.run import extract_json
     error = None
@@ -226,10 +231,10 @@ def reparse_solution_batch(batch_id):
         cur.execute('SELECT knowledge_base,status,question,raw_response,search_metadata FROM knowledge_import_batch WHERE id=%s FOR UPDATE', (batch_id,))
         batch = cur.fetchone()
         if not batch:raise LookupError('采集批次不存在')
-        if batch['knowledge_base'] != 'solution' or batch['status'] != 'parse_failed':return
+        if batch['knowledge_base'] != knowledge_base or batch['status'] != 'parse_failed':return
         try:
             metadata = decode(batch.get('search_metadata')) or {}
-            parsed = extract_json(batch['raw_response'] or '', knowledge_base='solution', question=batch['question'], parse_metadata=metadata)
+            parsed = extract_json(batch['raw_response'] or '', knowledge_base=knowledge_base, question=batch['question'], parse_metadata=metadata)
         except ValueError as exc:
             error = exc
             cur.execute('UPDATE knowledge_import_batch SET error_message=%s WHERE id=%s', (str(exc),batch_id))
@@ -237,6 +242,14 @@ def reparse_solution_batch(batch_id):
             cur.execute("UPDATE knowledge_import_batch SET status='success',parsed_response=%s,error_message=NULL,search_metadata=%s WHERE id=%s", (dumps(parsed),dumps(metadata),batch_id))
         conn.commit()
     if error:raise error
+
+
+def reparse_solution_batch(batch_id):
+    return _reparse_batch(batch_id, 'solution')
+
+
+def reparse_behavior_batch(batch_id):
+    return _reparse_batch(batch_id, 'behavior')
 
 
 def import_task(task_id):
@@ -248,8 +261,9 @@ def import_task(task_id):
     if not rows:raise LookupError('采集任务不存在')
     results=[];errors=[]
     for row in rows:
-        if row['status']=='parse_failed' and row.get('knowledge_base')=='solution':
-            try:reparse_solution_batch(row['id'])
+        if row['status']=='parse_failed' and row.get('knowledge_base') in {'solution', 'behavior'}:
+            reparse = reparse_behavior_batch if row['knowledge_base'] == 'behavior' else reparse_solution_batch
+            try:reparse(row['id'])
             except ValueError as exc:
                 errors.append({'batch_id':row['id'],'message':str(exc)})
                 continue
@@ -269,7 +283,8 @@ def task_status(task_id):
             cur.execute('''SELECT b.id,b.provider AS source_provider,b.status,b.import_error,b.knowledge_base,
                 b.finished_at,CASE WHEN b.knowledge_base='health' THEN
                 (SELECT COUNT(*) FROM health_knowledge_point_detail h WHERE h.batch_id=b.id)
-                WHEN b.knowledge_base='solution' THEN (SELECT COUNT(*) FROM solution_knowledge_point_detail s WHERE s.batch_id=b.id) ELSE
+                WHEN b.knowledge_base='solution' THEN (SELECT COUNT(*) FROM solution_knowledge_point_detail s WHERE s.batch_id=b.id)
+                WHEN b.knowledge_base='behavior' THEN (SELECT COUNT(*) FROM behavior_knowledge_point_detail s WHERE s.batch_id=b.id) ELSE
                 (SELECT COUNT(*) FROM knowledge_point_source_detail s WHERE s.batch_id=b.id) END AS total_count
                 FROM knowledge_import_batch b WHERE b.task_id=%s AND b.imported_at IS NOT NULL ORDER BY b.id''',(task_id,))
             batches=list(cur.fetchall())

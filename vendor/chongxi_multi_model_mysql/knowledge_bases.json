@@ -85,6 +85,27 @@
           "file": "templates/solution_recording.txt"
         }
       ]
+    },
+    {
+      "code": "behavior",
+      "label": "宠物行为知识库",
+      "tagline": "理解行为、识别诱因与改善日常相处",
+      "description": "采集猫犬的行为表现、触发情境、可能原因、判断所需信息和循序渐进的改善步骤，保留模型来源，所有结果均待审核。",
+      "question_placeholder": "例如：猫咪半夜一直叫怎么办？狗狗独处时吠叫和拆家如何观察与改善？",
+      "templates": [
+        {
+          "code": "behavior_understanding",
+          "title": "行为理解与诱因分析",
+          "description": "区分正常行为、环境与学习因素，整理可观察表现、诱因和需补充的信息。",
+          "file": "templates/behavior_understanding.txt"
+        },
+        {
+          "code": "behavior_training",
+          "title": "训练与环境调整",
+          "description": "围绕具体行为给出环境丰富化、正向训练步骤、观察指标和停止条件。",
+          "file": "templates/behavior_training.txt"
+        }
+      ]
     }
   ]
 }

@@ -129,6 +129,12 @@ def extract_json(text: str, *, knowledge_base=None, question=None, parse_metadat
                     exc = None
             if exc is not None:
                 raise ValueError(f'模型JSON格式错误：第{exc.lineno}行第{exc.colno}列，{exc.msg}；请检查双引号转义或输出是否完整') from exc
+    if knowledge_base == 'behavior' or (isinstance(obj, dict) and obj.get('knowledge_base') == 'behavior'):
+        from services.behavior_knowledge_service import validate_document
+        return validate_document(obj)
+    if knowledge_base == 'behavior' or (isinstance(obj, dict) and obj.get('knowledge_base') == 'behavior'):
+        from services.behavior_knowledge_service import validate_document
+        return validate_document(obj)
     if isinstance(obj, dict) and (knowledge_base == 'solution' or 'solutions' in obj or obj.get('knowledge_base') == 'solution'):
         from services.solution_knowledge_service import validate_document
         if knowledge_base == 'solution':
@@ -256,6 +262,8 @@ def count_points(parsed):
     """Count validated health groups or dimension items without assuming one schema."""
     if not parsed:
         return 0
+    if 'behaviors' in parsed:
+        return len(parsed['behaviors'])
     if 'solutions' in parsed:
         return len(parsed['solutions'])
     if 'knowledge_points' in parsed:
@@ -269,7 +277,7 @@ def execute_task(task_id: int, prompt: str, providers: list[Provider], on_result
     try:
         with concurrent.futures.ThreadPoolExecutor(max_workers=len(providers)) as pool:
             options = {'web_search': True} if web_search else {}
-            if knowledge_base == 'solution':options.update(knowledge_base=knowledge_base, question=question)
+            if knowledge_base in {'solution', 'behavior'}:options.update(knowledge_base=knowledge_base, question=question)
             futures = {pool.submit(call_provider, p, prompt, **options): p for p in providers}
             for future in concurrent.futures.as_completed(futures):
                 result = future.result()

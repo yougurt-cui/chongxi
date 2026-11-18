@@ -426,3 +426,12 @@ def model_knowledge_points():
         page=request.args.get('page', 1), provider=request.args.get('provider', ''),
         batch_id=request.args.get('batch_id', ''), query=request.args.get('q', '').strip(),
         knowledge_base=request.args.get('knowledge_base', '').strip()))
+
+
+@enterprise_api.get('/admin/multi-model/behavior-points')
+@admin_required
+def behavior_knowledge_points():
+    from services.behavior_knowledge_service import list_points
+    return _multi_model_result(lambda: list_points(
+        page=request.args.get('page', 1), query=request.args.get('q', '').strip(),
+        species=request.args.get('species', '').strip(), category=request.args.get('category', '').strip()))

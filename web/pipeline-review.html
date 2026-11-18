@@ -1362,6 +1362,19 @@
           <p class="muted">每次运行会调用所选模型并产生 API 用量。任务在后台执行，关闭页面不影响采集；再次点击会创建新任务。</p>
         </form>
       </section>
+      <section id="behaviorLibrary" class="card" style="padding:20px;margin-bottom:20px;" hidden>
+        <div class="title">行为知识检索</div>
+        <p class="muted">按行为、物种和分类查看已采集的候选知识。模型回答与证据状态不代表人工审核通过。</p>
+        <form id="behaviorSearch" class="row-actions" style="margin-bottom:16px;">
+          <input id="behaviorQuery" aria-label="搜索行为知识" maxlength="200" placeholder="行为、诱因或训练关键词" style="flex:1;min-width:180px;" />
+          <select id="behaviorSpecies" aria-label="行为知识物种"><option value="">全部物种</option><option value="cat">猫</option><option value="dog">狗</option><option value="unknown">物种待确认</option></select>
+          <select id="behaviorCategory" aria-label="行为知识分类"><option value="">全部行为分类</option></select>
+          <button class="button secondary" type="submit">检索 / 刷新</button>
+        </form>
+        <p id="behaviorMessage" class="muted" role="status" aria-live="polite"></p>
+        <div id="behaviorResults"></div>
+        <div class="row-actions"><button id="behaviorPrev" class="button secondary" type="button">上一页</button><span id="behaviorPage" class="muted"></span><button id="behaviorNext" class="button secondary" type="button">下一页</button></div>
+      </section>
       <section class="card"><div class="table-wrap"><table style="min-width:820px;"><thead><tr><th>任务</th><th>知识库</th><th>问题</th><th>状态</th><th>拆解条数</th><th>创建时间</th><th>操作</th></tr></thead><tbody id="multiRows"></tbody></table></div><div id="multiEmpty" class="empty" hidden>当前知识库下暂无采集任务。</div><div class="row-actions" style="padding:16px;"><button id="multiPrev" class="button secondary" type="button">上一页</button><span id="multiPage" class="muted"></span><button id="multiNext" class="button secondary" type="button">下一页</button></div></section>
       <section id="multiDetail" class="card" style="padding:20px;margin-top:20px;" hidden><div class="title" id="multiDetailTitle"></div><div id="multiDetailBody"></div></section>
       </div>
@@ -4446,6 +4459,8 @@
     }
     function renderKnowledgeBases() {
       const bases = multiBaseList();
+      multiEl('behaviorLibrary').hidden = multiBase !== 'behavior';
+      if (multiBase === 'behavior') loadBehaviorLibrary();
       multiEl('kbGrid').innerHTML = bases.map(b => `<button type="button" class="kb-card${b.code === multiBase ? ' active' : ''}" role="tab" aria-selected="${b.code === multiBase}" data-kb="${escapeHtml(b.code)}"><div class="kb-name"><span class="kb-dot"></span>${escapeHtml(b.label)}</div><div class="kb-tag">${escapeHtml(b.tagline || '')}</div><div class="kb-meta">${b.templates.length} 个模版</div></button>`).join('');
       renderBasePanel();
     }
@@ -4525,6 +4540,51 @@
       return `<h3>产品推荐标准化（${Number(packet.total || 0)}）</h3><p class="muted">按种类、品种、年龄阶段、需求、品牌和产品合并。下列组合包含本任务的来源，相同组合也保留其他任务的推荐来源。</p>${packet.message ? '<p>' + escapeHtml(packet.message) + '</p>' : ''}${rows ? '<div class="table-wrap"><table><thead><tr><th>种类 / 品种 / 年龄阶段</th><th>需求</th><th>品牌 / 产品</th><th>推荐理由</th><th>推荐来源</th><th>审核状态</th></tr></thead><tbody>' + rows + '</tbody></table></div>' : '<p class="muted">尚无已入库的产品推荐；请查看各模型的处理状态。</p>'}${packet.truncated ? '<p class="muted">当前展示前200个推荐组合。</p>' : ''}`;
     }
 
+    function renderBehaviorPoints(packet) {
+      const list = values => (values || []).length ? '<ul>' + values.map(v => '<li>' + escapeHtml(v) + '</li>').join('') + '</ul>' : '<p class="muted">未提供</p>';
+      return (packet.items || []).map(row => {
+        const p = row.point_data;
+        return `<article style="padding:16px;margin:12px 0;border:1px solid var(--line);border-radius:10px;">
+          <h4>${escapeHtml(p.behavior_name)}</h4>
+          <p>${escapeHtml(({cat:'猫',dog:'狗',unknown:'物种待确认'})[p.species] || p.species)} / ${escapeHtml(p.breed)} / ${escapeHtml(p.life_stage)} · ${escapeHtml(packet.categories?.[p.category] || p.category)}</p>
+          <strong>行为表现与触发情境</strong>${list(p.manifestations)}
+          <strong>可能原因（待核查）</strong>${list(p.possible_causes)}
+          <strong>判断所需信息</strong>${list(p.assessment)}
+          <strong>训练与环境调整</strong><ol>${(p.interventions || []).map(s => `<li style="margin:8px 0;">${escapeHtml(s.action)}<br><small class="muted">${escapeHtml(s.reason)}</small></li>`).join('')}</ol>
+          <strong>观察记录</strong>${list(p.observation_fields)}<strong>停止或专业评估条件</strong>${list(p.stop_conditions)}
+          <details><summary>模型来源、证据与审核状态</summary><p>任务 #${Number(row.task_id)} · 批次 #${Number(row.batch_id)} · ${escapeHtml(multiLabels[row.source_provider] || row.source_provider)} · ${escapeHtml(row.source_model)}<br>原始问题：${escapeHtml(row.source_question)}<br>证据：${escapeHtml(({supported:'有依据，待核验',uncertain:'不确定',pending_verification:'待核验'})[p.evidence_status] || p.evidence_status)} · 审核：${escapeHtml(({pending:'待审核',verified:'已审核',rejected:'已拒绝'})[row.review_status] || row.review_status)}</p>${list(p.source_urls)}</details>
+        </article>`;
+      }).join('') || '<p class="muted">暂无符合条件的行为知识，可先提交采集任务，或调整检索条件。</p>';
+    }
+    let behaviorPage = 1, behaviorTotal = 0, behaviorVersion = 0;
+    async function loadBehaviorLibrary() {
+      const version = ++behaviorVersion;
+      multiEl('behaviorMessage').textContent = '正在读取行为知识…';
+      multiEl('behaviorPrev').disabled = multiEl('behaviorNext').disabled = true;
+      try {
+        const params = new URLSearchParams({page:behaviorPage, q:multiEl('behaviorQuery').value.trim(), species:multiEl('behaviorSpecies').value, category:multiEl('behaviorCategory').value});
+        const packet = await api('/api/admin/multi-model/behavior-points?' + params);
+        if (version !== behaviorVersion) return;
+        if (multiEl('behaviorCategory').options.length === 1) {
+          Object.entries(packet.categories || {}).forEach(([value,label]) => multiEl('behaviorCategory').add(new Option(label, value)));
+        }
+        behaviorTotal = packet.total;
+        multiEl('behaviorResults').innerHTML = renderBehaviorPoints(packet);
+        multiEl('behaviorPage').textContent = `第 ${behaviorPage} 页 · 共 ${packet.total} 条`;
+        multiEl('behaviorMessage').textContent = '行为知识已更新';
+        multiEl('behaviorPrev').disabled = behaviorPage <= 1;
+        multiEl('behaviorNext').disabled = behaviorPage * packet.page_size >= packet.total;
+      } catch (error) {
+        if (version !== behaviorVersion) return;
+        multiEl('behaviorResults').innerHTML = '';
+        multiEl('behaviorPage').textContent = '';
+        multiEl('behaviorMessage').textContent = error.message;
+      }
+    }
+    multiEl('behaviorSearch').addEventListener('submit', event => { event.preventDefault(); behaviorPage = 1; loadBehaviorLibrary(); });
+    multiEl('behaviorPrev').addEventListener('click', () => { if (behaviorPage > 1) { behaviorPage--; loadBehaviorLibrary(); } });
+    multiEl('behaviorNext').addEventListener('click', () => { if (behaviorPage * 20 < behaviorTotal) { behaviorPage++; loadBehaviorLibrary(); } });
+
     function renderMultiHealthScenario(point) {
       const scene = point.scenario_data;
       const list = items => '<ul>' + (items || []).map(value => '<li>' + escapeHtml(value) + '</li>').join('') + '</ul>';
@@ -4570,8 +4630,11 @@
       const importHtml = `<section style="margin:16px 0;padding:12px;background:#f0f7ff;border-radius:8px;"><strong>独立知识库解析</strong><p>${escapeHtml(imported.database || multiConfig?.knowledge_database || 'chongxi_model_knowledge')} · 已导入 ${imported.batches.length} 个模型响应 / ${importCount} 条来源知识</p>${imported.error ? `<p>${escapeHtml(imported.error)}</p>` : ''}<button class="button secondary" type="button" data-import-task="${id}">解析 / 重试入新库</button><span id="modelImportMessage" role="status" style="margin-left:12px;"></span></section>`;
       const points = result.points || [];
       const pointRows = points.map(c => `<tr><td>#${c.batch_id}<br>${escapeHtml(multiLabels[c.source_provider || c.provider] || c.source_provider || c.provider)}</td><td>${standardMappingHtml(c)}</td><td>${topicMappingHtml(c)}</td><td style="white-space:pre-wrap;min-width:260px;">${escapeHtml(c.content)}</td></tr>`).join('');
-      multiEl('multiDetailBody').innerHTML = importHtml + `<p style="white-space:pre-wrap;">${escapeHtml(result.task.question)}</p><details><summary>本次提示词模板</summary><pre style="white-space:pre-wrap;overflow-wrap:anywhere;">${escapeHtml(result.task.template_text)}</pre></details>` + result.responses.map(r => `<div style="margin-top:16px;"><strong>批次 #${r.id} · ${escapeHtml(multiLabels[r.provider] || r.provider)} · ${escapeHtml(r.model_name)}</strong><p>${escapeHtml(multiStates[r.status] || r.status)} · 输入 Token ${r.prompt_tokens ?? '—'} / 输出 Token ${r.completion_tokens ?? '—'}</p>${multiSearchHtml(r.search_metadata)}${result.task.knowledge_base === 'selection' ? multiProductImportHtml(r.product_import) : ''}${r.error_message || r.import_error ? `<p style="color:#b42318;white-space:pre-wrap;">${escapeHtml(r.error_message || r.import_error)}</p>` : ''}<details><summary>查看模型原始回答</summary><pre style="white-space:pre-wrap;overflow-wrap:anywhere;max-height:400px;overflow:auto;">${escapeHtml(r.raw_text || '暂无回答')}</pre></details></div>`).join('') + (result.task.knowledge_base === 'solution' ? '' : `<h3>拆解结果（${points.length}）</h3>` + (pointRows ? `<div class="table-wrap"><table><thead><tr><th>批次 / 模型</th><th>适用条件映射</th><th>知识分类 / 主题</th><th>正文</th></tr></thead><tbody>${pointRows}</tbody></table></div>` : '<p class="muted">暂无拆解内容；处理中任务稍后自动刷新。</p>'));
+      multiEl('multiDetailBody').innerHTML = importHtml + `<p style="white-space:pre-wrap;">${escapeHtml(result.task.question)}</p><details><summary>本次提示词模板</summary><pre style="white-space:pre-wrap;overflow-wrap:anywhere;">${escapeHtml(result.task.template_text)}</pre></details>` + result.responses.map(r => `<div style="margin-top:16px;"><strong>批次 #${r.id} · ${escapeHtml(multiLabels[r.provider] || r.provider)} · ${escapeHtml(r.model_name)}</strong><p>${escapeHtml(multiStates[r.status] || r.status)} · 输入 Token ${r.prompt_tokens ?? '—'} / 输出 Token ${r.completion_tokens ?? '—'}</p>${multiSearchHtml(r.search_metadata)}${result.task.knowledge_base === 'selection' ? multiProductImportHtml(r.product_import) : ''}${r.error_message || r.import_error ? `<p style="color:#b42318;white-space:pre-wrap;">${escapeHtml(r.error_message || r.import_error)}</p>` : ''}<details><summary>查看模型原始回答</summary><pre style="white-space:pre-wrap;overflow-wrap:anywhere;max-height:400px;overflow:auto;">${escapeHtml(r.raw_text || '暂无回答')}</pre></details></div>`).join('') + (['solution', 'behavior'].includes(result.task.knowledge_base) ? '' : `<h3>拆解结果（${points.length}）</h3>` + (pointRows ? `<div class="table-wrap"><table><thead><tr><th>批次 / 模型</th><th>适用条件映射</th><th>知识分类 / 主题</th><th>正文</th></tr></thead><tbody>${pointRows}</tbody></table></div>` : '<p class="muted">暂无拆解内容；处理中任务稍后自动刷新。</p>'));
       if (result.solution_structured) multiEl('multiDetailBody').insertAdjacentHTML('beforeend', renderMultiSolutions(result.solution_structured));
+      if (result.behavior_structured) {
+        multiEl('multiDetailBody').insertAdjacentHTML('beforeend', `<h3>宠物行为知识（${Number(result.behavior_structured.total)}）</h3>` + renderBehaviorPoints(result.behavior_structured));
+      }
       if (result.product_recommendations) multiEl('multiDetailBody').insertAdjacentHTML('beforeend', renderMultiProductRecommendations(result.product_recommendations));
       if ((result.assembled_points || []).length) {
         const categoryLabels = {pet_profile:'宠物画像',life_stage_nutrition:'生命阶段营养',digestive_tolerance:'消化耐受',food_selection:'选粮原则',product_recommendation:'产品推荐',product_suitability:'产品适配',product_overview:'产品信息'};

@@ -153,6 +153,8 @@ def list_tasks(page=1,knowledge_base=''):
                 MAX(b.finished_at) AS finished_at,
                 CASE WHEN MAX(b.knowledge_base)='health' THEN
                 (SELECT COUNT(*) FROM health_knowledge_point_detail h JOIN knowledge_import_batch b2 ON b2.id=h.batch_id WHERE b2.task_id=b.task_id)
+                WHEN MAX(b.knowledge_base)='behavior' THEN
+                (SELECT COUNT(*) FROM behavior_knowledge_point_detail h JOIN knowledge_import_batch b2 ON b2.id=h.batch_id WHERE b2.task_id=b.task_id)
                 WHEN MAX(b.knowledge_base)='solution' THEN
                 (SELECT COUNT(DISTINCT s.id) FROM solution_knowledge_point s JOIN JSON_TABLE(s.sources, '$[*]' COLUMNS(task_id BIGINT PATH '$.task_id')) refs ON refs.task_id=b.task_id)
                 ELSE (SELECT COUNT(*) FROM knowledge_point_source_detail s JOIN knowledge_import_batch b2 ON b2.id=s.batch_id
@@ -189,6 +191,11 @@ def task_detail(task_id):
         for field in ('life_stage_codes','need_codes','standardization_meta'):
             point[field]=store.decode(point.get(field))
     result = {'task':task,'responses':responses,'points':points,'knowledge_import':store.task_status(task_id)}
+    if task['knowledge_base'] == 'behavior':
+        from services.behavior_knowledge_service import list_points
+        result['behavior_structured'] = list_points(task_id=task_id)
+        result['assembled_points'] = []
+        return result
     if task['knowledge_base'] == 'health':
         from services.health_knowledge_import_service import task_result
         result['health_structured'] = task_result(task_id)
@@ -229,6 +236,8 @@ def run_worker(task_id):
             from services.health_knowledge_import_service import render_prompt
             prompt = render_prompt(task['template_text'],task['question'])
         options = {}
+        if task.get('knowledge_base') == 'behavior':
+            options = {'knowledge_base': 'behavior', 'question': task['question']}
         if task.get('knowledge_base') == 'solution':
             from services.solution_output_contract import render_prompt
             prompt = render_prompt(task['template_text'], task['question'])
