@@ -129,6 +129,9 @@ def extract_json(text: str, *, knowledge_base=None, question=None, parse_metadat
                     exc = None
             if exc is not None:
                 raise ValueError(f'模型JSON格式错误：第{exc.lineno}行第{exc.colno}列，{exc.msg}；请检查双引号转义或输出是否完整') from exc
+    if knowledge_base == 'daily_care' or (isinstance(obj, dict) and obj.get('knowledge_base') == 'daily_care'):
+        from services.daily_care_knowledge_service import validate_document
+        return validate_document(obj)
     if knowledge_base == 'behavior' or (isinstance(obj, dict) and obj.get('knowledge_base') == 'behavior'):
         from services.behavior_knowledge_service import validate_document
         return validate_document(obj)
@@ -213,7 +216,7 @@ def call_provider(provider: Provider, prompt: str, web_search: bool = False, *, 
                     'completion_tokens': response.usage.completion_tokens,
                 }
         try:
-            parsed = None if knowledge_base == 'behavior' else extract_json(response_text, knowledge_base=knowledge_base, question=question, parse_metadata=search_metadata)
+            parsed = None if knowledge_base in {'behavior','daily_care'} else extract_json(response_text, knowledge_base=knowledge_base, question=question, parse_metadata=search_metadata)
             status, error = 'success', None
         except Exception as exc:
             parsed, status, error = None, 'parse_failed', str(exc)
@@ -263,6 +266,8 @@ def count_points(parsed):
     """Count validated health groups or dimension items without assuming one schema."""
     if not parsed:
         return 0
+    if 'care_points' in parsed:
+        return len(parsed['care_points'])
     if 'behaviors' in parsed:
         return len(parsed['behaviors'])
     if 'solutions' in parsed:
@@ -278,7 +283,7 @@ def execute_task(task_id: int, prompt: str, providers: list[Provider], on_result
     try:
         with concurrent.futures.ThreadPoolExecutor(max_workers=len(providers)) as pool:
             options = {'web_search': True} if web_search else {}
-            if knowledge_base in {'solution', 'behavior'}:options.update(knowledge_base=knowledge_base, question=question)
+            if knowledge_base in {'solution', 'behavior','daily_care'}:options.update(knowledge_base=knowledge_base, question=question)
             futures = {pool.submit(call_provider, p, prompt, **options): p for p in providers}
             for future in concurrent.futures.as_completed(futures):
                 result = future.result()

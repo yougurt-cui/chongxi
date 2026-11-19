@@ -56,6 +56,8 @@ def _ensure_database(name):
             ensure_solution_schema(cur)
             from services.behavior_knowledge_service import DDL as BEHAVIOR_DDL
             cur.execute(BEHAVIOR_DDL)
+            from services.daily_care_knowledge_service import DDL as CARE_DDL
+            cur.execute(CARE_DDL)
             from services.behavior_model_pipeline import ensure_schema as ensure_behavior_pipeline
             ensure_behavior_pipeline(cur)
             cur.execute('SHOW COLUMNS FROM knowledge_point_source_detail')
@@ -128,6 +130,9 @@ def import_batch(batch_id):
             if batch['knowledge_base'] == 'behavior':
                 from services.behavior_knowledge_service import import_batch as import_behavior
                 return import_behavior(batch_id)
+            if batch['knowledge_base'] == 'daily_care':
+                from services.daily_care_knowledge_service import import_batch as import_care
+                return import_care(batch_id)
             if batch['knowledge_base'] == 'solution':
                 from services.solution_knowledge_service import import_batch as import_solution
                 return import_solution(batch_id)
@@ -231,10 +236,11 @@ def persist_model_result(task_id,result):
     if result['status']=='success':
         try:
             process_batch_pipeline(batch_id)
-        except Exception:
+        except Exception as exc:
             LOGGER.exception('model_response_import_failed batch_id=%s',batch_id)
+            message = str(exc)[:2000] if row.get('knowledge_base') == 'daily_care' and isinstance(exc, ValueError) else '解析入库或标准化失败，原始回答已保存，可重试'
             with connect() as conn:
-                with conn.cursor() as cur:cur.execute('UPDATE knowledge_import_batch SET import_error=%s WHERE id=%s',('解析入库或标准化失败，原始回答已保存，可重试',batch_id))
+                with conn.cursor() as cur:cur.execute('UPDATE knowledge_import_batch SET import_error=%s WHERE id=%s',(message,batch_id))
                 conn.commit()
 
 
@@ -308,6 +314,7 @@ def task_status(task_id):
                 b.finished_at,CASE WHEN b.knowledge_base='health' THEN
                 (SELECT COUNT(*) FROM health_knowledge_point_detail h WHERE h.batch_id=b.id)
                 WHEN b.knowledge_base='solution' THEN (SELECT COUNT(*) FROM solution_knowledge_point_detail s WHERE s.batch_id=b.id)
+                WHEN b.knowledge_base='daily_care' THEN (SELECT COUNT(*) FROM daily_care_knowledge_point_detail s WHERE s.batch_id=b.id)
                 WHEN b.knowledge_base='behavior' THEN (SELECT COUNT(*) FROM behavior_knowledge_point_detail s WHERE s.batch_id=b.id) ELSE
                 (SELECT COUNT(*) FROM knowledge_point_source_detail s WHERE s.batch_id=b.id) END AS total_count
                 FROM knowledge_import_batch b WHERE b.task_id=%s AND b.imported_at IS NOT NULL ORDER BY b.id''',(task_id,))

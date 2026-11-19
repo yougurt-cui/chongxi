@@ -106,6 +106,27 @@
           "file": "templates/behavior_training.txt"
         }
       ]
+    },
+    {
+      "code": "daily_care",
+      "label": "日常养护知识库",
+      "tagline": "清洁护理、环境管理与日常照护",
+      "description": "采集猫犬的清洁、梳毛、口腔、耳眼、足部、环境、运动与预防保健知识，整理适用条件、频率、步骤、观察指标及停止条件，自动解析入库并保留模型来源。",
+      "question_placeholder": "例如：成年长毛猫日常如何梳毛？狗狗日常口腔护理应怎样安排？",
+      "templates": [
+        {
+          "code": "daily_care_routine",
+          "title": "日常养护与操作步骤",
+          "description": "整理适用对象、护理频率、操作步骤、注意事项与停止条件。",
+          "file": "templates/daily_care_routine.txt"
+        },
+        {
+          "code": "daily_care_plan",
+          "title": "养护计划与观察记录",
+          "description": "整理日常与周期性养护安排、观察指标和调整条件。",
+          "file": "templates/daily_care_plan.txt"
+        }
+      ]
     }
   ]
 }

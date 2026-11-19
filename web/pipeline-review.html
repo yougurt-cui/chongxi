@@ -1375,6 +1375,19 @@
         <div id="behaviorResults"></div>
         <div class="row-actions"><button id="behaviorPrev" class="button secondary" type="button">上一页</button><span id="behaviorPage" class="muted"></span><button id="behaviorNext" class="button secondary" type="button">下一页</button></div>
       </section>
+      <section id="careLibrary" class="card" style="padding:20px;margin-bottom:20px;" hidden>
+        <div class="title">养护知识检索</div>
+        <p class="muted">按养护、物种和分类查看已采集的候选知识。模型回答与证据状态不代表人工审核通过。</p>
+        <form id="careSearch" class="row-actions" style="margin-bottom:16px;">
+          <input id="careQuery" aria-label="搜索养护知识" maxlength="200" placeholder="养护、护理或操作关键词" style="flex:1;min-width:180px;" />
+          <select id="careSpecies" aria-label="养护知识物种"><option value="">全部物种</option><option value="cat">猫</option><option value="dog">狗</option><option value="unknown">物种待确认</option></select>
+          <select id="careCategory" aria-label="养护知识分类"><option value="">全部养护分类</option></select>
+          <button class="button secondary" type="submit">检索 / 刷新</button>
+        </form>
+        <p id="careMessage" class="muted" role="status" aria-live="polite"></p>
+        <div id="careResults"></div>
+        <div class="row-actions"><button id="carePrev" class="button secondary" type="button">上一页</button><span id="carePage" class="muted"></span><button id="careNext" class="button secondary" type="button">下一页</button></div>
+      </section>
       <section class="card"><div class="table-wrap"><table style="min-width:820px;"><thead><tr><th>任务</th><th>知识库</th><th>问题</th><th>状态</th><th>拆解条数</th><th>创建时间</th><th>操作</th></tr></thead><tbody id="multiRows"></tbody></table></div><div id="multiEmpty" class="empty" hidden>当前知识库下暂无采集任务。</div><div class="row-actions" style="padding:16px;"><button id="multiPrev" class="button secondary" type="button">上一页</button><span id="multiPage" class="muted"></span><button id="multiNext" class="button secondary" type="button">下一页</button></div></section>
       <section id="multiDetail" class="card" style="padding:20px;margin-top:20px;" hidden><div class="title" id="multiDetailTitle"></div><div id="multiDetailBody"></div></section>
       </div>
@@ -4459,6 +4472,8 @@
     }
     function renderKnowledgeBases() {
       const bases = multiBaseList();
+      multiEl('careLibrary').hidden = multiBase !== 'daily_care';
+      if (multiBase === 'daily_care') loadCareLibrary();
       multiEl('behaviorLibrary').hidden = multiBase !== 'behavior';
       if (multiBase === 'behavior') loadBehaviorLibrary();
       multiEl('kbGrid').innerHTML = bases.map(b => `<button type="button" class="kb-card${b.code === multiBase ? ' active' : ''}" role="tab" aria-selected="${b.code === multiBase}" data-kb="${escapeHtml(b.code)}"><div class="kb-name"><span class="kb-dot"></span>${escapeHtml(b.label)}</div><div class="kb-tag">${escapeHtml(b.tagline || '')}</div><div class="kb-meta">${b.templates.length} 个模版</div></button>`).join('');
@@ -4615,6 +4630,45 @@
     multiEl('behaviorPrev').addEventListener('click', () => { if (behaviorPage > 1) { behaviorPage--; loadBehaviorLibrary(); } });
     multiEl('behaviorNext').addEventListener('click', () => { if (behaviorPage * 20 < behaviorTotal) { behaviorPage++; loadBehaviorLibrary(); } });
 
+    function renderCarePoints(packet) {
+      const list = values => (values || []).length ? '<ul>' + values.map(v => '<li>' + escapeHtml(v) + '</li>').join('') + '</ul>' : '<p class="muted">未提供</p>';
+      return (packet.items || []).map(row => `<article style="padding:16px;margin:12px 0;border:1px solid var(--line);border-radius:10px;">
+        <h4>${escapeHtml(row.care_name)}</h4><p>${behaviorScopeLabel(row)} · ${escapeHtml(row.category_name)} · ${escapeHtml(row.care_code)}</p>
+        <strong>适用条件</strong>${list(row.applicable_conditions)}<strong>护理频率与调整依据</strong><p>${escapeHtml(row.frequency)}</p>
+        <strong>操作步骤</strong><ol>${(row.steps || []).map(step => '<li>' + escapeHtml(step.action) + '<br><small>' + escapeHtml(step.reason) + '</small></li>').join('')}</ol>
+        <strong>观察记录</strong>${list(row.observation_fields)}<strong>注意事项</strong>${list(row.precautions)}<strong>停止或就医条件</strong>${list(row.stop_conditions)}
+        <details><summary>来源与审核状态</summary><p>任务 #${Number(row.task_id)} · 批次 #${Number(row.batch_id)} · ${escapeHtml(row.source_provider)} / ${escapeHtml(row.source_model)}<br>原始问题：${escapeHtml(row.source_question)}<br>审核：${escapeHtml(({pending:'待审核',verified:'已审核',rejected:'已拒绝'})[row.review_status] || row.review_status)}</p>${list(row.source_urls)}<pre style="white-space:pre-wrap;overflow-wrap:anywhere;">${escapeHtml(JSON.stringify(row.point_data,null,2))}</pre></details>
+      </article>`).join('') || '<p class="muted">暂无符合条件的养护知识。模型回答保存后自动解析入库；解析失败可进入任务重试。</p>';
+    }
+    let carePage = 1, careTotal = 0, careVersion = 0;
+    async function loadCareLibrary() {
+      const version = ++careVersion;
+      multiEl('careMessage').textContent = '正在读取养护知识…';
+      multiEl('carePrev').disabled = multiEl('careNext').disabled = true;
+      try {
+        const params = new URLSearchParams({page:carePage, q:multiEl('careQuery').value.trim(), species:multiEl('careSpecies').value, category:multiEl('careCategory').value});
+        const packet = await api('/api/admin/multi-model/daily-care-points?' + params);
+        if (version !== careVersion) return;
+        if (multiEl('careCategory').options.length === 1) {
+          Object.entries(packet.categories || {}).forEach(([value,label]) => multiEl('careCategory').add(new Option(label, value)));
+        }
+        careTotal = packet.total;
+        multiEl('careResults').innerHTML = renderCarePoints(packet);
+        multiEl('carePage').textContent = `第 ${carePage} 页 · 共 ${packet.total} 条`;
+        multiEl('careMessage').textContent = '养护知识已更新';
+        multiEl('carePrev').disabled = carePage <= 1;
+        multiEl('careNext').disabled = carePage * packet.page_size >= packet.total;
+      } catch (error) {
+        if (version !== careVersion) return;
+        multiEl('careResults').innerHTML = '';
+        multiEl('carePage').textContent = '';
+        multiEl('careMessage').textContent = error.message;
+      }
+    }
+    multiEl('careSearch').addEventListener('submit', event => { event.preventDefault(); carePage = 1; loadCareLibrary(); });
+    multiEl('carePrev').addEventListener('click', () => { if (carePage > 1) { carePage--; loadCareLibrary(); } });
+    multiEl('careNext').addEventListener('click', () => { if (carePage * 20 < careTotal) { carePage++; loadCareLibrary(); } });
+
     function renderMultiHealthScenario(point) {
       const scene = point.scenario_data;
       const list = items => '<ul>' + (items || []).map(value => '<li>' + escapeHtml(value) + '</li>').join('') + '</ul>';
@@ -4661,7 +4715,8 @@
       if (result.behavior_pipeline) importHtml = renderBehaviorPipeline(result.behavior_pipeline, id);
       const points = result.points || [];
       const pointRows = points.map(c => `<tr><td>#${c.batch_id}<br>${escapeHtml(multiLabels[c.source_provider || c.provider] || c.source_provider || c.provider)}</td><td>${standardMappingHtml(c)}</td><td>${topicMappingHtml(c)}</td><td style="white-space:pre-wrap;min-width:260px;">${escapeHtml(c.content)}</td></tr>`).join('');
-      multiEl('multiDetailBody').innerHTML = importHtml + `<p style="white-space:pre-wrap;">${escapeHtml(result.task.question)}</p><details><summary>本次提示词模板</summary><pre style="white-space:pre-wrap;overflow-wrap:anywhere;">${escapeHtml(result.task.template_text)}</pre></details>` + result.responses.map(r => `<div style="margin-top:16px;"><strong>批次 #${r.id} · ${escapeHtml(multiLabels[r.provider] || r.provider)} · ${escapeHtml(r.model_name)}</strong><p>${escapeHtml(multiStates[r.status] || r.status)} · 输入 Token ${r.prompt_tokens ?? '—'} / 输出 Token ${r.completion_tokens ?? '—'}</p>${multiSearchHtml(r.search_metadata)}${result.task.knowledge_base === 'selection' ? multiProductImportHtml(r.product_import) : ''}${r.error_message || r.import_error ? `<p style="color:#b42318;white-space:pre-wrap;">${escapeHtml(r.error_message || r.import_error)}</p>` : ''}<details><summary>查看模型原始回答</summary><pre style="white-space:pre-wrap;overflow-wrap:anywhere;max-height:400px;overflow:auto;">${escapeHtml(r.raw_text || '暂无回答')}</pre></details></div>`).join('') + (['solution', 'behavior'].includes(result.task.knowledge_base) ? '' : `<h3>拆解结果（${points.length}）</h3>` + (pointRows ? `<div class="table-wrap"><table><thead><tr><th>批次 / 模型</th><th>适用条件映射</th><th>知识分类 / 主题</th><th>正文</th></tr></thead><tbody>${pointRows}</tbody></table></div>` : '<p class="muted">暂无拆解内容；处理中任务稍后自动刷新。</p>'));
+      multiEl('multiDetailBody').innerHTML = importHtml + `<p style="white-space:pre-wrap;">${escapeHtml(result.task.question)}</p><details><summary>本次提示词模板</summary><pre style="white-space:pre-wrap;overflow-wrap:anywhere;">${escapeHtml(result.task.template_text)}</pre></details>` + result.responses.map(r => `<div style="margin-top:16px;"><strong>批次 #${r.id} · ${escapeHtml(multiLabels[r.provider] || r.provider)} · ${escapeHtml(r.model_name)}</strong><p>${escapeHtml(multiStates[r.status] || r.status)} · 输入 Token ${r.prompt_tokens ?? '—'} / 输出 Token ${r.completion_tokens ?? '—'}</p>${multiSearchHtml(r.search_metadata)}${result.task.knowledge_base === 'selection' ? multiProductImportHtml(r.product_import) : ''}${r.error_message || r.import_error ? `<p style="color:#b42318;white-space:pre-wrap;">${escapeHtml(r.error_message || r.import_error)}</p>` : ''}<details><summary>查看模型原始回答</summary><pre style="white-space:pre-wrap;overflow-wrap:anywhere;max-height:400px;overflow:auto;">${escapeHtml(r.raw_text || '暂无回答')}</pre></details></div>`).join('') + (['solution', 'behavior', 'daily_care'].includes(result.task.knowledge_base) ? '' : `<h3>拆解结果（${points.length}）</h3>` + (pointRows ? `<div class="table-wrap"><table><thead><tr><th>批次 / 模型</th><th>适用条件映射</th><th>知识分类 / 主题</th><th>正文</th></tr></thead><tbody>${pointRows}</tbody></table></div>` : '<p class="muted">暂无拆解内容；处理中任务稍后自动刷新。</p>'));
+      if (result.care_structured) multiEl('multiDetailBody').insertAdjacentHTML('beforeend', `<h3>日常养护知识（${Number(result.care_structured.total)}）</h3>` + renderCarePoints(result.care_structured));
       if (result.solution_structured) multiEl('multiDetailBody').insertAdjacentHTML('beforeend', renderMultiSolutions(result.solution_structured));
       if (result.behavior_structured) {
         multiEl('multiDetailBody').insertAdjacentHTML('beforeend', `<h3>宠物行为知识（${Number(result.behavior_structured.total)}）</h3>` + renderBehaviorPoints(result.behavior_structured));
