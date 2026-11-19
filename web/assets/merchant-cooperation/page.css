@@ -111,3 +111,34 @@ h1 { font-size: 31px; line-height: 48px; }
   html { scroll-behavior: auto; }
   *, *::before, *::after { transition: none !important; }
 }
+
+/* Official icon-only logo and merchant enquiry form. */
+.brand-mark { width: 48px; height: 48px; overflow: hidden; position: relative; display: block; }
+.brand-mark img { position: absolute; width: 72px; height: 72px; max-width: none; left: -12px; top: -12px; }
+.lead-layout { display: grid; gap: 24px; }
+.lead-intro { display: flex; flex-direction: column; gap: 16px; }
+.lead-intro > p:not(.eyebrow) { color: var(--muted); font-size: 15px; }
+.lead-intro .lead-note { font-size: 13px; line-height: 1.7; }
+.lead-form { padding: 24px; background: white; border-radius: 20px; min-width: 0; }
+.form-grid { display: grid; gap: 20px; }
+.form-grid label { display: block; font-size: 14px; font-weight: 500; min-width: 0; }
+.form-grid label > span { color: var(--accent); }
+.form-grid label > .optional { color: var(--muted); font-weight: 400; }
+.form-grid input, .form-grid select, .form-grid textarea { display: block; width: 100%; margin-top: 8px; min-height: 48px; padding: 12px 14px; border: 1px solid #e6dff0; border-radius: 10px; background: var(--background); color: var(--ink); font: inherit; font-size: 16px; line-height: 24px; }
+.form-grid textarea { resize: vertical; }
+.form-grid input::placeholder, .form-grid textarea::placeholder { color: var(--muted); }
+.form-grid :is(input, select, textarea):focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+.consent { display: flex; align-items: flex-start; gap: 10px; margin: 20px 0; font-size: 13px; color: var(--muted); cursor: pointer; }
+.consent input { flex: 0 0 18px; width: 18px; height: 18px; margin: 2px 0 0; accent-color: var(--brand); }
+.lead-form .primary-button { border: 0; cursor: pointer; }
+.lead-form .primary-button:disabled { opacity: .65; cursor: wait; }
+.form-status { margin-top: 12px; font-size: 14px; color: var(--ink); }
+.form-status:empty { display: none; }
+.form-status[data-state="error"] { color: #a33244; }
+.form-status[data-state="success"] { color: #286049; }
+@media(min-width:820px) {
+  .lead-layout { grid-template-columns: minmax(0,320fr) minmax(0,816fr); gap: clamp(28px,4.45vw,64px); }
+  .lead-form { padding: 32px; }
+  .form-grid { grid-template-columns: repeat(2,minmax(0,1fr)); }
+  .full-width { grid-column: 1 / -1; }
+}

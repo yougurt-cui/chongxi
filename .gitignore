@@ -51,3 +51,6 @@ get-pip.py
 *.jpg
 *.jpeg
 *.webp
+
+# Official merchant-page logo source (also embedded in the standalone HTML).
+!web/assets/merchant-cooperation/logo.png

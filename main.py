@@ -39,6 +39,7 @@ try:
     from .api.miniprogram_api import miniprogram_api
     from .api.miniprogram_image_generation_api import image_generation_api
     from .api.db_sync_api import db_sync_api
+    from .api.merchant_lead_api import merchant_lead_api
     from .api.enterprise_api import enterprise_api
     from .api.formula_profile_api import formula_profile_api
     from .api.market_profile_api import market_profile_api
@@ -67,6 +68,7 @@ except ImportError:
     from api.miniprogram_api import miniprogram_api
     from api.miniprogram_image_generation_api import image_generation_api
     from api.db_sync_api import db_sync_api
+    from api.merchant_lead_api import merchant_lead_api
     from api.enterprise_api import enterprise_api
     from api.formula_profile_api import formula_profile_api
     from api.market_profile_api import market_profile_api
@@ -1960,6 +1962,7 @@ def create_app() -> Flask:
     flask_app.register_blueprint(image_generation_api)
     flask_app.register_blueprint(db_sync_api)
     flask_app.register_blueprint(enterprise_api)
+    flask_app.register_blueprint(merchant_lead_api)
     flask_app.register_blueprint(formula_profile_api)
     flask_app.register_blueprint(market_profile_api)
     flask_app.register_blueprint(comment_clean_sync_api)
@@ -2131,6 +2134,10 @@ def create_app() -> Flask:
         response = send_from_directory(WEB_DIR, "halloween-report.html")
         response.headers["Cache-Control"] = "private, no-store"
         return response
+
+    @flask_app.get("/merchant-cooperation.html")
+    def merchant_cooperation_html():
+        return send_from_directory(WEB_DIR, "merchant-cooperation.html")
 
     @flask_app.get("/halloween.html")
     def halloween_html():
