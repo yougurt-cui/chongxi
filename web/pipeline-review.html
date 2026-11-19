@@ -4630,9 +4630,21 @@
     multiEl('behaviorPrev').addEventListener('click', () => { if (behaviorPage > 1) { behaviorPage--; loadBehaviorLibrary(); } });
     multiEl('behaviorNext').addEventListener('click', () => { if (behaviorPage * 20 < behaviorTotal) { behaviorPage++; loadBehaviorLibrary(); } });
 
+    function renderCareActivity(row) {
+      const p = row.point_data, activity = p.care_activity;
+      const labels = {schedule:'时间和周期',tools_materials:'工具与用品',methods:'操作方法',avoidances:'避免事项',observations:'养护前、中、后观察',adjustment_rules:'调整与停止条件'};
+      const json = value => `<pre style="white-space:pre-wrap;overflow-wrap:anywhere;">${escapeHtml(JSON.stringify(value ?? null, null, 2))}</pre>`;
+      return `<article style="padding:16px;margin:12px 0;border:1px solid var(--line);border-radius:10px;">
+        <h4>${escapeHtml(row.care_name)}</h4><p>${behaviorScopeLabel(row)} · ${escapeHtml(row.category_name)}<br>需求：${escapeHtml(row.need_code || p.need_code || 'unknown')} · 活动：${escapeHtml(row.care_code)} · 子类型：${escapeHtml(row.care_subtype || p.care_subtype || 'unknown')}</p>
+        <strong>养护目标</strong><p>${escapeHtml(activity.care_objective || '原文未提供')}</p>
+        <strong>适用条件</strong>${json(row.applicable_conditions)}
+        ${Object.entries(labels).map(([key,label]) => `<strong>${label}</strong>${json(row[key] === undefined ? activity[key] : row[key])}`).join('')}
+        <details><summary>模型来源、原文及审核状态</summary><p>任务 #${Number(row.task_id)} · 批次 #${Number(row.batch_id)} · ${escapeHtml(row.source_provider)} / ${escapeHtml(row.source_model)}<br>问题：${escapeHtml(row.source_question)}<br>原始证据状态：${escapeHtml(p.evidence_status)} · 审核：${escapeHtml(({pending:'待审核',verified:'已审核',rejected:'已拒绝'})[row.review_status] || row.review_status)}</p>${json(activity)}</details>
+      </article>`;
+    }
     function renderCarePoints(packet) {
       const list = values => (values || []).length ? '<ul>' + values.map(v => '<li>' + escapeHtml(v) + '</li>').join('') + '</ul>' : '<p class="muted">未提供</p>';
-      return (packet.items || []).map(row => `<article style="padding:16px;margin:12px 0;border:1px solid var(--line);border-radius:10px;">
+      return (packet.items || []).map(row => row.point_data?.record_type === 'care_activity' ? renderCareActivity(row) : `<article style="padding:16px;margin:12px 0;border:1px solid var(--line);border-radius:10px;">
         <h4>${escapeHtml(row.care_name)}</h4><p>${behaviorScopeLabel(row)} · ${escapeHtml(row.category_name)} · ${escapeHtml(row.care_code)}</p>
         <strong>适用条件</strong>${list(row.applicable_conditions)}<strong>护理频率与调整依据</strong><p>${escapeHtml(row.frequency)}</p>
         <strong>操作步骤</strong><ol>${(row.steps || []).map(step => '<li>' + escapeHtml(step.action) + '<br><small>' + escapeHtml(step.reason) + '</small></li>').join('')}</ol>

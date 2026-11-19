@@ -266,6 +266,8 @@ def count_points(parsed):
     """Count validated health groups or dimension items without assuming one schema."""
     if not parsed:
         return 0
+    if 'care_activities' in parsed:
+        return len(parsed['care_activities'])
     if 'care_points' in parsed:
         return len(parsed['care_points'])
     if 'behaviors' in parsed:

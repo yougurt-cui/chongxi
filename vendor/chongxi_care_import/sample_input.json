@@ -1,0 +1,22 @@
+{
+  "question": "猫咪驱虫",
+  "species": "cat",
+  "breed": "unknown",
+  "life_stage": "unknown",
+  "care_activities": [{
+    "care_domain": "preventive_care",
+    "care_category": "寄生虫预防",
+    "care_activity_code": "cat_deworming",
+    "care_activity_name": "猫咪日常驱虫",
+    "care_type": "routine",
+    "care_objective": "预防猫咪寄生虫感染",
+    "applicable_conditions": ["幼猫使用产品时需确认最低适用年龄", "成年猫根据风险评估确定周期"],
+    "schedule": {"start_condition":"以产品适用年龄和体重要求为准", "frequency":null,"frequency_basis":"产品标签与风险评估"},
+    "tools_materials": [{"name":"体重秤","purpose":"准确称量体重"}],
+    "methods": [{"step":1,"action":"准确称量体重","precautions":["不要自行估算药物剂量"]}],
+    "avoidances": [{"action":"使用不适用于猫的犬用产品","avoidance_type":"prohibited"}],
+    "observations":{"before": [{"observation_name":"精神与食欲"}],"during":[],"after":[{"observation_name":"给药后反复呕吐"}]},
+    "adjustment_rules":[{"condition":"出现抽搐或呼吸困难","action_type":"urgent","recommendation":"立即联系兽医急诊"}],
+    "source_ids": [], "evidence_status":"pending_review"
+  }]
+}

@@ -56,8 +56,8 @@ def _ensure_database(name):
             ensure_solution_schema(cur)
             from services.behavior_knowledge_service import DDL as BEHAVIOR_DDL
             cur.execute(BEHAVIOR_DDL)
-            from services.daily_care_knowledge_service import DDL as CARE_DDL
-            cur.execute(CARE_DDL)
+            from services.daily_care_knowledge_service import ensure_schema as ensure_care_schema
+            ensure_care_schema(cur)
             from services.behavior_model_pipeline import ensure_schema as ensure_behavior_pipeline
             ensure_behavior_pipeline(cur)
             cur.execute('SHOW COLUMNS FROM knowledge_point_source_detail')

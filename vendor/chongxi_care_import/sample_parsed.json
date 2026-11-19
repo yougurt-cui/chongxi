@@ -1,0 +1,142 @@
+[
+  {
+    "species": "cat",
+    "breed": "unknown",
+    "life_stage": "unknown",
+    "need_code": "parasite_prevention",
+    "care_activity_code": "cat_deworming",
+    "care_activity_name": "猫咪日常驱虫",
+    "care_subtype": "unknown",
+    "care_domain": "preventive_care",
+    "care_category": "寄生虫预防",
+    "care_type": "routine",
+    "source_question": "猫咪驱虫",
+    "source_ids": [],
+    "evidence_status": "pending_review",
+    "review_status": "pending_review",
+    "source_batch": "example-001",
+    "original_payload": {
+      "care_domain": "preventive_care",
+      "care_category": "寄生虫预防",
+      "care_activity_code": "cat_deworming",
+      "care_activity_name": "猫咪日常驱虫",
+      "care_type": "routine",
+      "care_objective": "预防猫咪寄生虫感染",
+      "applicable_conditions": [
+        "幼猫使用产品时需确认最低适用年龄",
+        "成年猫根据风险评估确定周期"
+      ],
+      "schedule": {
+        "start_condition": "以产品适用年龄和体重要求为准",
+        "frequency": null,
+        "frequency_basis": "产品标签与风险评估"
+      },
+      "tools_materials": [
+        {
+          "name": "体重秤",
+          "purpose": "准确称量体重"
+        }
+      ],
+      "methods": [
+        {
+          "step": 1,
+          "action": "准确称量体重",
+          "precautions": [
+            "不要自行估算药物剂量"
+          ]
+        }
+      ],
+      "avoidances": [
+        {
+          "action": "使用不适用于猫的犬用产品",
+          "avoidance_type": "prohibited"
+        }
+      ],
+      "observations": {
+        "before": [
+          {
+            "observation_name": "精神与食欲"
+          }
+        ],
+        "during": [],
+        "after": [
+          {
+            "observation_name": "给药后反复呕吐"
+          }
+        ]
+      },
+      "adjustment_rules": [
+        {
+          "condition": "出现抽搐或呼吸困难",
+          "action_type": "urgent",
+          "recommendation": "立即联系兽医急诊"
+        }
+      ],
+      "source_ids": [],
+      "evidence_status": "pending_review"
+    },
+    "source_scope": {
+      "species": "cat",
+      "breed": "unknown",
+      "life_stage": "unknown",
+      "care_subtype": null
+    },
+    "applicable_conditions": [
+      "幼猫使用产品时需确认最低适用年龄",
+      "成年猫根据风险评估确定周期"
+    ],
+    "schedule": {
+      "start_condition": "以产品适用年龄和体重要求为准",
+      "frequency": null,
+      "frequency_basis": "产品标签与风险评估"
+    },
+    "tools_materials": [
+      {
+        "name": "体重秤",
+        "purpose": "准确称量体重"
+      }
+    ],
+    "methods": [
+      {
+        "step": 1,
+        "action": "准确称量体重",
+        "precautions": [
+          "不要自行估算药物剂量"
+        ]
+      }
+    ],
+    "avoidances": [
+      {
+        "action": "使用不适用于猫的犬用产品",
+        "avoidance_type": "prohibited"
+      }
+    ],
+    "observations": {
+      "before": [
+        {
+          "observation_name": "精神与食欲"
+        }
+      ],
+      "during": [],
+      "after": [
+        {
+          "observation_name": "给药后反复呕吐"
+        }
+      ]
+    },
+    "adjustment_rules": [
+      {
+        "condition": "出现抽搐或呼吸困难",
+        "action_type": "urgent",
+        "recommendation": "立即联系兽医急诊"
+      }
+    ],
+    "extraction_mode": "conservative",
+    "extraction_notes": [
+      "一条原始养护活动对应一条候选记录；优先保留活动内明确维度，未指定时继承顶层",
+      "不通过用药途径推断体内/体外，不扩增缺少依据的生命阶段或场景",
+      "原始内容完整保留；周期、剂量、来源仍需人工审核"
+    ],
+    "knowledge_key": "b1f3c04bbd8796f2a670c5507ff20772583c60baf0203e523ee5399f0b925da8"
+  }
+]
