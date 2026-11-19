@@ -86,7 +86,7 @@ def migrate(conn, *, apply=False, backup_dir=None):
             raise ValueError('解决方案采集正在运行，不能迁移')
         result['backup'] = backup(cur, Path(backup_dir))
         if not legacy:
-            result.update(scenes.refresh(conn,rows=rows));conn.commit()
+            result.update(scenes.refresh(conn,rows=rows,summarize=False));conn.commit()
             return result
         if exists(cur, ARCHIVE) or exists(cur, STAGING):
             raise ValueError('已有迁移归档或暂存表，请核对上次执行状态')
@@ -104,7 +104,7 @@ def migrate(conn, *, apply=False, backup_dir=None):
         if copied != original:
             raise ValueError('候选明细逐字段校验失败，尚未切换主表')
         cur.execute(scenes.DDL.replace('CREATE TABLE IF NOT EXISTS '+MAIN, 'CREATE TABLE '+STAGING, 1))
-        scenes.refresh(conn, table=STAGING,rows=rows)
+        scenes.refresh(conn, table=STAGING,rows=rows,summarize=False)
         conn.commit()
         cur.execute('SELECT * FROM '+STAGING+' ORDER BY id')
         built = list(cur.fetchall())

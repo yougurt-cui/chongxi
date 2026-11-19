@@ -73,7 +73,7 @@ def migrate(*,apply=False,backup_root=None):
                 if stripped!=[normalized(r) for r in expected]:raise ValueError('来源逐字段校验失败，旧表保留')
                 from services.solution_scene_service import refresh
                 from services.health_solution_service import refresh_groups,scenario_key
-                refresh(conn)
+                refresh(conn,summarize=False)
                 affected={scenario_key(store.decode(r['scenario_data'])) for r in expected if r.get('scenario_data')}
                 refresh_groups(conn,affected)
                 for table in ('solution_knowledge_point','health_solution'):

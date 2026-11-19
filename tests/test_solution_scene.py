@@ -84,11 +84,11 @@ def test_idempotent_refresh_preserves_reviewed_scene_and_rejects_changes(monkeyp
     point={**scenes.materialize(key,sources),'id':99,'review_status':'verified'}
     monkeypatch.setattr('services.solution_knowledge_service.source_rows',lambda cur:[source()])
     cur.fetchall.side_effect=[[point]]
-    assert scenes.refresh(conn)['changed_count'] == 0
+    assert scenes.refresh(conn,summarize=False)['changed_count'] == 0
     monkeypatch.setattr('services.solution_knowledge_service.source_rows',lambda cur:[source(solution=['changed'])])
     cur.fetchall.side_effect=[[point]]
     with pytest.raises(ValueError,match='人工审核'):
-        scenes.refresh(conn)
+        scenes.refresh(conn,summarize=False)
     assert not any(c.args[0].startswith(('INSERT','UPDATE','DELETE')) for c in cur.execute.call_args_list)
 
 

@@ -122,3 +122,26 @@ JSON 有前言或代码围栏时可提取完整外层对象；外层损坏时不
 每次成功解析后同一事务内更新批次快照和两张场景表，沿用导入锁、五维归组、显式编码映射和代表方案规则；不新增大模型融合调用。重复解析保留 ID 和审核状态，已审核内容变化仍拒绝并回滚。通用旧格式方案保留在批次快照，不能明确场景的内容不虚构场景主记录。
 
 停止 API/采集后执行 `python scripts/remove_solution_source_detail.py` 预览，加 `--apply` 迁移并移除旧表。脚本在 `var/solution-source-backups` 保存旧表、两张场景表和原始批次备份，逐字段验证来源快照并确认两张场景表完全不变后删除旧表。再次执行返回 already_removed，初始化不会重新创建旧表。上文旧明细表说明仅适用于迁移前结构。
+
+## 千问二次总结（2026-11-19）
+
+`solution_knowledge_point` 现在由千问基于保存的模型来源生成候选总结，不再仅展示最早来源。
+先按物种、品种、生命阶段、需求隔离对象范围，再调用千问对齐语义相近的场景。对齐后的场景编码仍组成五维唯一键；每个原编码必须完整、唯一归组，原文及不同前提均保留。未知范围不扩大为全部，年龄阶段不跨组。
+归组后总结可能原因、操作步骤、记录字段、停止条件及验证内容，保留原始不确定性与分歧。
+所有来源、原因条目和步骤均须有合法引用并完整覆盖；不允许引用其他场景或已拒绝来源。
+不同原始方案的步骤或 verification 不完全相同时，强制分成不同 plan，保持步骤和四项验证条件绑定。
+主表 steps 带 plan_id/source_refs，verification 文本带方案编号；完整结构化总结及引用保存在 summary_meta。
+
+summary_meta 包含 status、version、provider、model、processed_at、input_hash、notes、disagreements、
+usage、source_index、structured_summary 和审计文件位置。原始模型方案继续保留在 sources 和批次的
+solution_parse_result，health_solution 兼容表维持原有处理，不被本次总结改写。
+总结结果始终候选待审核；已审核记录发生内容/来源变化时拒绝自动覆盖。
+版本及来源哈希未变时复用已有总结，不额外调用模型。经校验的模型回答在
+var/multi-model/solution-summary-cache 缓存，保存每次调用的原始回答、完成原因和用量，
+事务失败后重试可复用已成功调用，避免重复付费。
+
+每次解决方案入库后自动更新受影响的总结；手工“重新解析/入库”使用同一流程。
+现有记录可用 `python scripts/summarize_solution_knowledge.py` 预览，加 `--apply` 后备份并执行总结。
+脚本逐场景提交，失败保留该组旧结果，已完成组无需重跑。不会重新向原采集模型提问。
+
+场景对齐调用及缓存位于 `var/multi-model/solution-scene-alignment`，其模型、版本、理由、原编码和用量保存在结果 `summary_meta.scene_alignment`。主表场景字段展开全部来源前提；每个总结方案通过 source_ids 关联自己的 source_index.scenario。页面逐方案展示适用前提、步骤和验证，不能把一套方案的措施套用到另一套前提。已有不同编码的待审核旧行仅在新组总结成功后退役；已审核旧行不会自动覆盖或删除。

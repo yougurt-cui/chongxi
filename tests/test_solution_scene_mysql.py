@@ -17,6 +17,13 @@ from scripts.remove_solution_source_detail import migrate as remove_detail
 pytestmark = pytest.mark.skipif(os.getenv('SOLUTION_SCENE_MYSQL_TEST') != '1', reason='requires disposable MySQL database')
 
 
+@pytest.fixture(autouse=True)
+def no_paid_models(monkeypatch):
+    from tests.test_solution_summary import fake_summary
+    monkeypatch.setattr('services.solution_summary_service.summarize',fake_summary)
+    monkeypatch.setattr('services.solution_scene_alignment_service.align',lambda scope,entries,generate:None)
+
+
 @pytest.fixture
 def database(monkeypatch):
     cfg = get_mysql_config(database='chongxi_model_knowledge')

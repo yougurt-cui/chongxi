@@ -27,13 +27,14 @@ DDL = '''CREATE TABLE IF NOT EXISTS solution_knowledge_point (
  evidence_status VARCHAR(32) NOT NULL DEFAULT 'pending_verification',
  review_status VARCHAR(32) NOT NULL DEFAULT 'pending',
  input_hash CHAR(64) NOT NULL,
+ summary_meta JSON NULL,
  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
  UNIQUE KEY uk_solution_scene (species_code,breed_code,life_stage_code,need_code,scenario_code),
  KEY idx_solution_scope (species_code,breed_code,life_stage_code,need_code),
  KEY idx_solution_review (review_status)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin'''
-JSON_FIELDS = ('possible_causes', 'steps', 'record_fields', 'verification', 'stop_conditions', 'sources', 'source_urls')
+JSON_FIELDS = ('possible_causes', 'steps', 'record_fields', 'verification', 'stop_conditions', 'sources', 'source_urls', 'summary_meta')
 
 
 def registry():
@@ -62,9 +63,11 @@ def ensure_schema(cur):
     if columns and 'batch_id' in columns:
         raise ValueError('解决方案仍是旧候选表，请先运行 migrate_solution_scene_grain.py 备份迁移')
     cur.execute(DDL)
+    if columns and 'summary_meta' not in columns:
+        cur.execute('ALTER TABLE solution_knowledge_point ADD COLUMN summary_meta JSON NULL')
 
 
-def source_groups(rows):
+def source_groups(rows,*,align=False,use_alignment=False):
     aliases = registry()
     groups = {}
     for row in rows:
@@ -80,6 +83,9 @@ def source_groups(rows):
                   'source_urls': store.decode(row['source_urls']) or [],
                   'scenario_data': point, 'raw_json': store.decode(row['raw_json'])}
         groups.setdefault(key, []).append(source)
+    if align or use_alignment:
+        from services.solution_scene_alignment_service import regroup
+        return regroup(groups,generate=align)
     return groups
 
 
@@ -104,23 +110,40 @@ def materialize(key, sources):
             'input_hash': hashlib.sha256(store.dumps(payload).encode()).hexdigest()}
 
 
-def refresh(conn, table='solution_knowledge_point', *, rows=None):
+def refresh(conn, table='solution_knowledge_point', *, rows=None, summarize=True, summarizer=None, keys=None):
     """Called under the solution importer lock, in the same data transaction."""
     if table not in {'solution_knowledge_point', 'solution_knowledge_point_scene_staging'}:
         raise ValueError('Invalid solution summary table')
     with conn.cursor() as cur:
         from services.solution_knowledge_service import source_rows
-        groups = source_groups(source_rows(cur) if rows is None else rows)
+        groups = source_groups(source_rows(cur) if rows is None else rows,align=summarize)
         cur.execute('SELECT * FROM '+table+' ORDER BY id FOR UPDATE')
         previous = {tuple(r[k] for k in GRAIN): r for r in cur.fetchall()}
         changed = 0
-        for key in sorted(set(previous) | set(groups)):
+        selected=set(previous) | set(groups)
+        if keys is not None:selected &= set(keys)
+        for key in sorted(selected):
             old = previous.get(key)
             value = materialize(key, groups[key]) if key in groups else None
-            if old and value and old['input_hash'] == value['input_hash']:
-                continue
+            meta=store.decode(old.get('summary_meta')) if old else None
+            if value and summarize:
+                from services import solution_summary_service as summary
+                expected=summary.fingerprint(key,groups[key])
+                if old and meta and meta.get('status')=='success' and meta.get('input_hash')==expected:
+                    continue
+            elif old and value:
+                if old['input_hash']==value['input_hash'] or (meta and meta.get('status')=='success' and store.decode(old['sources'])==value['sources']):
+                    continue
             if old and old['review_status'] != 'pending':
                 raise ValueError('场景方案已有人工审核，来源或内容变化需人工处理')
+            if value and summarize:
+                model_value,model_meta=(summarizer or summary.summarize)(key,groups[key])
+                value.update(summary.materialize(model_value,groups[key]),summary_meta=model_meta,input_hash=expected)
+                variants=list(dict.fromkeys(s['scenario_data']['scenario'] for s in groups[key] if s['review_status']!='rejected'))
+                if len(variants)>1:
+                    value['scenario']='相近观测场景；以下各来源的额外前提分别适用：\n'+'\n\n'.join('【来源场景 '+str(i)+'】'+text for i,text in enumerate(variants,1))
+            elif value:
+                value['summary_meta']=None
             if value is None:
                 cur.execute('DELETE FROM '+table+' WHERE id=%s', (old['id'],))
             else:
