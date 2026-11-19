@@ -8,7 +8,10 @@ from pathlib import Path
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from services import model_knowledge_import_service as store
-from services.behavior_model_pipeline import PARSE_FIELDS, ensure_schema, parse_lock_name
+from services.behavior_model_pipeline import parse_lock_name
+# Historical transformation retained for backup inspection only.
+PARSE_FIELDS = ('parse_status','parse_source_hash','parser_version','parse_attempts','point_count',
+                'parse_error','parse_started_at','parsed_at','parse_history')
 
 OLD_TABLE = 'behavior_knowledge_parse_run'
 
@@ -45,6 +48,7 @@ def merge_record(call, runs):
 
 
 def migrate(*, apply=False, backup_root=None):
+    if apply:raise ValueError('此历史迁移已停用，请使用 scripts/migrate_behavior_summary.py')
     with store.connect() as conn, conn.cursor() as cur:
         locks = []
         try:

@@ -203,6 +203,8 @@ def task_detail(task_id):
         from services.behavior_knowledge_service import list_points
         from services.behavior_model_pipeline import task_status
         result['behavior_structured'] = list_points(task_id=task_id)
+        from services.behavior_knowledge_summary_service import list_points as summary_points
+        result['behavior_summary'] = summary_points(task_id=task_id)
         result['behavior_pipeline'] = task_status(task_id)
         calls = {c['batch_id']: c for c in result['behavior_pipeline']['calls']}
         for response in responses:

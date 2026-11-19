@@ -158,6 +158,8 @@ def test_task_detail_uses_behavior_candidates_without_selection_assembly():
     with patch.object(multi, 'ensure_tables'), patch.object(store, 'connect', return_value=conn), \
          patch.object(store, 'task_status', return_value={}), \
          patch('services.behavior_model_pipeline.task_status', return_value={'calls':[]}), \
+         patch('services.behavior_knowledge_summary_service.list_points', return_value={'items':[], 'total':0}), \
+         patch('services.behavior_knowledge_summary_service.list_points', return_value={'items':[], 'total':0}), \
          patch.object(behavior, 'list_points', return_value={'items':[], 'total':0}) as points, \
          patch('services.knowledge_source_assembly_service.task_objects') as assembly:
         result = multi.task_detail(5)

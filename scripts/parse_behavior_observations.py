@@ -39,8 +39,8 @@ def migrate(*, apply=False, backup_root=None, task_id=None, batch_id=None, archi
             for table in ('knowledge_import_batch', 'behavior_knowledge_point_detail'):
                 cur.execute('SHOW CREATE TABLE `' + table + '`'); schemas[table] = cur.fetchone()
     summary = {'mode': 'apply' if apply else 'preview', 'database': store.database_name(),
-        'call_table': 'behavior_model_call', 'knowledge_table': 'behavior_knowledge_point_detail',
-        'parse_log_table': 'behavior_model_call', 'batch_count': len(batches),
+        'call_table': 'knowledge_import_batch', 'knowledge_table': 'behavior_knowledge_point_detail',
+        'parse_log_table': 'knowledge_import_batch.behavior_parse_result', 'batch_count': len(batches),
         'existing_points': len(details), 'model_calls': 0,
         'batches': [{'batch_id': b['id'], 'task_id': b['task_id'], 'provider': b['provider'],
                      'collection_status': 'success' if b['status'] == 'parse_failed' else b['status']} for b in batches]}

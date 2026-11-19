@@ -10,7 +10,7 @@ def test_preview_never_writes_database_or_creates_backup(tmp_path):
     with patch.object(script.store,'connect',return_value=conn),patch.object(script.store,'ensure_database') as schema:
         result=script.migrate(backup_root=tmp_path/'backup',task_id=539)
     assert result['mode']=='preview' and result['batch_count']==1 and result['existing_points']==1
-    assert result['call_table']=='behavior_model_call' and result['model_calls']==0
+    assert result['call_table']=='knowledge_import_batch' and result['model_calls']==0
     assert not (tmp_path/'backup').exists()
     assert all(c.args[0].startswith('SELECT') for c in cur.execute.call_args_list)
     assert cur.execute.call_args_list[0].args[1]==[539]

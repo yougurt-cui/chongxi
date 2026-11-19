@@ -36,43 +36,35 @@ def test_behavior_auto_parse_runs_only_after_raw_call_commit():
     assert all('behavior_knowledge_point_detail' not in c.args[0] for c in cur.execute.call_args_list)
 
 
-def test_raw_snapshot_is_idempotent_and_rejects_overwriting_history():
+def test_call_uses_original_batch_without_dedicated_call_table():
+    conn,cur=connection();cur.fetchone.return_value={'id':5}
+    assert pipeline.snapshot_call(cur,5,request_prompt='rendered')==5
+    assert all('behavior_model_call' not in c.args[0] for c in cur.execute.call_args_list)
+    assert 'behavior_parse_result' in cur.execute.call_args_list[-1].args[0]
+
+
+def test_parse_saves_state_then_calls_summary():
     conn,cur=connection()
-    batch={'id':5,'knowledge_base':'behavior','status':'parse_failed','raw_response':'raw','prompt_template':'template'}
-    old={'id':7,'response_hash':hashlib.sha256(b'raw').hexdigest(),'prompt_template':'template'}
-    cur.fetchone.side_effect=[batch,old]
-    assert pipeline.snapshot_call(cur,5)==7
-    assert not any(c.args[0].startswith(('INSERT','UPDATE','DELETE')) for c in cur.execute.call_args_list)
-    cur.fetchone.side_effect=[{**batch,'raw_response':'changed'},old]
-    with pytest.raises(ValueError,match='不覆盖'):pipeline.snapshot_call(cur,5)
-
-
-def test_explicit_parse_reads_saved_response_and_logs_success_without_calling_models():
-    conn,cur=connection();call={'id':7,'call_status':'success','raw_response':json.dumps(document()),
-        'question':document()['question'],'response_hash':'a'*64}
-    cur.fetchone.side_effect=[{'acquired':1},call]
+    batch={'id':5,'status':'success','raw_response':json.dumps(document()),'question':document()['question']}
+    cur.fetchone.side_effect=[{'acquired':1},batch]
     with patch.object(store,'ensure_database'),patch.object(store,'connect',return_value=conn), \
-         patch.object(pipeline,'ensure_call',return_value=7), \
          patch('services.behavior_knowledge_service._import_points',return_value={'total_count':1,'status':'completed'}) as writer, \
-         patch.object(run,'call_provider') as model:
+         patch('services.behavior_knowledge_summary_service.refresh',return_value={'total':1}) as summarize:
         result=pipeline.parse_batch(5)
-    assert result['source_call_id']==7
-    writer.assert_called_once_with(5,document(),call_id=7,source_hash='a'*64,parser_version=pipeline.PARSER_VERSION)
-    model.assert_not_called()
-    statements=[c.args[0] for c in cur.execute.call_args_list]
-    assert any(c.args[0].startswith('UPDATE behavior_model_call SET parse_status=%s') and c.args[1][0]=='completed' for c in cur.execute.call_args_list)
-    assert not any(s.startswith('UPDATE knowledge_import_batch') or 'SET call_status=' in s or 'SET raw_response=' in s for s in statements)
+    writer.assert_called_once();summarize.assert_called_once()
+    assert result['summary']=={'total':1}
+    assert all('behavior_model_call' not in c.args[0] for c in cur.execute.call_args_list)
 
 
 def test_parse_failure_is_logged_separately_and_does_not_change_successful_call():
-    conn,cur=connection();cur.fetchone.side_effect=[{'acquired':1},{'call_status':'success','raw_response':'not JSON','question':'q','response_hash':'a'*64}]
+    conn,cur=connection();cur.fetchone.side_effect=[{'acquired':1},{'status':'success','raw_response':'not JSON','question':'q'}]
     with patch.object(store,'ensure_database'),patch.object(store,'connect',return_value=conn), \
          patch.object(pipeline,'ensure_call',return_value=7),patch.object(run,'call_provider') as model:
         with pytest.raises(ValueError):pipeline.parse_batch(5)
     model.assert_not_called()
     statements=[c.args[0] for c in cur.execute.call_args_list]
-    assert any(c.args[0].startswith('UPDATE behavior_model_call SET parse_status=%s') and c.args[1][0]=='failed' for c in cur.execute.call_args_list)
-    assert not any(s.startswith('UPDATE knowledge_import_batch') or 'SET call_status=' in s or 'SET raw_response=' in s for s in statements)
+    assert any('behavior_parse_result=%s' in c.args[0] and json.loads(c.args[1][0])['parse_status']=='failed' for c in cur.execute.call_args_list)
+    assert not any('SET status=' in s or 'SET raw_response=' in s for s in statements)
 
 
 def test_manual_task_import_does_not_rewrite_raw_call_status_or_reinvoke_model():

@@ -437,6 +437,13 @@ def behavior_knowledge_points():
         species=request.args.get('species', '').strip(), category=request.args.get('category', '').strip()))
 
 
+@enterprise_api.get('/admin/multi-model/behavior-summary-points')
+@admin_required
+def behavior_knowledge_summary_points():
+    from services.behavior_knowledge_summary_service import list_points
+    return _multi_model_result(lambda: list_points(task_id=request.args.get('task_id',type=int)))
+
+
 @enterprise_api.get('/admin/multi-model/daily-care-points')
 @admin_required
 def daily_care_knowledge_points():

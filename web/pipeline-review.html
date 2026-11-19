@@ -4585,6 +4585,10 @@
         <details><summary>模型来源与审核状态</summary><p>任务 #${Number(row.task_id)} · 批次 #${Number(row.batch_id)} · ${escapeHtml(multiLabels[row.source_provider] || row.source_provider)} · ${escapeHtml(row.source_model)}<br>问题：${escapeHtml(row.source_question)}<br>审核：${escapeHtml(({pending:'待审核',verified:'已审核',rejected:'已拒绝'})[row.review_status] || row.review_status)}</p><pre style="white-space:pre-wrap;overflow-wrap:anywhere;">${escapeHtml(JSON.stringify(o, null, 2))}</pre></details>
       </article>`;
     }
+    function renderBehaviorSummaries(packet) {
+      const items = values => '<ul>' + (values || []).map(v => `<li>${escapeHtml(v.text)}<small class="muted"> 来源明细：${(v.source_detail_ids || []).map(Number).join('、')}</small></li>`).join('') + '</ul>';
+      return (packet.items || []).map(row => `<article style="padding:16px;margin:12px 0;border:1px solid var(--line);border-radius:10px;"><h4>${escapeHtml(row.observation_name)}</h4><p>${behaviorScopeLabel(row)} · ${Number(row.source_count)} 条来源 · ${Number(row.model_count)} 个模型</p><h4>正常场景</h4>${items(row.normal_scenarios)}<h4>异常场景</h4>${items(row.abnormal_scenarios)}<h4>未映射健康问题</h4>${items(row.unmapped_health_issues)}<p>总结模型：${escapeHtml(row.summary_meta?.model)} · ${escapeHtml(row.summary_meta?.processed_at)}</p><p>分歧：${escapeHtml((row.summary_meta?.disagreements || []).join('；') || '未记录')}</p><details><summary>全部模型来源和适用条件</summary><pre style="white-space:pre-wrap;overflow-wrap:anywhere;">${escapeHtml(JSON.stringify(row.sources, null, 2))}</pre></details></article>`).join('') || '<p class="muted">暂无总结结果</p>';
+    }
     function renderBehaviorPoints(packet) {
       const list = values => (values || []).length ? '<ul>' + values.map(v => '<li>' + escapeHtml(v) + '</li>').join('') + '</ul>' : '<p class="muted">未提供</p>';
       return (packet.items || []).map(row => {
@@ -4741,6 +4745,9 @@
       if (result.care_structured) multiEl('multiDetailBody').insertAdjacentHTML('beforeend', `<h3>养护模型来源明细（${Number(result.care_structured.total)}）</h3>` + renderCarePoints(result.care_structured));
       if (result.care_fused) multiEl('multiDetailBody').insertAdjacentHTML('beforeend', `<h3>相关融合结果（${Number(result.care_fused.total)}）</h3><p class="muted">包含其他任务中同一问题、范围和活动编码的来源。</p>` + renderCarePoints(result.care_fused));
       if (result.solution_structured) multiEl('multiDetailBody').insertAdjacentHTML('beforeend', renderMultiSolutions(result.solution_structured));
+      if (result.behavior_summary) {
+        multiEl('multiDetailBody').insertAdjacentHTML('beforeend', '<h3>行为知识 · 千问总结（待审核）</h3>' + renderBehaviorSummaries(result.behavior_summary));
+      }
       if (result.behavior_structured) {
         multiEl('multiDetailBody').insertAdjacentHTML('beforeend', `<h3>宠物行为知识（${Number(result.behavior_structured.total)}）</h3>` + renderBehaviorPoints(result.behavior_structured));
       }
@@ -4769,7 +4776,7 @@
         const data = await api(`/api/admin/multi-model/tasks/${button.dataset.importTask}/import`, {method:'POST'});
         if (data.errors.length) { message.textContent = data.errors.map(e => `${multiLabels[e.provider] || e.provider || '批次 #' + e.batch_id}：${e.message}`).join('；'); }
         else if (!data.results.length) { message.textContent = '还没有成功的模型响应可导入'; }
-        else { await loadMultiDetail(Number(button.dataset.importTask)); multiEl('modelImportMessage').textContent = data.status === 'running' ? '任务仍在处理中，请等待自动刷新' : (currentBase()?.code === 'behavior' ? '行为知识解析入库完成，未调用模型；重复解析不会新增相同记录' : '解析与标准化入库完成，重复执行不会新增相同记录'); }
+        else { await loadMultiDetail(Number(button.dataset.importTask)); multiEl('modelImportMessage').textContent = data.status === 'running' ? '任务仍在处理中，请等待自动刷新' : (currentBase()?.code === 'behavior' ? '行为知识解析与千问总结入库完成；未变化的来源会复用已有总结' : '解析与标准化入库完成，重复执行不会新增相同记录'); }
       } catch (error) { message.textContent = error.message; }
       finally { button.disabled = false; }
     });
