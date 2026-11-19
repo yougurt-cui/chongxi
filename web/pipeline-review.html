@@ -1366,6 +1366,7 @@
         <div class="title">行为知识检索</div>
         <p class="muted">按行为、物种和分类查看已采集的候选知识。模型回答与证据状态不代表人工审核通过。</p>
         <form id="behaviorSearch" class="row-actions" style="margin-bottom:16px;">
+          <select id="behaviorView" aria-label="行为知识视图"><option value="summary">千问总结</option><option value="source">模型来源明细</option></select>
           <input id="behaviorQuery" aria-label="搜索行为知识" maxlength="200" placeholder="行为、诱因或训练关键词" style="flex:1;min-width:180px;" />
           <select id="behaviorSpecies" aria-label="行为知识物种"><option value="">全部物种</option><option value="cat">猫</option><option value="dog">狗</option><option value="unknown">物种待确认</option></select>
           <select id="behaviorCategory" aria-label="行为知识分类"><option value="">全部行为分类</option></select>
@@ -4613,13 +4614,14 @@
       multiEl('behaviorPrev').disabled = multiEl('behaviorNext').disabled = true;
       try {
         const params = new URLSearchParams({page:behaviorPage, q:multiEl('behaviorQuery').value.trim(), species:multiEl('behaviorSpecies').value, category:multiEl('behaviorCategory').value});
-        const packet = await api('/api/admin/multi-model/behavior-points?' + params);
+        const summaryView = multiEl('behaviorView').value === 'summary';
+        const packet = await api('/api/admin/multi-model/' + (summaryView ? 'behavior-summary-points?' : 'behavior-points?') + params);
         if (version !== behaviorVersion) return;
         if (multiEl('behaviorCategory').options.length === 1) {
           Object.entries(packet.categories || {}).forEach(([value,label]) => multiEl('behaviorCategory').add(new Option(label, value)));
         }
         behaviorTotal = packet.total;
-        multiEl('behaviorResults').innerHTML = renderBehaviorPoints(packet);
+        multiEl('behaviorResults').innerHTML = summaryView ? renderBehaviorSummaries(packet) : renderBehaviorPoints(packet);
         multiEl('behaviorPage').textContent = `第 ${behaviorPage} 页 · 共 ${packet.total} 条`;
         multiEl('behaviorMessage').textContent = '行为知识已更新';
         multiEl('behaviorPrev').disabled = behaviorPage <= 1;
@@ -4632,6 +4634,7 @@
       }
     }
     multiEl('behaviorSearch').addEventListener('submit', event => { event.preventDefault(); behaviorPage = 1; loadBehaviorLibrary(); });
+    multiEl('behaviorView').addEventListener('change', () => { behaviorPage = 1; loadBehaviorLibrary(); });
     multiEl('behaviorPrev').addEventListener('click', () => { if (behaviorPage > 1) { behaviorPage--; loadBehaviorLibrary(); } });
     multiEl('behaviorNext').addEventListener('click', () => { if (behaviorPage * 20 < behaviorTotal) { behaviorPage++; loadBehaviorLibrary(); } });
 

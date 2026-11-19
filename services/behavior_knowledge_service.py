@@ -196,7 +196,7 @@ def _import_points(batch_id, document, *, call_id=None, source_hash=None, parser
                     else:
                         cur.execute('UPDATE behavior_knowledge_point_detail SET '+','.join(k+'=%s' for k in WRITE_FIELDS)+
                                     ' WHERE batch_id=%s AND point_key=%s', (*values,batch_id,key))
-                if call_id is not None:
+                if source_hash is not None:
                     cur.execute('''UPDATE behavior_knowledge_point_detail
                         SET source_call_id=%s,source_hash=%s,parser_version=%s WHERE batch_id=%s''',
                         (call_id, source_hash, parser_version, batch_id))

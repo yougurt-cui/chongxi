@@ -18,15 +18,22 @@ def ensure_schema(cur):
 
 
 def snapshot_call(cur, batch_id, request_prompt=None):
-    cur.execute("SELECT id FROM knowledge_import_batch WHERE id=%s AND knowledge_base='behavior'",(batch_id,))
-    if not cur.fetchone():raise ValueError('行为采集批次不存在')
-    if request_prompt is not None:
-        cur.execute("UPDATE knowledge_import_batch SET behavior_parse_result=JSON_SET(COALESCE(behavior_parse_result,JSON_OBJECT()),'$.request_prompt',%s) WHERE id=%s",(request_prompt,batch_id))
+    cur.execute("SELECT * FROM knowledge_import_batch WHERE id=%s AND knowledge_base='behavior'",(batch_id,))
+    batch=cur.fetchone()
+    if not batch:raise ValueError('行为采集批次不存在')
+    state=store.decode(batch.get('behavior_parse_result')) or {}
+    current=hashlib.sha256((batch.get('raw_response') or '').encode()).hexdigest()
+    archived=state.get('collection_hash') or (state.get('legacy_call') or {}).get('response_hash')
+    if archived and archived!=current:raise ValueError('已归档行为回答不允许覆盖，请新建采集任务')
+    state['collection_hash']=current
+    if request_prompt is not None:state['request_prompt']=request_prompt
+    _save(cur,batch_id,state)
     return batch_id
 
 
 def ensure_call(batch_id):
-    with store.connect() as conn, conn.cursor() as cur:return snapshot_call(cur,batch_id)
+    with store.connect() as conn, conn.cursor() as cur:
+        result=snapshot_call(cur,batch_id);conn.commit();return result
 
 
 def parse_batch(batch_id):

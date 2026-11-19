@@ -89,3 +89,22 @@ def test_auto_parse_failure_preserves_call_and_failed_calls_are_skipped(status,r
     assert parse.call_count==expected
     conn.commit.assert_called_once();conn.rollback.assert_not_called()
     assert log.call_count==int(raises)
+
+
+def test_archived_response_cannot_be_overwritten():
+    conn,cur=connection()
+    cur.fetchone.return_value={'id':5,'raw_response':'changed','behavior_parse_result':{'collection_hash':hashlib.sha256(b'original').hexdigest()}}
+    with pytest.raises(ValueError,match='不允许覆盖'):pipeline.snapshot_call(cur,5)
+    assert not any(c.args[0].startswith('UPDATE') for c in cur.execute.call_args_list)
+
+
+def test_summary_failure_keeps_parsed_points_and_records_retryable_error():
+    conn,cur=connection()
+    cur.fetchone.side_effect=[{'acquired':1},{'id':5,'status':'success','raw_response':json.dumps(document()),'question':document()['question']}]
+    with patch.object(store,'ensure_database'),patch.object(store,'connect',return_value=conn), \
+         patch('services.behavior_knowledge_service._import_points',return_value={'total_count':1,'status':'completed'}), \
+         patch('services.behavior_knowledge_summary_service.refresh',side_effect=ValueError('model timeout')):
+        with pytest.raises(ValueError,match='model timeout'):pipeline.parse_batch(5)
+    states=[json.loads(c.args[1][0]) for c in cur.execute.call_args_list if c.args[0].startswith('UPDATE knowledge_import_batch SET behavior_parse_result')]
+    assert states[-1]['parse_status']=='completed' and states[-1]['summary_status']=='failed'
+    assert states[-1]['summary_error']=='model timeout'

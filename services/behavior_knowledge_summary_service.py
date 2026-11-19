@@ -119,6 +119,9 @@ def refresh(summarizer=None):
                 conn.commit() # fresh snapshot detects concurrent source imports
                 current=groups(cur).get(token)
                 if not current or digest([VERSION,current['key'],current['sources']])!=fingerprint:raise ValueError('总结期间行为来源发生变化，请重试')
+                cur.execute('SELECT review_status FROM behavior_knowledge_point WHERE point_key=%s FOR UPDATE',(token,))
+                reviewed=cur.fetchone()
+                if reviewed and reviewed['review_status']!='pending':raise ValueError('总结期间已有人工审核，拒绝覆盖')
                 meta['input_hash']=fingerprint
                 names=sorted({s['data'].get('observation',{}).get('observation_name') or s['data'].get('behavior_name') or row['behavior_name'] for s in sources})
                 fields=['species_code','breed_code','life_stage_code','observation_code','observation_name','category_code','category_name',*FIELDS,'source_count','model_count','sources','source_urls','summary_meta','point_key']
@@ -135,7 +138,13 @@ def refresh(summarizer=None):
         finally:cur.execute('SELECT RELEASE_LOCK(%s)',(lock,))
 
 
-def list_points(task_id=None):
+def list_points(task_id=None, *, page=1, query="", species="", category=""):
+    from services.behavior_knowledge_service import CATEGORIES
+    try:page=int(page)
+    except (ValueError,TypeError):raise ValueError("页码不正确")
+    if page<1:raise ValueError("页码不正确")
+    if species and species not in ("cat","dog","unknown"):raise ValueError("物种无效")
+    if category and category not in CATEGORIES:raise ValueError("行为分类无效")
     with store.connect() as conn, conn.cursor() as cur:
         ids=None
         if task_id is not None:
@@ -145,5 +154,9 @@ def list_points(task_id=None):
     for row in rows:
         for field in (*FIELDS,'sources','source_urls','summary_meta'):row[field]=store.decode(row.get(field))
         if ids is not None and not any(s['batch_id'] in ids for s in row['sources']):continue
+        if species and (row['species_code'] or 'unknown')!=species:continue
+        if category and row['category_code']!=category:continue
+        if query and query.casefold() not in store.dumps({k:row[k] for k in ('observation_name','normal_scenarios','abnormal_scenarios','unmapped_health_issues','sources')}).casefold():continue
         result.append(row)
-    return {'items':result,'total':len(result)}
+    size=100 if task_id is not None else 20
+    return {'items':result[(page-1)*size:page*size],'total':len(result),'page':page,'page_size':size,'categories':CATEGORIES}
