@@ -12,6 +12,7 @@ from services import model_knowledge_import_service as store
 from services import solution_knowledge_service as solution
 from services import solution_scene_service as scenes
 from scripts.migrate_solution_scene_grain import migrate, snapshot
+from scripts.remove_solution_source_detail import migrate as remove_detail
 
 pytestmark = pytest.mark.skipif(os.getenv('SOLUTION_SCENE_MYSQL_TEST') != '1', reason='requires disposable MySQL database')
 
@@ -33,8 +34,11 @@ def database(monkeypatch):
             condition = " WHERE knowledge_base='solution'" if target=='knowledge_import_batch' else ''
             cur.execute('INSERT INTO `'+name+'`.`'+target+'` SELECT * FROM `chongxi_model_knowledge`.`'+source+'`'+condition)
     with admin.cursor() as cur:
-        for table in ("health_knowledge_point_detail", "knowledge_point_source_detail"):
+        for table in ("health_knowledge_point_detail", "knowledge_point_source_detail", "daily_care_knowledge_point_detail", "behavior_knowledge_point_detail"):
             cur.execute("CREATE TABLE `"+name+"`.`"+table+"` (id BIGINT,batch_id BIGINT)")
+    with admin.cursor() as cur:
+        cur.execute("SHOW COLUMNS FROM `"+name+"`.knowledge_import_batch LIKE 'solution_parse_result'")
+        if cur.fetchone():cur.execute('UPDATE `'+name+'`.knowledge_import_batch SET solution_parse_result=NULL')
     admin.commit()
     test_cfg={**cfg,'database':name}
     monkeypatch.setattr(store,'connect',lambda: pymysql.connect(**test_cfg))
@@ -70,6 +74,7 @@ def test_migration_lossless_idempotent_import_and_cross_model_merge(database, tm
             ids={tuple(r[k] for k in scenes.GRAIN):r['id'] for r in points}
             cur.execute("SELECT id FROM knowledge_import_batch WHERE knowledge_base='solution' ORDER BY id")
             bids=[r['id'] for r in cur.fetchall()]
+    remove_detail(apply=True,backup_root=tmp_path/'removed-detail')
     for bid in bids:
         assert solution.import_batch(bid)['status']=='already_imported'
     with store.connect() as conn,conn.cursor() as cur:
@@ -78,7 +83,7 @@ def test_migration_lossless_idempotent_import_and_cross_model_merge(database, tm
         assert {tuple(r[k] for k in scenes.GRAIN):r['id'] for r in after}==ids
         cur.execute('SELECT * FROM knowledge_import_batch WHERE id=%s',(bids[0],))
         batch=cur.fetchone()
-        batch.update(id=1000001, task_id=1000001, provider='test_model', imported_at=None)
+        batch.update(id=1000001, task_id=1000001, provider='test_model', imported_at=None,solution_parse_result=None)
         cur.execute('INSERT INTO knowledge_import_batch ('+','.join(batch)+') VALUES ('+','.join(['%s']*len(batch))+')',tuple(batch.values()))
         conn.commit()
     assert solution.import_batch(1000001)['inserted_count']==5
@@ -103,6 +108,8 @@ def test_migration_lossless_idempotent_import_and_cross_model_merge(database, tm
 def test_reviewed_scene_conflict_rolls_back_detail_replacement(database,tmp_path):
     with store.connect() as conn:
         migrate(conn,apply=True,backup_dir=tmp_path/'backup')
+        conn.commit()
+        remove_detail(apply=True,backup_root=tmp_path/'removed-detail')
         with conn.cursor() as cur:
             cur.execute('SELECT * FROM solution_knowledge_point ORDER BY id LIMIT 1')
             point=cur.fetchone()
@@ -115,12 +122,14 @@ def test_reviewed_scene_conflict_rolls_back_detail_replacement(database,tmp_path
             candidate=next(p for p in doc['solutions'] if p['scenario']==raw['scenario'])
             candidate['solution'][0]='测试变更，不应覆盖已审核方案'
             cur.execute('UPDATE knowledge_import_batch SET parsed_response=%s WHERE id=%s',(store.dumps(doc),bid))
-            before=snapshot(cur,'solution_knowledge_point_detail')['rows']
+            cur.execute('SELECT solution_parse_result FROM knowledge_import_batch WHERE id=%s',(bid,))
+            before=cur.fetchone()['solution_parse_result']
         conn.commit()
     with pytest.raises(ValueError,match='人工审核'):
         solution.import_batch(bid)
     with store.connect() as conn,conn.cursor() as cur:
-        assert snapshot(cur,'solution_knowledge_point_detail')['rows']==before
+        cur.execute('SELECT solution_parse_result FROM knowledge_import_batch WHERE id=%s',(bid,))
+        assert cur.fetchone()['solution_parse_result']==before
         cur.execute('SELECT review_status,input_hash FROM solution_knowledge_point WHERE id=%s',(point['id'],))
         row=cur.fetchone()
         assert row=={'review_status':'verified','input_hash':point['input_hash']}
@@ -138,5 +147,7 @@ def test_fresh_schema_and_import(database):
     with store.connect() as conn,conn.cursor() as cur:
         cur.execute('SELECT COUNT(*) n FROM solution_knowledge_point')
         assert cur.fetchone()['n']==15
-        cur.execute('SELECT COUNT(*) n FROM solution_knowledge_point_detail')
+        cur.execute("SELECT SUM(JSON_LENGTH(JSON_EXTRACT(solution_parse_result,'$.points'))) n FROM knowledge_import_batch WHERE knowledge_base='solution'")
         assert cur.fetchone()['n']==15
+        cur.execute("SHOW TABLES LIKE 'solution_knowledge_point_detail'")
+        assert not cur.fetchone()

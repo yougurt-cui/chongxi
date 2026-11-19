@@ -316,7 +316,7 @@ def task_status(task_id):
             cur.execute('''SELECT b.id,b.provider AS source_provider,b.status,b.import_error,b.knowledge_base,
                 b.finished_at,CASE WHEN b.knowledge_base='health' THEN
                 (SELECT COUNT(*) FROM health_knowledge_point_detail h WHERE h.batch_id=b.id)
-                WHEN b.knowledge_base='solution' THEN (SELECT COUNT(*) FROM solution_knowledge_point_detail s WHERE s.batch_id=b.id)
+                WHEN b.knowledge_base='solution' THEN COALESCE(JSON_LENGTH(JSON_EXTRACT(b.solution_parse_result,'$.points')),0)
                 WHEN b.knowledge_base='daily_care' THEN (SELECT COUNT(*) FROM daily_care_knowledge_point_detail s WHERE s.batch_id=b.id)
                 WHEN b.knowledge_base='behavior' THEN (SELECT COUNT(*) FROM behavior_knowledge_point_detail s WHERE s.batch_id=b.id) ELSE
                 (SELECT COUNT(*) FROM knowledge_point_source_detail s WHERE s.batch_id=b.id) END AS total_count

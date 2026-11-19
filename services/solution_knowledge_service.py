@@ -3,29 +3,6 @@ import hashlib
 from urllib.parse import urlparse
 from services import model_knowledge_import_service as store
 
-DDL = """CREATE TABLE IF NOT EXISTS solution_knowledge_point_detail (
- id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
- batch_id BIGINT UNSIGNED NOT NULL,
- point_key CHAR(64) NOT NULL,
- title VARCHAR(160) NOT NULL,
- problem TEXT NOT NULL,
- applicable_conditions JSON NOT NULL,
- goal TEXT NOT NULL,
- steps JSON NOT NULL,
- record_fields JSON NOT NULL,
- verification JSON NOT NULL,
- stop_conditions JSON NOT NULL,
- source_urls JSON NOT NULL,
- evidence_status VARCHAR(32) NOT NULL,
- review_status ENUM('pending','verified','rejected') NOT NULL DEFAULT 'pending',
- scenario_data JSON NULL,
- raw_json JSON NOT NULL,
- created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
- updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
- UNIQUE KEY uk_solution_source (batch_id,point_key),
- KEY idx_solution_batch (batch_id),
- KEY idx_solution_review (review_status)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4"""
 LEGACY_JSON_FIELDS = ('applicable_conditions','steps','record_fields','verification','stop_conditions','source_urls')
 JSON_FIELDS = (*LEGACY_JSON_FIELDS, 'scenario_data')
 
@@ -42,18 +19,38 @@ def strings(value,label,limit=20):
     return list(dict.fromkeys(text(v,label,800) for v in value))
 
 
-def ensure_schema(cur):
-    cur.execute(DDL)
-    cur.execute("SHOW COLUMNS FROM solution_knowledge_point_detail LIKE 'scenario_data'")
+def ensure_parse_column(cur):
+    cur.execute("SHOW COLUMNS FROM knowledge_import_batch LIKE 'solution_parse_result'")
     if not cur.fetchone():
         import pymysql
-        try:cur.execute('ALTER TABLE solution_knowledge_point_detail ADD COLUMN scenario_data JSON NULL')
+        try:cur.execute('ALTER TABLE knowledge_import_batch ADD COLUMN solution_parse_result JSON NULL')
         except pymysql.err.OperationalError as exc:
             if exc.args[0]!=1060:raise
+
+
+def ensure_schema(cur):
+    ensure_parse_column(cur)
+    cur.execute("SELECT COUNT(*) n FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name='solution_knowledge_point_detail'")
+    if cur.fetchone()['n']:
+        raise ValueError('请先运行 scripts/remove_solution_source_detail.py --apply 迁移解决方案来源')
     from services.health_solution_service import ensure_schema as ensure_health_schema
     ensure_health_schema(cur)
     from services.solution_scene_service import ensure_schema as ensure_scene_schema
     ensure_scene_schema(cur)
+
+
+def source_rows(cur,task_id=None):
+    sql="SELECT id,task_id,provider,model,question,solution_parse_result FROM knowledge_import_batch WHERE knowledge_base='solution' AND status='success'"
+    params=[]
+    if task_id is not None:sql+=' AND task_id=%s';params.append(task_id)
+    cur.execute(sql+' ORDER BY id',params)
+    rows=[]
+    for batch in cur.fetchall():
+        for point in (store.decode(batch.get('solution_parse_result')) or {}).get('points',[]):
+            rows.append({**point,'batch_id':batch['id'],'task_id':batch['task_id'],
+                         'provider':batch['provider'],'model':batch['model'],'question':batch['question']})
+    # Preserve historical representative selection by the original candidate IDs.
+    return sorted(rows,key=lambda r:(0,r['id']) if type(r['id']) is int else (1,r['batch_id'],r['point_key']))
 
 
 def scenario_point(item):
@@ -139,8 +136,8 @@ def import_batch(batch_id):
                     raise ValueError('只能导入成功的解决方案知识批次')
                 document=validate_document(store.decode(batch['parsed_response']))
                 points={hashlib.sha256(store.dumps(p).encode()).hexdigest():p for p in document['solutions']}
-                cur.execute('SELECT point_key,review_status,scenario_data FROM solution_knowledge_point_detail WHERE batch_id=%s',(batch_id,))
-                existing=list(cur.fetchall())
+                previous=store.decode(batch.get('solution_parse_result')) or {}
+                existing=previous.get('points',[])
                 from services.health_solution_service import scenario_key, refresh_groups
                 affected={scenario_key(store.decode(p['scenario_data'])) for p in existing if p.get('scenario_data')}
                 affected.update(scenario_key(p) for p in points.values() if 'scenario_code' in p)
@@ -150,16 +147,18 @@ def import_batch(batch_id):
                 if not unchanged:
                     if any(p['review_status']!='pending' for p in existing):
                         raise ValueError('解决方案发生变化且已有人工审核记录，请人工处理')
-                    for key in old_keys-set(points):
-                        cur.execute('DELETE FROM solution_knowledge_point_detail WHERE batch_id=%s AND point_key=%s',(batch_id,key))
+                    from datetime import datetime
+                    now=datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                    old={p['point_key']:p for p in existing};saved=[]
                     for key,point in points.items():
-                        if key in old_keys:continue
-                        columns=('title','problem','goal',*JSON_FIELDS,'evidence_status')
-                        candidate=candidate_values(point)
-                        values=[store.dumps(candidate[k]) if k in JSON_FIELDS and candidate[k] is not None else candidate[k] for k in columns]
-                        cur.execute('INSERT INTO solution_knowledge_point_detail (batch_id,point_key,'+','.join(columns)+',raw_json) VALUES ('+','.join(['%s']*(len(columns)+3))+')',
-                                    (batch_id,key,*values,store.dumps(point)))
+                        if key in old:saved.append(old[key]);continue
+                        saved.append({**candidate_values(point),'id':'batch:'+str(batch_id)+':'+key,
+                                      'batch_id':batch_id,'point_key':key,'raw_json':point,'review_status':'pending',
+                                      'created_at':now,'updated_at':now})
                         inserted+=1
+                    result={'version':1,'points':saved,'point_count':len(saved),'processed_at':now}
+                    cur.execute('UPDATE knowledge_import_batch SET solution_parse_result=%s WHERE id=%s',
+                                (store.dumps(result),batch_id))
                 scenario_updates=refresh_groups(conn,affected)
                 from services.solution_scene_service import refresh
                 scene_result=refresh(conn)
@@ -171,18 +170,16 @@ def import_batch(batch_id):
             if acquired:
                 with conn.cursor() as cur:cur.execute('SELECT RELEASE_LOCK(%s)',(lock,))
     return {'database':store.database_name(),'batch_id':batch_id,'status':'already_imported' if unchanged else 'completed',
-            'total_count':len(points),'inserted_count':inserted,'source_table':'solution_knowledge_point_detail',
+            'total_count':len(points),'inserted_count':inserted,'source_table':'knowledge_import_batch','source_field':'solution_parse_result',
             'scenario_table':'solution_knowledge_point','scenario_count':scene_result['scene_count'],
             'scenario_updates':scene_result['changed_count'],'legacy_scenario_updates':scenario_updates}
 
 
 def task_result(task_id):
     with store.connect() as conn,conn.cursor() as cur:
-        cur.execute('''SELECT s.*,b.provider source_provider,b.model source_model,b.question source_question
-            FROM solution_knowledge_point_detail s JOIN knowledge_import_batch b ON b.id=s.batch_id
-            WHERE b.task_id=%s AND b.knowledge_base='solution' ORDER BY s.id''',(task_id,))
-        rows=list(cur.fetchall())
+        rows=source_rows(cur,task_id)
     for row in rows:
+        row.update(source_provider=row['provider'],source_model=row['model'],source_question=row['question'])
         row.pop('raw_json',None)
         for key in JSON_FIELDS:row[key]=store.decode(row.get(key))
     scenes=[r for r in rows if r.get('scenario_data')]
@@ -198,5 +195,5 @@ def task_result(task_id):
     from services.solution_scene_service import task_points
     points=task_points(task_id)
     return {'points':points,'source_table':'solution_knowledge_point',
-            'source_points':rows,'source_detail_table':'solution_knowledge_point_detail',
+            'source_points':rows,'source_detail_table':'knowledge_import_batch','source_detail_field':'solution_parse_result.points',
             'scenario_table':'solution_knowledge_point','scenario_count':len(points)}

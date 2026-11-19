@@ -108,3 +108,17 @@ MySQL 集成验证使用隔离临时数据库执行原始 SQL，覆盖 5 条示�
 JSON 有前言或代码围栏时可提取完整外层对象；外层损坏时不再尝试把内部 verification 等对象当作完整响应，会报告 JSON 错误行列。仅对字符串内成对中文短语（如 `"跟着猫走"、`）未转义的双引号补齐 JSON 转义，保留解码后的原文，并在批次 search_metadata.json_format_repairs 记录位置；缺逗号、截断或其他语法错误仍拒绝。原始回答保留。
 
 页面“重试解析入库”会对 solution 的 parse_failed 批次重新解析保存的原文，成功后继续共享入库流程；失败则保留原文与准确错误，不调用模型，不改写历史提示词。
+
+## 当前来源存储（2026-11-19）
+
+`solution_knowledge_point_detail` 已退役并物理移除。解决方案链路使用三张表：
+
+- `knowledge_import_batch`：原始模型调用和解析快照 `solution_parse_result`。
+- `solution_knowledge_point`：页面使用的五维场景主表。
+- `health_solution`：管家读取的兼容场景方案表。
+
+解析快照包含 `version`、`points`、`point_count`、处理时间或迁移标记。`points` 保留原来源内容、point_key、审核状态、时间和原始场景结构；旧 ID 保留，新来源使用 batch ID 与内容哈希组成的稳定字符串 ID。原始回答、提示词和模型信息仍在批次字段中。来源读取不再依赖独立明细表；任务计数从快照 points 数组计算。
+
+每次成功解析后同一事务内更新批次快照和两张场景表，沿用导入锁、五维归组、显式编码映射和代表方案规则；不新增大模型融合调用。重复解析保留 ID 和审核状态，已审核内容变化仍拒绝并回滚。通用旧格式方案保留在批次快照，不能明确场景的内容不虚构场景主记录。
+
+停止 API/采集后执行 `python scripts/remove_solution_source_detail.py` 预览，加 `--apply` 迁移并移除旧表。脚本在 `var/solution-source-backups` 保存旧表、两张场景表和原始批次备份，逐字段验证来源快照并确认两张场景表完全不变后删除旧表。再次执行返回 already_removed，初始化不会重新创建旧表。上文旧明细表说明仅适用于迁移前结构。

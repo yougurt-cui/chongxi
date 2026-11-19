@@ -73,11 +73,11 @@ def refresh_groups(conn, affected):
     """Keep complete model variants; never blend steps from different plans."""
     if not affected:return 0
     with conn.cursor() as cur:
-        cur.execute('''SELECT p.id,p.batch_id,p.point_key,p.scenario_data,b.task_id,b.provider,b.model,b.question
-            FROM solution_knowledge_point_detail p JOIN knowledge_import_batch b ON b.id=p.batch_id
-            WHERE p.scenario_data IS NOT NULL AND b.knowledge_base='solution' ORDER BY p.id''')
+        from services.solution_knowledge_service import source_rows
+        rows=source_rows(cur)
         grouped={}
-        for row in cur.fetchall():
+        for row in rows:
+            if not row.get('scenario_data'):continue
             point=store.decode(row['scenario_data']);key=scenario_key(point)
             if key not in affected:continue
             grouped.setdefault(key,[]).append({'source_type':'model_collection',

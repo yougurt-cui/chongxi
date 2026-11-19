@@ -104,15 +104,13 @@ def materialize(key, sources):
             'input_hash': hashlib.sha256(store.dumps(payload).encode()).hexdigest()}
 
 
-def refresh(conn, table='solution_knowledge_point'):
+def refresh(conn, table='solution_knowledge_point', *, rows=None):
     """Called under the solution importer lock, in the same data transaction."""
     if table not in {'solution_knowledge_point', 'solution_knowledge_point_scene_staging'}:
         raise ValueError('Invalid solution summary table')
     with conn.cursor() as cur:
-        cur.execute('''SELECT p.*,b.task_id,b.provider,b.model,b.question
-            FROM solution_knowledge_point_detail p JOIN knowledge_import_batch b ON b.id=p.batch_id
-            WHERE b.knowledge_base='solution' AND b.status='success' ORDER BY p.id''')
-        groups = source_groups(list(cur.fetchall()))
+        from services.solution_knowledge_service import source_rows
+        groups = source_groups(source_rows(cur) if rows is None else rows)
         cur.execute('SELECT * FROM '+table+' ORDER BY id FOR UPDATE')
         previous = {tuple(r[k] for k in GRAIN): r for r in cur.fetchall()}
         changed = 0

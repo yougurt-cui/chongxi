@@ -28,7 +28,8 @@ def db(existing=None, imported=False):
     conn=MagicMock();conn.__enter__.return_value=conn
     cur=conn.cursor.return_value.__enter__.return_value
     batch={'id':5,'knowledge_base':'solution','status':'success',
-        'parsed_response':json.dumps(document()),'imported_at':'old' if imported else None}
+        'parsed_response':json.dumps(document()),'imported_at':'old' if imported else None,
+        'solution_parse_result':json.dumps({'points':existing or []})}
     cur.fetchone.side_effect=lambda: {'acquired':1} if cur.execute.call_args.args[0].startswith('SELECT GET_LOCK') else batch
     cur.fetchall.return_value=existing or []
     return conn,cur
@@ -74,9 +75,12 @@ def test_import_preserves_structured_content_source_and_pending_review():
     with patch.object(store,'ensure_database'),patch.object(store,'connect',return_value=conn):
         result=solution.import_batch(5)
     assert result['inserted_count']==1
-    inserts=[c for c in cur.execute.call_args_list if c.args[0].startswith('INSERT')]
-    assert len(inserts)==1 and inserts[0].args[1][0]==5
-    assert json.loads(inserts[0].args[1][-1])==document()['solutions'][0]
+    saved=next(c.args for c in cur.execute.call_args_list if 'SET solution_parse_result=' in c.args[0])
+    state=json.loads(saved[1][0]);point=state['points'][0]
+    assert saved[1][1]==5 and point['review_status']=='pending'
+    assert point['raw_json']==document()['solutions'][0]
+    assert point['steps']==document()['solutions'][0]['steps']
+    assert not any('solution_knowledge_point_detail' in c.args[0] for c in cur.execute.call_args_list)
     assert all('product_recommendation' not in c.args[0] and 'health_knowledge' not in c.args[0] for c in cur.execute.call_args_list)
     conn.commit.assert_called_once()
 
