@@ -73,8 +73,11 @@ def call(provider, prompt):
         limit = int(os.getenv('DOUBAO_SEARCH_MAX_OUTPUT_TOKENS', '32768'))
         if not 1 <= limit <= 262144:raise ValueError('DOUBAO_SEARCH_MAX_OUTPUT_TOKENS须为1至262144')
         payload['max_output_tokens'] = limit
+    timeout = float(os.getenv('LLM_SEARCH_TIMEOUT_SECONDS', '180'))
+    if provider.name == 'doubao':
+        timeout = float(os.getenv('DOUBAO_SEARCH_TIMEOUT_SECONDS', str(max(timeout, 600))))
     response = requests.post(url, headers={'Authorization':'Bearer '+provider.key,'Content-Type':'application/json'},
-                             json=payload,timeout=float(os.getenv('LLM_SEARCH_TIMEOUT_SECONDS','180')))
+                             json=payload,timeout=timeout)
     if provider.name == 'doubao' and response.status_code in (400, 403, 404):
         error = (response.json().get('error') or {})
         if error.get('code') in ('ToolNotOpen', 'AccessDenied'):

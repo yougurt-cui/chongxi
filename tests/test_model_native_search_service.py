@@ -29,6 +29,7 @@ class NativeSearchTests(unittest.TestCase):
         self.assertEqual(payload['thinking'], {'type':'disabled'})
         self.assertNotIn('reasoning', payload)
         self.assertEqual(payload['max_output_tokens'],32768)
+        self.assertGreaterEqual(args.kwargs['timeout'],600)
         self.assertTrue(args.args[0].endswith('/responses'))
         self.assertEqual(meta['status'], 'searched')
         self.assertEqual(meta['sources'], [{'url':'https://example.org/cats','title':'Cats'}])
@@ -38,6 +39,11 @@ class NativeSearchTests(unittest.TestCase):
     def test_usage_confirms_search_without_calls(self):
         (_, _, meta), _ = self.call_with({'output':[], 'usage':{'tool_usage':{'web_search':1}}})
         self.assertEqual(meta['status'], 'no_sources')
+
+    def test_doubao_timeout_override(self):
+        with patch.dict('os.environ', {'DOUBAO_SEARCH_TIMEOUT_SECONDS':'720'}):
+            (_, _, _), args = self.call_with({'output':[]})
+        self.assertEqual(args.kwargs['timeout'],720)
 
     def test_links_alone_do_not_confirm_search(self):
         (_, _, meta), _ = self.call_with({'output':[{'type':'message','content':[
