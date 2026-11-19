@@ -92,3 +92,19 @@ def approve():
     return _run(lambda: {"ok": True, **distill.approve_guide(
         guide_id=int(guide_id), evidence=evidence,
     )})
+
+
+@knowledge_second_stage_api.get("/experience-topics")
+@admin_required
+def experience_topics():
+    from services.community_experience_service import list_topics
+
+    def read():
+        source_id = request.args.get("knowledge_id")
+        return {"ok": True, "items": list_topics(
+            source_table=request.args.get("source_table"),
+            knowledge_id=int(source_id) if source_id is not None else None,
+            limit=int(request.args.get("limit", 50)), offset=int(request.args.get("offset", 0)),
+        )}
+
+    return _run(read)
