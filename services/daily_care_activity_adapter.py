@@ -7,18 +7,6 @@ from vendor.chongxi_care_import.import_care import parse_document
 DOMAIN_CATEGORIES={'feeding_care':'feeding_care','grooming_care':'grooming','preventive_care':'preventive_care',
  'oral_care':'oral_care','environment_care':'environment','behavior_care':'behavior_care',
  'growth_care':'growth_care','outdoor_care':'outdoor_care','safety_care':'safety_care'}
-ACTIVITY_FIELDS={
- 'care_activity_code':"VARCHAR(160) GENERATED ALWAYS AS (CASE WHEN JSON_TYPE(JSON_EXTRACT(point_data,'$.care_code'))='STRING' THEN JSON_UNQUOTE(JSON_EXTRACT(point_data,'$.care_code')) ELSE NULL END) STORED",
- 'care_activity_name':"VARCHAR(160) GENERATED ALWAYS AS (CASE WHEN JSON_TYPE(JSON_EXTRACT(point_data,'$.care_name'))='STRING' THEN JSON_UNQUOTE(JSON_EXTRACT(point_data,'$.care_name')) ELSE NULL END) STORED",
- 'need_code':"VARCHAR(100) GENERATED ALWAYS AS (CASE WHEN JSON_TYPE(JSON_EXTRACT(point_data,'$.need_code'))='STRING' THEN JSON_UNQUOTE(JSON_EXTRACT(point_data,'$.need_code')) ELSE NULL END) STORED",
- 'care_subtype':"VARCHAR(64) GENERATED ALWAYS AS (CASE WHEN JSON_TYPE(JSON_EXTRACT(point_data,'$.care_subtype'))='STRING' THEN JSON_UNQUOTE(JSON_EXTRACT(point_data,'$.care_subtype')) ELSE NULL END) STORED",
- 'care_domain':"VARCHAR(64) GENERATED ALWAYS AS (CASE WHEN JSON_TYPE(JSON_EXTRACT(point_data,'$.care_activity.care_domain'))='STRING' THEN JSON_UNQUOTE(JSON_EXTRACT(point_data,'$.care_activity.care_domain')) ELSE NULL END) STORED",
- 'care_category':"VARCHAR(100) GENERATED ALWAYS AS (CASE WHEN JSON_TYPE(JSON_EXTRACT(point_data,'$.care_activity.care_category'))='STRING' THEN JSON_UNQUOTE(JSON_EXTRACT(point_data,'$.care_activity.care_category')) ELSE NULL END) STORED",
- 'care_type':"VARCHAR(32) GENERATED ALWAYS AS (CASE WHEN JSON_TYPE(JSON_EXTRACT(point_data,'$.care_activity.care_type'))='STRING' THEN JSON_UNQUOTE(JSON_EXTRACT(point_data,'$.care_activity.care_type')) ELSE NULL END) STORED",
- **{field:f"JSON GENERATED ALWAYS AS (JSON_EXTRACT(point_data,'$.care_activity.{field}')) STORED"
-    for field in ('schedule','tools_materials','methods','avoidances','observations','adjustment_rules')},
-}
-ACTIVITY_JSON_FIELDS=('schedule','tools_materials','methods','avoidances','observations','adjustment_rules')
 
 
 def points_for(document):

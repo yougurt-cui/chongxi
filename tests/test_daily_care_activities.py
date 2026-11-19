@@ -81,7 +81,7 @@ def test_activity_import_keeps_scope_and_review_with_existing_writer():
     cur.fetchone.return_value={'id':5,'knowledge_base':'daily_care','status':'success','question':'驱虫','raw_response':json.dumps(v4_document())}
     cur.fetchall.return_value=[]
     dictionary={'species':[{'species_code':'dog'}],'breeds':[{'species_code':'dog','breed_code':'all_dog','breed_name':'全部犬种'}],'stages':[{'species_code':'dog','stage_code':'adult'}]}
-    with patch.object(store,'ensure_database'),patch.object(store,'connect',return_value=conn),patch.object(care,'load_dictionary',return_value=dictionary),patch.object(run,'call_provider') as model:
+    with patch('services.daily_care_fusion_service.acquire_lock',return_value='qa-lock'),patch('services.daily_care_fusion_service.rebuild',return_value={'total':1}),patch.object(store,'ensure_database'),patch.object(store,'connect',return_value=conn),patch.object(care,'load_dictionary',return_value=dictionary),patch.object(run,'call_provider') as model:
         assert care.import_batch(5)['inserted_count']==1
         sql,params=next(c.args for c in cur.execute.call_args_list if c.args[0].startswith('INSERT'))
         assert 'daily_care_knowledge_point_detail' in sql and 'all_dog' in params and 'adult' in params

@@ -196,6 +196,7 @@ def task_detail(task_id):
     if task['knowledge_base'] == 'daily_care':
         from services.daily_care_knowledge_service import list_points
         result['care_structured'] = list_points(task_id=task_id)
+        result['care_fused'] = list_points(task_id=task_id,view='fused')
         result['assembled_points'] = []
         return result
     if task['knowledge_base'] == 'behavior':

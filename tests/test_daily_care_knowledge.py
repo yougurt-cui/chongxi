@@ -43,7 +43,7 @@ def test_invalid_points_rejected(field,value):
 def test_import_is_independent_and_retry_preserves_review():
     conn,cur=db()
     dictionary={'species':[{'species_code':'cat'}],'breeds':[{'species_code':'cat','breed_code':'unknown_cat','breed_name':'未知'}],'stages':[{'species_code':'cat','stage_code':'adult'}]}
-    with patch.object(store,'ensure_database'),patch.object(store,'connect',return_value=conn),patch.object(care,'load_dictionary',return_value=dictionary),patch.object(run,'call_provider') as model:
+    with patch('services.daily_care_fusion_service.acquire_lock',return_value='qa-lock'),patch('services.daily_care_fusion_service.rebuild',return_value={'total':1}),patch.object(store,'ensure_database'),patch.object(store,'connect',return_value=conn),patch.object(care,'load_dictionary',return_value=dictionary),patch.object(run,'call_provider') as model:
         assert care.import_batch(5)['inserted_count']==1
         insert=next(c.args for c in cur.execute.call_args_list if c.args[0].startswith('INSERT'))
         assert 'daily_care_knowledge_point_detail' in insert[0] and 'unknown_cat' in insert[1]
@@ -70,7 +70,7 @@ def test_success_is_saved_before_auto_import_and_api_failures_skip_import():
 def test_search_and_authentication():
     conn,cur=db();cur.fetchone.return_value={'n':0}
     with patch.object(store,'ensure_database'),patch.object(store,'connect',return_value=conn):
-        assert care.list_points(query='梳毛%_',species='cat',category='grooming')['total']==0
+        assert care.list_points(query='梳毛%_',species='cat',category='grooming_care')['total']==0
     sql,params=cur.execute.call_args.args
     assert '梳毛' not in sql and '%梳毛!%!_%' in params
     app=Flask(__name__);app.secret_key='test';app.register_blueprint(enterprise_api);client=app.test_client()
@@ -78,6 +78,10 @@ def test_search_and_authentication():
     with client.session_transaction() as session:session['workbench_user']={'role':'data_admin'}
     assert client.get('/api/admin/multi-model/daily-care-points?species=bird').status_code==400
     with patch.object(care,'list_points',return_value={'items':[],'total':0}):assert client.get('/api/admin/multi-model/daily-care-points').get_json()['ok']
+    assert client.get('/api/admin/multi-model/daily-care-points?view=invalid').status_code==400
+    with patch.object(care,'list_points',return_value={'items':[],'total':0,'view':'fused'}) as listing:
+        assert client.get('/api/admin/multi-model/daily-care-points?view=fused').get_json()['view']=='fused'
+        assert listing.call_args.kwargs['view']=='fused'
 
 
 def test_daily_care_dispatch_and_failed_json_retains_successful_call():
@@ -95,7 +99,7 @@ def test_daily_care_dispatch_and_failed_json_retains_successful_call():
 
 def test_incomplete_response_is_reported_without_parsing_or_touching_points():
     conn,cur=db();cur.fetchone.return_value.update(search_metadata=json.dumps({'response_status':'incomplete'}))
-    with patch.object(store,'ensure_database'),patch.object(store,'connect',return_value=conn),patch.object(care,'load_dictionary',return_value={}),patch.object(run,'extract_json') as extract:
+    with patch('services.daily_care_fusion_service.acquire_lock',return_value='qa-lock'),patch('services.daily_care_fusion_service.rebuild',return_value={'total':1}),patch.object(store,'ensure_database'),patch.object(store,'connect',return_value=conn),patch.object(care,'load_dictionary',return_value={}),patch.object(run,'extract_json') as extract:
         with pytest.raises(ValueError,match='回答被截断'):care.import_batch(5)
     extract.assert_not_called()
     assert not any('INSERT' in c.args[0] or 'DELETE' in c.args[0] for c in cur.execute.call_args_list)
