@@ -1,6 +1,15 @@
 # 解决方案知识库
 
-## 当前数据粒度（2026-11-17）
+## 当前流程（2026-11-19）
+
+模型回答与来源快照存放在 `knowledge_import_batch`（`solution_parse_result`）；`solution_knowledge_point_detail` 已移除。
+系统先按物种、品种、生命阶段和需求隔离范围，调用千问对齐语义相近的场景，再总结各模型方案，写入 `solution_knowledge_point`。
+每套方案的适用前提、步骤和验证条件绑定保留，所有原始来源均可追溯。`health_solution` 兼容表保留原处理，不由总结改写。
+总结详情、版本、用量和对齐依据见 `summary_meta`。已有数据总结使用 `scripts/summarize_solution_knowledge.py --apply`，后续入库自动执行。
+
+以下旧场景迁移说明用于历史追溯，当前行为以本文末“来源快照并入批次”和“千问二次总结”说明为准。
+
+## 历史数据粒度（2026-11-17）
 
 `solution_knowledge_point` 是场景主表，唯一键为 `species_code + breed_code + life_stage_code + need_code + scenario_code`。五项均为独立列；`scenario` 是保留原文的具体场景描述。一组对象与需求下的不同观测前提分别成行，同一组合的不同模型或不同任务只增加来源变体。
 
