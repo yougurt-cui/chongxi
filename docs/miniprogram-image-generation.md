@@ -7,7 +7,7 @@
 `POST /api/miniprogram/image-generations`，multipart/form-data：
 
 - `image`：一张 JPG/PNG，≤10MiB，宽高均 >14px，总像素 ≤3600 万，宽高比 1:16–16:1。实际解码检查，自动转正、透明底填白并缩至最长边 2048px。
-- `prompt`：1–300 个 Unicode 字符，去除首尾空白，300 为产品限制。
+- `prompt`：1–2000 个 Unicode 字符，去除首尾空白，2000 为产品限制。
 - `request_id`：16–64 位字母、数字、下划线或连字符。同账号相同 ID 和输入只创建一次；重试必须复用 ID。
 
 202 响应：`{"ok":true,"item":{"id":"32位任务ID","status":"pending","image_url":null,"error":null}}`。
@@ -25,3 +25,13 @@
 首次请求创建 `miniprogram_image_generation` 表，数据库账号需建表权限。任务记录在 MySQL；执行队列在进程内，每进程 2 个工作线程、最多 4 个运行/等待任务；数据库唯一索引限制每账号一个活跃任务。部署重启会中断内存队列，不自动重放有费用的模型请求；创建或查询时将该账号超过 10 分钟的活跃任务标记失败，用户可重试。多进程部署的总并发为进程数乘以 2。
 
 验证：`python -m pytest tests/test_miniprogram_image_generation.py -q`。测试覆盖真实图片解析、Flask 上传/查询、权限隔离、幂等与工作线程失败释放；MySQL、Ark 和结果存储使用替身，不能代替线上数据库及模型验收。
+
+## 提示词列表
+
+`GET /api/miniprogram/image-generations/prompts`，公开只读，无需登录：
+
+```json
+{"ok":true,"prompt_limit":2000,"items":[{"id":"felt","name":"毛毡","prompt":"完整提示词…"},{"id":"sketch","name":"素描","prompt":"完整提示词…"}]}
+```
+
+提示词保存在 `services/miniprogram_image_prompts.py`。按用户提供的文本保留段落、构图要求及 `--ar 1:1`，去掉聊天排版的 Markdown 加粗与转义符。比例仍由生图接口的 `size=2048x2048` 保证。小程序选择标签后填入完整文本，编辑后的文本通过原有 `prompt` 字段提交，无需传风格 ID。先部署服务端列表接口及 2000 字限制，再发布小程序。

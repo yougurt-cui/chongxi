@@ -4,6 +4,7 @@ import logging
 from flask import Blueprint, jsonify, request
 from services.miniprogram_auth_service import require_user_by_token
 from services import miniprogram_image_generation_service as service
+from services.miniprogram_image_prompts import PROMPTS, PROMPT_LIMIT
 
 image_generation_api = Blueprint('image_generation_api', __name__, url_prefix='/api/miniprogram/image-generations')
 logger = logging.getLogger(__name__)
@@ -47,3 +48,9 @@ def create_image_generation():
 @image_generation_api.get('/<task_id>')
 def get_image_generation(task_id):
     return _respond(lambda user_id: service.get_task(user_id, task_id))
+
+
+@image_generation_api.get('/prompts')
+def list_image_prompts():
+    # Public metadata, available before sign-in; generation still requires auth.
+    return jsonify(ok=True, items=list(PROMPTS), prompt_limit=PROMPT_LIMIT)

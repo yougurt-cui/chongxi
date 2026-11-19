@@ -22,18 +22,18 @@ def upload(content=None):
     return FileStorage(stream=BytesIO(photo() if content is None else content), filename='pet.png')
 
 
-@pytest.mark.parametrize('prompt', ['', ' ', '猫' * 301])
+@pytest.mark.parametrize('prompt', ['', ' ', '猫' * (service.PROMPT_LIMIT + 1)])
 def test_prompt_rejected(prompt):
     with pytest.raises(ValueError):
         service.validate_input(upload(), prompt, 'r' * 16)
 
 
 def test_normalize_and_unicode():
-    content, prompt, _ = service.validate_input(upload(photo(size=(3000, 1500))), '🐈' * 300, 'r' * 16)
+    content, prompt, _ = service.validate_input(upload(photo(size=(3000, 1500))), '🐈' * service.PROMPT_LIMIT, 'r' * 16)
     with Image.open(BytesIO(content)) as image:
         assert image.format == 'JPEG'
         assert image.size == (2048, 1024)
-    assert len(prompt) == 300
+    assert len(prompt) == service.PROMPT_LIMIT
 
 
 @pytest.mark.parametrize('content', [b'bad', photo('GIF'), photo(size=(14, 20)), photo(size=(500, 20)), b'x' * (service.MAX_BYTES + 1)])
@@ -156,3 +156,20 @@ def test_reference_model_default_is_isolated_from_shared_ark_config(monkeypatch)
     assert shared['api_key']=='test'
     monkeypatch.setenv('MINIPROGRAM_IMAGE_MODEL','doubao-seedream-4-0-250828')
     assert service.get_image_config()['model']=='doubao-seedream-4-0-250828'
+
+
+def test_public_prompt_list_and_full_prompt_submission(runtime):
+    client, rows, jobs, calls = runtime
+    response = client.get(URL + '/prompts')
+    assert response.status_code == 200
+    body = response.json
+    assert body['ok'] and body['prompt_limit'] == service.PROMPT_LIMIT
+    assert [(p['id'], p['name']) for p in body['items']] == [('felt', '毛毡'), ('sketch', '素描')]
+    for index, preset in enumerate(body['items']):
+        assert 300 < len(preset['prompt']) <= body['prompt_limit']
+        assert preset['prompt'].endswith('--ar 1:1')
+        response = submit(client, prompt=preset['prompt'], request_id=str(index) * 16)
+        assert response.status_code == 202
+        fn, args = jobs.pop()
+        fn(*args)
+        assert calls[-1][1]['json']['prompt'] == preset['prompt']

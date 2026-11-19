@@ -19,6 +19,7 @@ from werkzeug.datastructures import FileStorage
 
 from app_config import get_ark_image_config, get_mysql_config
 from services.miniprogram_moment_image_service import upload_moment_image
+from services.miniprogram_image_prompts import PROMPT_LIMIT
 
 def get_image_config():
     config = get_ark_image_config()
@@ -29,7 +30,7 @@ def get_image_config():
 
 TABLE = 'miniprogram_image_generation'
 MAX_BYTES = 10 * 1024 * 1024
-PROMPT_LIMIT = 300
+
 _executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix='pet-image')
 _slots = threading.BoundedSemaphore(4)
 _schema_lock = threading.Lock()
@@ -118,7 +119,7 @@ def _public(row):
 
 def validate_input(image_file, prompt, request_id):
     if not isinstance(prompt, str) or not prompt.strip() or len(prompt) > PROMPT_LIMIT:
-        raise ValueError('描述不能为空，且不能超过 300 字')
+        raise ValueError(f'描述不能为空，且不能超过 {PROMPT_LIMIT} 字')
     if not isinstance(request_id, str) or not re.fullmatch(r'[a-zA-Z0-9_-]{16,64}', request_id):
         raise ValueError('request_id 格式不正确')
     if image_file is None:
