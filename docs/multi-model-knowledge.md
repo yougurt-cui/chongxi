@@ -83,3 +83,17 @@
 ### 标准化说明
 
 三库共用 `chongxi_knowledge_dictionary` 的全局主题词典。健康与营养类知识会映射到 `health_symptoms`、`feeding_nutrition` 等已有分类；若出现无法映射的主题，条目仍会入库，只是 `standardization_meta.status` 为待处理，需补充词典后再标准化。
+
+## 健康解析状态并入批次（2026-11-19）
+
+`health_knowledge_import` 已移除，不再创建或读取。其原有字段整体迁移到
+`knowledge_import_batch.health_parse_result` JSON：input_hash、mapping_version、dictionary_hash、
+source_count、point_count、classifier_model、processed_at、source_exclusions。
+每条模型批次仍独立保存调用原文和状态；解析状态为同一批次的独立 JSON 字段。
+健康来源明细及汇总表保持不变。重复解析跳过判断和页面排除原因展示改读该字段。
+
+迁移前停止 API 和采集/解析进程，先运行
+`python scripts/remove_health_knowledge_import.py` 预览，再加 `--apply`。
+脚本备份旧表结构、全部状态行与关联批次至 `var/health-import-backups`，
+逐条校验迁移结果后物理删除旧表。出现缺失批次或不同的已有解析状态时拒绝覆盖和删除。
+脚本可重复执行，不调用模型；应用初始化不会重新创建旧表。

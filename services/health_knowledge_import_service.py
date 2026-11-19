@@ -51,12 +51,7 @@ def ensure_tables():
                 CONSTRAINT fk_health_point_issue FOREIGN KEY (issue_code)
                     REFERENCES chongxi_knowledge_dictionary.dict_health_issue(issue_code)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4''')
-            cur.execute('''CREATE TABLE IF NOT EXISTS health_knowledge_import (
-                batch_id BIGINT UNSIGNED NOT NULL PRIMARY KEY, input_hash CHAR(64) NOT NULL,
-                mapping_version VARCHAR(64) NOT NULL, dictionary_hash CHAR(64) NOT NULL,
-                source_count INT NOT NULL, point_count INT NOT NULL,
-                classifier_model VARCHAR(255) NOT NULL, processed_at DATETIME NOT NULL, source_exclusions JSON NULL
-            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4''')
+            ensure_parse_column(cur)
             cur.execute('SHOW COLUMNS FROM health_knowledge_point_detail')
             columns={r['Field'] for r in cur.fetchall()}
             for name,definition in [('breed_code','VARCHAR(255) NULL'),('life_stage_code','VARCHAR(32) NULL'),
@@ -68,6 +63,16 @@ def ensure_tables():
         from services.health_knowledge_summary_service import DDL as SUMMARY_DDL
         with conn.cursor() as cur:cur.execute(SUMMARY_DDL)
         conn.commit()
+
+
+def ensure_parse_column(cur):
+    """One optional health parse result on its existing collection batch."""
+    cur.execute("SHOW COLUMNS FROM knowledge_import_batch LIKE 'health_parse_result'")
+    if not cur.fetchone():
+        import pymysql
+        try:cur.execute('ALTER TABLE knowledge_import_batch ADD COLUMN health_parse_result JSON NULL')
+        except pymysql.err.OperationalError as exc:
+            if exc.args[0]!=1060:raise
 
 
 def require_model_parsing_enabled():
@@ -126,8 +131,7 @@ def _import_batch_detail(batch_id, *, classifier=None):
                     raise ValueError('仅可解析健康知识库中成功的采集批次')
                 doc=store.decode(batch['parsed_response'])
                 fingerprint=digest({'question':batch['question'],'response':doc,'search_metadata':store.decode(batch['search_metadata'])})
-                cur.execute('SELECT * FROM health_knowledge_import WHERE batch_id=%s',(batch_id,))
-                previous=cur.fetchone()
+                previous=store.decode(batch.get('health_parse_result'))
                 if previous and previous['input_hash']==fingerprint and previous['dictionary_hash']==dictionary_hash and previous['mapping_version']==VERSION:
                     return {'batch_id':batch_id,'health_status':'already_imported','health_point_count':previous['point_count']}
             conn.commit()
@@ -183,13 +187,14 @@ def save_points(cur,batch,points,enums,input_hash,dictionary_hash,source_count=N
         cur.execute('INSERT INTO health_knowledge_point_detail ('+','.join(cols)+') VALUES ('+','.join(['%s']*len(cols))+')',values)
     from vendor.chongxi_multi_model_mysql.run import provider_configuration
     model=next(p.model for p in provider_configuration() if p.name=='qwen')
-    cur.execute('''INSERT INTO health_knowledge_import
-        (batch_id,input_hash,mapping_version,dictionary_hash,source_count,point_count,classifier_model,processed_at)
-        VALUES (%s,%s,%s,%s,%s,%s,%s,NOW()) ON DUPLICATE KEY UPDATE
-        input_hash=VALUES(input_hash),mapping_version=VALUES(mapping_version),dictionary_hash=VALUES(dictionary_hash),
-        source_count=VALUES(source_count),point_count=VALUES(point_count),classifier_model=VALUES(classifier_model),processed_at=NOW()''',
-        (batch_id,input_hash,VERSION,dictionary_hash,source_count if source_count is not None else len(points),len(points),model))
-    cur.execute('UPDATE health_knowledge_import SET source_exclusions=%s WHERE batch_id=%s',(store.dumps(exclusions or []),batch_id))
+    from datetime import datetime
+    state={'input_hash':input_hash,'mapping_version':VERSION,'dictionary_hash':dictionary_hash,
+           'source_count':source_count if source_count is not None else len(points),'point_count':len(points),
+           'classifier_model':model,'processed_at':datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+           'source_exclusions':exclusions or []}
+    cur.execute('UPDATE knowledge_import_batch SET health_parse_result=%s WHERE id=%s',
+                (store.dumps(state),batch_id))
+
 
 
 def task_result(task_id):
@@ -204,9 +209,9 @@ def task_result(task_id):
             point[field]=store.decode(point[field])
     with store.connect() as conn:
         with conn.cursor() as cur:
-            cur.execute('''SELECT i.batch_id,i.source_exclusions FROM health_knowledge_import i
-                JOIN knowledge_import_batch b ON b.id=i.batch_id WHERE b.task_id=%s''',(task_id,))
-            exclusions=[{'batch_id':r['batch_id'],**item} for r in cur.fetchall() for item in (store.decode(r['source_exclusions']) or [])]
+            cur.execute("SELECT id batch_id,health_parse_result FROM knowledge_import_batch WHERE task_id=%s AND knowledge_base='health'",(task_id,))
+            exclusions=[{'batch_id':r['batch_id'],**item} for r in cur.fetchall()
+                        for item in ((store.decode(r.get('health_parse_result')) or {}).get('source_exclusions') or [])]
     from services.health_knowledge_summary_service import task_summaries
     summaries=task_summaries(task_id)
     return {'point_count':len(summaries),'points':summaries,'source_point_count':len(points),'source_points':points,'excluded_sources':exclusions}

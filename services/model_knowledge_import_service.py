@@ -52,6 +52,8 @@ def _ensure_database(name):
                     if exc.args[0] != 1060: raise
             from services.knowledge_source_assembly_service import DDL
             cur.execute(DDL)
+            from services.health_knowledge_import_service import ensure_parse_column
+            ensure_parse_column(cur)
             from services.solution_knowledge_service import ensure_schema as ensure_solution_schema
             ensure_solution_schema(cur)
             from services.behavior_knowledge_service import DDL as BEHAVIOR_DDL

@@ -23,9 +23,9 @@ def main():
                     cur.execute('SELECT GET_LOCK(%s,5) acquired',(name,));assert cur.fetchone()['acquired']
                     locks.append(name)
                 snapshot={}
-                for table in ('health_knowledge_card','health_knowledge_point','health_knowledge_import'):
+                for table in ('health_knowledge_card','health_knowledge_point','knowledge_import_batch'):
                     cur.execute('SHOW CREATE TABLE '+table);schema=cur.fetchone()
-                    cur.execute('SELECT * FROM '+table+' ORDER BY '+('batch_id' if table=='health_knowledge_import' else 'id'))
+                    cur.execute('SELECT * FROM '+table+' ORDER BY '+'id')
                     snapshot[table]={'schema':schema,'rows':list(cur.fetchall())}
                 parsed={}
                 for bid in batch_ids:
@@ -68,7 +68,7 @@ def main():
                     MODIFY COLUMN nutrition_factors JSON NOT NULL''')
                 cur.execute('DELETE FROM health_knowledge_card')
                 for bid in batch_ids:
-                    cur.execute('UPDATE health_knowledge_import SET mapping_version=%s WHERE batch_id=%s',(VERSION,bid))
+                    cur.execute("UPDATE knowledge_import_batch SET health_parse_result=JSON_SET(COALESCE(health_parse_result,JSON_OBJECT()),'$.mapping_version',%s) WHERE id=%s",(VERSION,bid))
                 conn.commit()
                 print(json.dumps({'points_preserved':len(after),'points_with_nutrition':populated,
                     'nutrition_links':factor_count,'cards_removed':len(cards),'backup':str(backup)},ensure_ascii=False))

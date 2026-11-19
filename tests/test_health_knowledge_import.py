@@ -80,13 +80,16 @@ def test_unchanged_batch_skips_model_and_preserves_records(monkeypatch):
     batch={'id':123,'question':doc()['question'],'parsed_response':s.dumps(doc()),
            'knowledge_base':'health','status':'success','search_metadata':'{}'}
     state={'input_hash':digest({'question':batch['question'],'response':doc(),'search_metadata':{}}),
-           'dictionary_hash':digest([enums()[0],enums()[1],sorted(enums()[2])]),
+           'dictionary_hash':digest([enums()[0],enums()[1],sorted(enums()[2]),{}]),
            'mapping_version':VERSION,'point_count':2}
     conn=MagicMock();conn.__enter__.return_value=conn
     cur=MagicMock();conn.cursor.return_value.__enter__.return_value=cur
-    cur.fetchone.side_effect=[{'acquired':1},batch,state]
+    batch['health_parse_result']=s.dumps(state)
+    cur.fetchone.side_effect=[{'acquired':1},batch]
     monkeypatch.setattr(h,'ensure_tables',lambda:None)
     monkeypatch.setattr(h,'load_enums',enums)
+    monkeypatch.setattr(h,'load_object_dictionary',lambda:{})
+    monkeypatch.setattr('services.health_knowledge_summary_service.refresh',lambda:{'status':'completed'})
     monkeypatch.setattr(h.store,'connect',lambda:conn)
     classifier=MagicMock(side_effect=AssertionError('Must not call model again'))
     result=h.import_batch(123,classifier=classifier)
@@ -144,3 +147,7 @@ def test_save_points_has_no_card_table_dependency():
     queries=[c.args[0] for c in cur.execute.call_args_list]
     assert all('health_knowledge_card' not in q and 'card_id' not in q for q in queries)
     assert any('nutrition_factors' in q for q in queries)
+    assert not any('health_knowledge_import' in q for q in queries)
+    saved=next(c.args for c in cur.execute.call_args_list if 'SET health_parse_result=' in c.args[0])
+    state=__import__('json').loads(saved[1][0])
+    assert state['point_count']==len(points) and state['source_exclusions']==[]
