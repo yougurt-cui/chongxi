@@ -28,6 +28,7 @@ class NativeSearchTests(unittest.TestCase):
         self.assertEqual(payload['tools'], [{'type':'web_search'}])
         self.assertEqual(payload['thinking'], {'type':'disabled'})
         self.assertNotIn('reasoning', payload)
+        self.assertEqual(payload['max_output_tokens'],32768)
         self.assertTrue(args.args[0].endswith('/responses'))
         self.assertEqual(meta['status'], 'searched')
         self.assertEqual(meta['sources'], [{'url':'https://example.org/cats','title':'Cats'}])
@@ -48,6 +49,17 @@ class NativeSearchTests(unittest.TestCase):
         for status, code in [(404,'ToolNotOpen'),(403,'AccessDenied')]:
             with self.subTest(code=code), self.assertRaisesRegex(ValueError,'联网内容插件未开通'):
                 self.call_with({'error':{'code':code}}, status)
+
+    def test_incomplete_response_preserves_text_and_reason(self):
+        body={'status':'incomplete','incomplete_details':{'reason':'max_output_tokens'},
+              'output':[{'type':'message','content':[{'type':'output_text','text':'{"care_activities": ['}]}]}
+        (text,_,meta),_=self.call_with(body)
+        self.assertEqual(text,'{"care_activities": [')
+        self.assertEqual(meta['incomplete_details']['reason'],'max_output_tokens')
+        self.assertEqual(meta['max_output_tokens'],32768)
+        with patch.dict('os.environ',{'DOUBAO_SEARCH_MAX_OUTPUT_TOKENS':'49152'}):
+            (_,_,meta),_=self.call_with(body)
+            self.assertEqual(meta['max_output_tokens'],49152)
 
     def test_supported_hosts(self):
         self.assertTrue(search.supports_search(self.provider()))

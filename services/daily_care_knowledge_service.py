@@ -84,6 +84,9 @@ def import_batch(batch_id):
             with conn.cursor() as cur:
                 cur.execute('SELECT * FROM knowledge_import_batch WHERE id=%s FOR UPDATE',(batch_id,));batch=cur.fetchone()
                 if not batch or batch['knowledge_base']!='daily_care' or batch['status']!='success':raise ValueError('只能解析成功的日常养护批次')
+                metadata=store.decode(batch.get('search_metadata')) or {}
+                if metadata.get('response_status')=='incomplete':
+                    raise ValueError('模型回答被截断，原文已保留；请提高输出上限后重新采集该模型，重复解析无法补全缺失内容')
                 from vendor.chongxi_multi_model_mysql.run import extract_json
                 doc=extract_json(batch['raw_response'] or '',knowledge_base='daily_care',question=batch['question'])
                 from services.daily_care_activity_adapter import points_for, dictionary_scope

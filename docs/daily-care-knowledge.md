@@ -24,3 +24,5 @@
 已有批次可以运行 `python scripts/parse_daily_care_activities.py --task-id TASK_ID` 预览；加 `--apply` 后备份并调用现有入库流程。默认不调用模型。重复导入不新增相同记录；有人工审核而原始内容变化时拒绝替换。指定不存在/未成功采集的任务或批次时明确报错。
 
 `vendor/chongxi_care_import` 包含独立可运行的 JSON/离线 MySQL 导入工具、V3/V4 样例和说明。其本地文件 `--commit` 模式创建的是离线 `pet_care_knowledge`，不作为网站表；网站数据应使用 `--project-root` 配合任务/批次模式。
+
+豆包联网长结构化输出默认使用 `max_output_tokens=32768`，可通过 `DOUBAO_SEARCH_MAX_OUTPUT_TOKENS` 调整。保存响应的完成状态、截断原因和当时输出上限。若响应为 incomplete，原文保留，入库明确报告回答被截断，不自动补造尾部内容；重复解析不重新调用模型，也无法补全缺失内容，需单独重新采集该模型。

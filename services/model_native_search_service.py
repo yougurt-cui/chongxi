@@ -70,6 +70,9 @@ def call(provider, prompt):
         # Ark uses thinking rather than DeepSeek's reasoning.effort parameter.
         payload.pop('reasoning', None)
         payload['thinking'] = {'type': 'disabled'}
+        limit = int(os.getenv('DOUBAO_SEARCH_MAX_OUTPUT_TOKENS', '32768'))
+        if not 1 <= limit <= 262144:raise ValueError('DOUBAO_SEARCH_MAX_OUTPUT_TOKENS须为1至262144')
+        payload['max_output_tokens'] = limit
     response = requests.post(url, headers={'Authorization':'Bearer '+provider.key,'Content-Type':'application/json'},
                              json=payload,timeout=float(os.getenv('LLM_SEARCH_TIMEOUT_SECONDS','180')))
     if provider.name == 'doubao' and response.status_code in (400, 403, 404):
@@ -105,7 +108,9 @@ def call(provider, prompt):
         tool_usage = usage.get('server_tool_use') or {}
         performed = bool(tool_usage.get('tool_search') or (usage.get('tool_usage') or {}).get('web_search') or any(c.get('status')=='completed' for c in calls))
         metadata = {'web_search_calls':calls,'annotations':annotations,'usage':usage,
-                    'response_id':body.get('id'),'response_status':body.get('status')}
+                    'response_id':body.get('id'),'response_status':body.get('status'),
+                    'incomplete_details':body.get('incomplete_details'),
+                    'max_output_tokens':payload.get('max_output_tokens')}
         input_tokens, output_tokens = usage.get('input_tokens'), usage.get('output_tokens')
     metadata.update(requested=True,performed=performed,
                     status='searched' if performed and sources else 'no_sources' if performed else 'not_confirmed',

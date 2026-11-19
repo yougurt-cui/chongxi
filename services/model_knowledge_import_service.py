@@ -299,9 +299,10 @@ def import_task(task_id):
                 continue
         elif row['status']!='success':continue
         try:results.append(process_batch_pipeline(row['id']))
-        except Exception:
+        except Exception as exc:
             LOGGER.exception('model_response_reimport_failed batch_id=%s',row['id'])
-            errors.append({'batch_id':row['id'],'message':'解析或入库失败，原始回答保留，请查看日志'})
+            message=str(exc) if row.get('knowledge_base')=='daily_care' and isinstance(exc,ValueError) else '解析或入库失败，原始回答保留，请查看日志'
+            errors.append({'batch_id':row['id'],'message':message})
     return {'database':database_name(),'task_id':task_id,'results':results,'errors':errors,
             'status':'partial_failed' if errors else 'running' if any(r.get('status') == 'running' for r in results) else 'completed' if results else 'no_successful_responses'}
 

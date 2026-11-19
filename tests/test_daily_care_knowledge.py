@@ -90,3 +90,12 @@ def test_daily_care_dispatch_and_failed_json_retains_successful_call():
         r=run.call_provider(provider,'prompt',web_search=True,knowledge_base='daily_care')
     assert r['status']=='success' and r['parsed'] is None
     parse.assert_not_called()
+
+
+
+def test_incomplete_response_is_reported_without_parsing_or_touching_points():
+    conn,cur=db();cur.fetchone.return_value.update(search_metadata=json.dumps({'response_status':'incomplete'}))
+    with patch.object(store,'ensure_database'),patch.object(store,'connect',return_value=conn),patch.object(care,'load_dictionary',return_value={}),patch.object(run,'extract_json') as extract:
+        with pytest.raises(ValueError,match='回答被截断'):care.import_batch(5)
+    extract.assert_not_called()
+    assert not any('INSERT' in c.args[0] or 'DELETE' in c.args[0] for c in cur.execute.call_args_list)
