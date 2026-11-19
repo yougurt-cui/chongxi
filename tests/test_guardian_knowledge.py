@@ -70,7 +70,7 @@ class RetrievalTest(unittest.TestCase):
         self.assertEqual([r['id'] for r in result['items']], [2])
         sql, params = cur.execute.call_args.args
         self.assertNotIn("OR 1=1 --", sql)
-        self.assertIn('knowledge_point_source', sql)
+        self.assertIn('knowledge_point', sql)
         self.assertNotIn('kd_problem_guides', sql)
         self.assertNotIn('knowledge_base', sql)
         self.assertLess(sql.index('ORDER BY'), sql.index('LIMIT'))

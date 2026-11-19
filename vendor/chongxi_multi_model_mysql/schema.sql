@@ -1,3 +1,4 @@
+-- Current collection batches, source details and summarized selection knowledge.
 CREATE TABLE IF NOT EXISTS knowledge_import_batch (
  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
  task_id BIGINT UNSIGNED NOT NULL DEFAULT 0,
@@ -6,6 +7,7 @@ CREATE TABLE IF NOT EXISTS knowledge_import_batch (
  question TEXT NOT NULL,
  prompt_template LONGTEXT NOT NULL,
  web_search TINYINT(1) NOT NULL DEFAULT 0,
+ knowledge_base VARCHAR(32) NOT NULL DEFAULT 'selection',
  status ENUM('running','success','parse_failed','api_failed') NOT NULL DEFAULT 'running',
  raw_response LONGTEXT NULL,
  parsed_response JSON NULL,
@@ -15,13 +17,14 @@ CREATE TABLE IF NOT EXISTS knowledge_import_batch (
  completion_tokens INT UNSIGNED NULL,
  latency_ms INT UNSIGNED NULL,
  import_error TEXT NULL,
+ product_import_result JSON NULL,
  imported_at DATETIME NULL,
  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
  finished_at DATETIME NULL,
  UNIQUE KEY uq_task_provider (task_id,provider),
  KEY idx_batch_status (status,created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-CREATE TABLE IF NOT EXISTS knowledge_point_source (
+CREATE TABLE IF NOT EXISTS knowledge_point_source_detail (
  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
  batch_id BIGINT UNSIGNED NOT NULL,
  source_provider VARCHAR(32) NOT NULL,
@@ -29,6 +32,11 @@ CREATE TABLE IF NOT EXISTS knowledge_point_source (
  species_code VARCHAR(32) NULL,
  breed_code VARCHAR(255) NULL,
  life_stage_codes JSON NOT NULL,
+ need_scene_code VARCHAR(64) NULL,
+ need_scene_name VARCHAR(255) NULL,
+ need_scene_codes JSON NULL,
+ need_relation VARCHAR(16) NULL,
+ scene_meta JSON NULL,
  need_codes JSON NOT NULL,
  category_code VARCHAR(255) NULL,
  topic_code VARCHAR(255) NULL,
@@ -36,4 +44,23 @@ CREATE TABLE IF NOT EXISTS knowledge_point_source (
  standardization_meta JSON NULL,
  KEY idx_source_batch (batch_id),
  CONSTRAINT fk_source_batch_simple FOREIGN KEY (batch_id) REFERENCES knowledge_import_batch(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS knowledge_point (
+ id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+ species_code VARCHAR(32) NOT NULL,
+ breed_code VARCHAR(255) NOT NULL,
+ life_stage_code VARCHAR(32) NOT NULL,
+ need_scene_code VARCHAR(64) NOT NULL,
+ need_scene_name VARCHAR(255) NOT NULL,
+ need_scene_codes JSON NOT NULL,
+ need_relation VARCHAR(16) NOT NULL,
+ category VARCHAR(64) NOT NULL,
+ content LONGTEXT NOT NULL,
+ sources JSON NOT NULL,
+ source_count INT UNSIGNED NOT NULL,
+ model_count INT UNSIGNED NOT NULL,
+ summary_meta JSON NOT NULL,
+ updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+ UNIQUE KEY uq_knowledge_category (species_code,breed_code,life_stage_code,need_scene_code,category)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

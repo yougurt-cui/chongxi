@@ -16,19 +16,19 @@ def main():
     with store.connect() as conn:
         try:
             with conn.cursor() as cur:
-                cur.execute('SELECT * FROM knowledge_point_source ORDER BY id FOR UPDATE')
+                cur.execute('SELECT * FROM knowledge_point ORDER BY id FOR UPDATE')
                 rows = list(cur.fetchall())
                 affected = [r for r in rows if store.decode(r['life_stage_codes']) == ['unspecified']]
                 with args.backup_file.open('x', encoding='utf-8') as backup:
                     os.chmod(args.backup_file, 0o600)
-                    json.dump({'database': store.database_name(), 'table': 'knowledge_point_source',
+                    json.dump({'database': store.database_name(), 'table': 'knowledge_point',
                                'rows': affected}, backup, ensure_ascii=False, default=str, indent=2)
                     backup.flush()
                     os.fsync(backup.fileno())
                 for row in affected:
-                    cur.execute('UPDATE knowledge_point_source SET life_stage_codes=%s WHERE id=%s',
+                    cur.execute('UPDATE knowledge_point SET life_stage_codes=%s WHERE id=%s',
                                 (store.dumps(['all_stages']), row['id']))
-                cur.execute('SELECT * FROM knowledge_point_source ORDER BY id')
+                cur.execute('SELECT * FROM knowledge_point ORDER BY id')
                 after = list(cur.fetchall())
                 expected = [dict(r, life_stage_codes=store.dumps(['all_stages']))
                             if store.decode(r['life_stage_codes']) == ['unspecified'] else r for r in rows]

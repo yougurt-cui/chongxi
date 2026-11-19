@@ -2,7 +2,7 @@
 
 数据库：`chongxi_model_knowledge`。
 
-`knowledge_point_source` 每行一个对象下的一个知识分类，唯一键为
+`knowledge_point` 每行一个对象下的一个知识分类，唯一键为
 `(species_code, breed_code, life_stage_code, need_scene_code, category)`。
 
 字段顺序：`id`、`species_code`、`breed_code`、`life_stage_code`、`need_scene_code`、`need_scene_name`、`need_scene_codes`、`need_relation`、`category`、
@@ -53,3 +53,9 @@
 其中 19 行通过来源覆盖校验复用已有总结，36 组重新总结。
 备份与清洗报告：`var/backups/need-scene-cleaning-20261111/`。
 原无场景汇总表保留为 `knowledge_point_source_no_scene_backup_20261111`。
+
+## 汇总表改名（2026-11-19）
+
+对象维度汇总表统一使用 `knowledge_point`，原名为 `knowledge_point_source`。字段、ID、总结内容、来源引用及索引均不变，`knowledge_point_source_detail` 继续保留原名。采集、千问总结、任务详情和商品推荐导入均已使用新表名。
+
+预览：`python scripts/rename_knowledge_point_table.py`。停止旧版 API 与采集进程后执行 `python scripts/rename_knowledge_point_table.py --apply`；脚本备份到 `var/knowledge-point-rename-backups`，使用原子 `RENAME TABLE`，核对全表内容哈希、结构和自增序列，不调用模型。新旧表同时存在时拒绝覆盖。历史聊天中的旧表名作为来源标签继续兼容，不执行旧表查询。

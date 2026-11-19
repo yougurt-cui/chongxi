@@ -13,12 +13,12 @@ def migrate(backup_dir):
             cur.execute("SELECT COUNT(*) AS n FROM knowledge_import_batch WHERE status='running'")
             if cur.fetchone()['n']:raise RuntimeError('请先等待采集任务结束')
             payload={'database':store.database_name(),'tables':{}}
-            for table in ('knowledge_import_batch','knowledge_point_source'):
+            for table in ('knowledge_import_batch','knowledge_point'):
                 cur.execute(f'SHOW CREATE TABLE `{table}`');schema=cur.fetchone()
                 cur.execute(f'SELECT * FROM `{table}` ORDER BY id');rows=cur.fetchall()
                 payload['tables'][table]={'schema':schema,'rows':rows}
             (backup/'data.json').write_text(json.dumps(payload,ensure_ascii=False,default=str))
-            cur.execute('''ALTER TABLE knowledge_point_source
+            cur.execute('''ALTER TABLE knowledge_point
                 DROP COLUMN notes, DROP COLUMN topic,
                 MODIFY original_condition TEXT NOT NULL AFTER batch_id,
                 MODIFY species_code VARCHAR(32) NULL AFTER original_condition,
@@ -29,8 +29,8 @@ def migrate(backup_dir):
                 MODIFY topic_code VARCHAR(255) NULL AFTER category_code,
                 MODIFY content TEXT NOT NULL AFTER topic_code,
                 MODIFY standardization_meta JSON NULL AFTER content''')
-            cur.execute('SELECT * FROM knowledge_point_source ORDER BY id');new=cur.fetchall()
-            expected=[{k:v for k,v in r.items() if k not in ('notes','topic')} for r in payload['tables']['knowledge_point_source']['rows']]
+            cur.execute('SELECT * FROM knowledge_point ORDER BY id');new=cur.fetchall()
+            expected=[{k:v for k,v in r.items() if k not in ('notes','topic')} for r in payload['tables']['knowledge_point']['rows']]
             assert new==expected,'保留列数据核验失败'
         conn.commit()
     return {'backup':str(backup),'rows':len(new),'all_retained_fields_unchanged':True}

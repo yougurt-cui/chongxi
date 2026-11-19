@@ -13,7 +13,7 @@ sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 from app_config import get_mysql_config
 from services import model_knowledge_import_service as store
 
-KB_TABLES={'knowledge_import_batch','knowledge_point_source','knowledge_point_candidate','knowledge_response_search'}
+KB_TABLES={'knowledge_import_batch','knowledge_point','knowledge_point_candidate','knowledge_response_search'}
 OLD_COLLECTION={'distill_task','distill_model_response','distill_knowledge_candidate','distill_task_options','distill_model_search'}
 
 
@@ -59,7 +59,7 @@ def reset(backup_dir,remove_old_collection=True):
                 backups[label]={'tables':{k:len(v['rows']) for k,v in snapshots.items()},'sha256':hashlib.sha256(encoded).hexdigest()}
         (backup_dir/'manifest.json').write_text(json.dumps({'target':target,'backups':backups},ensure_ascii=False,indent=2))
         with destination.cursor() as cur:
-            for table in ['knowledge_point_source','knowledge_response_search','knowledge_point_candidate','knowledge_import_batch']:
+            for table in ['knowledge_point','knowledge_response_search','knowledge_point_candidate','knowledge_import_batch']:
                 cur.execute('DROP TABLE IF EXISTS `'+table+'`')
         destination.commit()
         if remove_old_collection:
@@ -70,7 +70,7 @@ def reset(backup_dir,remove_old_collection=True):
         store._ensure_database.cache_clear();store.ensure_database()
         with destination.cursor() as cur:
             actual=tables(cur)
-            assert actual=={'knowledge_import_batch','knowledge_point_source'},actual
+            assert actual=={'knowledge_import_batch','knowledge_point'},actual
             for table in actual:
                 cur.execute('SELECT COUNT(*) AS n FROM `'+table+'`');assert cur.fetchone()['n']==0
         return {'database':target,'tables':sorted(actual),'status':'reset_empty','backup':str(backup_dir)}

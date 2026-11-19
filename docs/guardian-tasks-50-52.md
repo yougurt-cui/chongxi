@@ -1,3 +1,5 @@
+> 2026-11-19 更新：当前对象维度汇总表已由 `knowledge_point_source` 改名为 `knowledge_point`，明细表 `knowledge_point_source_detail` 不变。以下为历史记录。
+
 # 管家任务 50–52：健康原因、换粮影响与选粮对比
 
 需求来源：[宠析需求池](https://my.feishu.cn/wiki/H5v3wyrKvib1BckmWEjcSrnln8c?sheet=64b243)，2026-11-10 revision 968，第53–55行（需求编号50–52），已读取三张设计图。

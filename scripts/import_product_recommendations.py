@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Normalize product recommendations from knowledge_point_source or JSON exports."""
+"""Normalize product recommendations from knowledge_point or JSON exports."""
 import argparse
 import json
 import sys
@@ -17,9 +17,9 @@ def positive(value):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     inputs = parser.add_mutually_exclusive_group(required=True)
-    inputs.add_argument('--input', type=Path, help='扁平JSON或 knowledge_point_source 查询导出数组')
+    inputs.add_argument('--input', type=Path, help='扁平JSON或 knowledge_point 查询导出数组')
     inputs.add_argument('--from-db', action='store_true', help="读取 category='product_recommendation'")
-    parser.add_argument('--source-id', type=positive, help='knowledge_point_source.id，仅用于--from-db')
+    parser.add_argument('--source-id', type=positive, help='knowledge_point.id，仅用于--from-db')
     parser.add_argument('--after-id', type=int, default=0)
     parser.add_argument('--limit', type=positive)
     modes = parser.add_mutually_exclusive_group()

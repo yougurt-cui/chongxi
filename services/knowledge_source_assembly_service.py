@@ -11,7 +11,7 @@ TOPICS.update(dict.fromkeys(('protein_nutrition', 'fat_energy', 'omega_coat', 'i
 TOPICS.update(dict.fromkeys(('product_formula', 'product_nutrition', 'kibble_shape'), 'product_overview'))
 TOPICS['product_selection_risks'] = 'product_suitability'
 
-DDL = """CREATE TABLE IF NOT EXISTS knowledge_point_source (
+DDL = """CREATE TABLE IF NOT EXISTS knowledge_point (
  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
  species_code VARCHAR(32) NOT NULL,
  breed_code VARCHAR(255) NOT NULL,
@@ -31,6 +31,13 @@ DDL = """CREATE TABLE IF NOT EXISTS knowledge_point_source (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4"""
 SUMMARY_VERSION = '2026-11-11-category-scene-v2'
 KEY_COLUMNS = ('species_code','breed_code','life_stage_code','need_scene_code','category')
+
+
+def require_current_table_name(cur):
+    """Refuse to create an empty replacement beside an unmigrated summary table."""
+    cur.execute("SELECT TABLE_NAME name FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=%s",('knowledge_point_source',))
+    if cur.fetchone():
+        raise RuntimeError('请先执行 scripts/rename_knowledge_point_table.py --apply 将旧汇总表改名为 knowledge_point')
 
 
 def digest(value):
@@ -150,9 +157,9 @@ def fetch_rows():
         return list(cur.fetchall())
 
 
-def refresh(*,force=False,table='knowledge_point_source',summarizer=None,sync_scenes=True):
+def refresh(*,force=False,table='knowledge_point',summarizer=None,sync_scenes=True):
     import re
-    if not re.fullmatch(r'knowledge_point_source(?:_rebuild_[0-9]+)?',table):raise ValueError('无效汇总表名')
+    if not re.fullmatch(r'knowledge_point(?:_rebuild_[0-9]+)?',table):raise ValueError('无效汇总表名')
     summarize_fn=summarizer or summarize
     counts={'object_count':0,'category_count':0,'detail_count':0,'summarized':0,'reused':0,'failed':[],
             'unassigned_source_ids':[],'pending_source_ids':[]}
@@ -162,7 +169,8 @@ def refresh(*,force=False,table='knowledge_point_source',summarizer=None,sync_sc
         cur.execute('SELECT GET_LOCK(%s,0) acquired',(lock,))
         if not cur.fetchone()['acquired']:return {**counts,'status':'busy'}
         try:
-            cur.execute(DDL.replace('knowledge_point_source (',table+' (',1));conn.commit()
+            require_current_table_name(cur)
+            cur.execute(DDL.replace('knowledge_point (',table+' (',1));conn.commit()
             if sync_scenes:
                 from services.knowledge_need_scene_service import sync_scene_fields
                 counts['scene_sync']=sync_scene_fields()
@@ -209,7 +217,7 @@ def task_objects(task_id):
             WHERE b.task_id=%s""",(task_id,))
         keys={(r['species_code'],r['breed_code'],stage,r['need_scene_code']) for r in cur.fetchall()
               for stage in (store.decode(r['life_stage_codes']) or [])}
-        cur.execute('SELECT * FROM knowledge_point_source ORDER BY species_code,breed_code,life_stage_code,need_scene_code,category')
+        cur.execute('SELECT * FROM knowledge_point ORDER BY species_code,breed_code,life_stage_code,need_scene_code,category')
         rows=[r for r in cur.fetchall() if (r['species_code'],r['breed_code'],r['life_stage_code'],r['need_scene_code']) in keys]
     for row in rows:
         row['sources']=store.decode(row['sources']);row['summary_meta']=store.decode(row['summary_meta']);row['need_scene_codes']=store.decode(row['need_scene_codes'])

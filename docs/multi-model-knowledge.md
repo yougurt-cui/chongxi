@@ -1,3 +1,5 @@
+> 当前选粮汇总结果表为 `knowledge_point`，由千问基于 `knowledge_point_source_detail` 总结生成。改名迁移使用 `python scripts/rename_knowledge_point_table.py --apply`，不改变明细及汇总内容。
+
 # 多模型知识采集：两张表
 
 入口 `/pipeline-review.html#multi-model`，沿用工作台 data_admin/member 或 X-Admin-Token 权限。采集数据只使用独立库 `chongxi_model_knowledge` 的两张表；标准词典在独立库 `chongxi_knowledge_dictionary` 中。
@@ -6,7 +8,7 @@
 
 `knowledge_import_batch` 每个模型响应一条记录，通过 task_id 关联同次采集。保存问题、模板、模型、原始响应、解析 JSON、联网来源、用量和错误。
 
-`knowledge_point_source` 将适用条件映射拆成独立列，不再包含 applicable_conditions、standardized_mappings、notes、topic 列：
+`knowledge_point_source_detail` 将适用条件映射拆成独立列，不再包含 applicable_conditions、standardized_mappings、notes、topic 列：
 
 | 字段 | 用途 |
 |---|---|
@@ -71,7 +73,7 @@
 
 ### 数据隔离
 
-`knowledge_import_batch` 新增 `knowledge_base VARCHAR(32) NOT NULL DEFAULT 'selection'`（`_ensure_database()` 内幂等 ALTER，历史数据默认归入选粮库）。`knowledge_point_source` 不重复存该字段，列表查询 JOIN 批次表获取。
+`knowledge_import_batch` 新增 `knowledge_base VARCHAR(32) NOT NULL DEFAULT 'selection'`（`_ensure_database()` 内幂等 ALTER，历史数据默认归入选粮库）。`knowledge_point_source_detail` 不重复存该字段，列表查询 JOIN 批次表获取。
 
 ### 接口变更
 

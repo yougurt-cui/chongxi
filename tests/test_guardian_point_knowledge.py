@@ -78,7 +78,7 @@ def test_database_outage_does_not_fall_back_and_empty_query_does_not_connect():
         connect.assert_not_called()
 
 def test_failure_never_exposes_unsynthesized_model_claims():
-    row=point(content='营养至少百分之四十',source_table='knowledge_point_source',status='待审核',evidence_status='待验证')
+    row=point(content='营养至少百分之四十',source_table='knowledge_point',status='待审核',evidence_status='待验证')
     with patch.object(qa,'get_chat_model_config',return_value={'api_key':''}):
         reply,mode,ids,data,note=qa.structured_answer('问题',{}, {}, {'status':'matched','items':[row]})
     assert mode=='synthesis_unavailable' and not ids and '百分之四十' not in reply

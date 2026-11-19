@@ -61,7 +61,7 @@ def read_sources(*, source_id=None, after_id=0, limit=None):
     clauses, params = ['category=%s', 'id>%s'], ['product_recommendation', after_id]
     if source_id is not None:
         clauses.append('id=%s'); params.append(source_id)
-    sql = 'SELECT * FROM knowledge_point_source WHERE ' + ' AND '.join(clauses) + ' ORDER BY id'
+    sql = 'SELECT * FROM knowledge_point WHERE ' + ' AND '.join(clauses) + ' ORDER BY id'
     if limit is not None:
         sql += ' LIMIT %s'; params.append(limit)
     with source_store.connect() as conn, conn.cursor() as cur:

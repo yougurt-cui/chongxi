@@ -280,7 +280,8 @@ def retrieve(plan):
 
 def structured_answer(message, context, plan, retrieval):
     rows = retrieval['items']
-    point_tables = {'knowledge_point_source', 'knowledge_point_source_detail'}
+    # Historical chat metadata may still contain the former summary table name.
+    point_tables = {'knowledge_point', 'knowledge_point_source_detail', 'knowledge_point_source'}
     point_source = retrieval.get('source_table') in point_tables or any(r.get('source_table') in point_tables for r in rows)
     if not rows:
         text_reply = ('本地养宠资料暂时无法读取，请稍后重试。' if retrieval['status'] == 'unavailable' else

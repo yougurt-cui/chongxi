@@ -7,7 +7,7 @@
 支持压缩包的扁平 JSON 示例，以及查询导出的完整对象数组：
 
 ```sql
-SELECT * FROM knowledge_point_source
+SELECT * FROM knowledge_point
 WHERE category = 'product_recommendation'
 ORDER BY id;
 ```

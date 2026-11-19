@@ -50,7 +50,8 @@ def _ensure_database(name):
                     cur.execute('ALTER TABLE knowledge_import_batch ADD COLUMN product_import_result JSON NULL')
                 except pymysql.err.OperationalError as exc:
                     if exc.args[0] != 1060: raise
-            from services.knowledge_source_assembly_service import DDL
+            from services.knowledge_source_assembly_service import DDL, require_current_table_name
+            require_current_table_name(cur)
             cur.execute(DDL)
             from services.health_knowledge_import_service import ensure_parse_column
             ensure_parse_column(cur)

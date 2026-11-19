@@ -1,3 +1,5 @@
+> 2026-11-19 更新：当前对象维度汇总表已由 `knowledge_point_source` 改名为 `knowledge_point`，明细表 `knowledge_point_source_detail` 不变。以下为历史记录。
+
 # 需求34：管家接入本地知识库
 
 2026-11-08：知识来源及健康咨询入口已按[需求49](guardian-knowledge-source-49.md)切换。
