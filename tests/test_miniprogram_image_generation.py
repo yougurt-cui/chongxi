@@ -47,7 +47,7 @@ def runtime(monkeypatch):
     rows, jobs, calls = {}, [], []
     monkeypatch.setattr(service, 'init_tables', lambda: None)
     monkeypatch.setattr(service, '_expire', lambda user: None)
-    monkeypatch.setattr(service, 'get_ark_image_config', lambda: dict(api_key='test-key', model='test-model', base_url='https://ark.test/api/v3'))
+    monkeypatch.setattr(service, 'get_image_config', lambda: dict(api_key='test-key', model='test-model', base_url='https://ark.test/api/v3'))
     monkeypatch.setattr(service, '_slots', threading.BoundedSemaphore(4))
     def find(user, *, task_id=None, request_id=None):
         return next((r.copy() for r in rows.values() if r['user_id'] == user and (r['id'] == task_id if task_id else r['request_id'] == request_id)), None)
@@ -128,5 +128,31 @@ def test_worker_failure_releases_slot(runtime, monkeypatch):
 
 
 def test_missing_configuration(runtime, monkeypatch):
-    monkeypatch.setattr(service, 'get_ark_image_config', lambda: {'api_key': ''})
+    monkeypatch.setattr(service, 'get_image_config', lambda: {'api_key': ''})
     assert submit(runtime[0]).status_code == 503
+
+
+def test_seedream_55_request_is_single_reference_generation(runtime, monkeypatch):
+    client,rows,jobs,calls=runtime
+    monkeypatch.setattr(service,'get_image_config',lambda:dict(api_key='test-key',model='doubao-seedream-5-5-261028',base_url='https://ark.test/api/v3'))
+    submit(client)
+    fn,args=jobs.pop();fn(*args)
+    payload=calls[0][1]['json']
+    assert payload['model']=='doubao-seedream-5-5-261028'
+    assert payload['output_format']=='jpeg' and payload['response_format']=='b64_json'
+    assert 'sequential_image_generation' not in payload and 'stream' not in payload
+    assert not payload.get('layer_decomposition')
+
+
+def test_reference_model_default_is_isolated_from_shared_ark_config(monkeypatch):
+    monkeypatch.delenv('MINIPROGRAM_IMAGE_MODEL',raising=False)
+    monkeypatch.delenv('MINIPROGRAM_IMAGE_API_KEY',raising=False)
+    shared=dict(model='doubao-seedream-4-0-250828',api_key='test',base_url='https://ark.test/api/v3')
+    monkeypatch.setattr(service,'get_ark_image_config',lambda:dict(shared))
+    assert service.get_image_config()['model']=='doubao-seedream-5-5-261028'
+    assert shared['model']=='doubao-seedream-4-0-250828'
+    monkeypatch.setenv('MINIPROGRAM_IMAGE_API_KEY','new-test-key')
+    assert service.get_image_config()['api_key']=='new-test-key'
+    assert shared['api_key']=='test'
+    monkeypatch.setenv('MINIPROGRAM_IMAGE_MODEL','doubao-seedream-4-0-250828')
+    assert service.get_image_config()['model']=='doubao-seedream-4-0-250828'

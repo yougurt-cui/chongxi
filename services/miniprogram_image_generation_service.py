@@ -4,6 +4,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import logging
+import os
 import re
 import threading
 import uuid
@@ -18,6 +19,13 @@ from werkzeug.datastructures import FileStorage
 
 from app_config import get_ark_image_config, get_mysql_config
 from services.miniprogram_moment_image_service import upload_moment_image
+
+def get_image_config():
+    config = get_ark_image_config()
+    config['api_key'] = os.getenv('MINIPROGRAM_IMAGE_API_KEY', '').strip() or config['api_key']
+    config['model'] = os.getenv('MINIPROGRAM_IMAGE_MODEL', '').strip() or 'doubao-seedream-5-5-261028'
+    return config
+
 
 TABLE = 'miniprogram_image_generation'
 MAX_BYTES = 10 * 1024 * 1024
@@ -142,7 +150,7 @@ def validate_input(image_file, prompt, request_id):
 
 def create_task(user_id, image_file, prompt, request_id):
     content, prompt, request_id = validate_input(image_file, prompt, request_id)
-    config = get_ark_image_config()
+    config = get_image_config()
     if not config['api_key']:
         raise ConfigurationError('生图服务尚未配置')
     init_tables()
@@ -190,14 +198,18 @@ def get_task(user_id, task_id):
 
 def generate_reference_image(content, prompt, config):
     # Base64 input avoids public reference URLs; base64 output avoids expiring vendor URLs.
-    with requests.post(f"{config['base_url']}/images/generations", headers={
-        'Authorization': f"Bearer {config['api_key']}", 'Content-Type': 'application/json',
-    }, json={
+    payload = {
         'model': config['model'], 'prompt': prompt,
         'image': 'data:image/jpeg;base64,' + base64.b64encode(content).decode('ascii'),
-        'size': '2048x2048', 'response_format': 'b64_json',
-        'sequential_image_generation': 'disabled', 'stream': False, 'watermark': False,
-    }, timeout=(10, 180)) as response:
+        'size': '2048x2048', 'response_format': 'b64_json', 'watermark': False,
+    }
+    if config['model'].startswith(('doubao-seedream-5-5', 'doubao-seedream-5-0-pro', 'doubao-seedream-5-0-flash')):
+        payload['output_format'] = 'jpeg'
+    else:
+        payload.update(sequential_image_generation='disabled', stream=False)
+    with requests.post(f"{config['base_url']}/images/generations", headers={
+        'Authorization': f"Bearer {config['api_key']}", 'Content-Type': 'application/json',
+    }, json=payload, timeout=(10, 180)) as response:
         response.raise_for_status()
         payload = response.json()
     items = payload.get('data') or []

@@ -20,7 +20,7 @@
 
 ## 运行配置
 
-沿用 `get_ark_image_config()`：`ARK_API_KEY`（或 `VOLCENGINE_ARK_API_KEY`）、`ARK_BASE_URL`、`ARK_IMAGE_MODEL`。默认模型为 `doubao-seedream-4-0-250828`。参考图以 JPEG data URI 发送到 Ark `/images/generations`，请求 2048x2048 单图、b64_json 返回；结果转 JPEG 后通过现有 moment image 存储服务持久化。需要已有 MySQL、图片存储配置及 Pillow/requests 依赖。
+沿用 `get_ark_image_config()`：`ARK_API_KEY`（或 `VOLCENGINE_ARK_API_KEY`）、`ARK_BASE_URL`、`ARK_IMAGE_MODEL`。可用 `MINIPROGRAM_IMAGE_API_KEY` 单独配置参考图生图密钥，未配置则沿用共享密钥。小程序参考图生图独立使用 `MINIPROGRAM_IMAGE_MODEL`，默认模型为 `doubao-seedream-5-5-261028`；共享 `ARK_IMAGE_MODEL` 不受此次切换影响。参考图以 JPEG data URI 发送到 Ark `/images/generations`，请求 2048x2048 单图、b64_json 返回；5.5 显式请求 JPEG，不发送其不支持的 `sequential_image_generation`、`stream` 参数，不启用图层拆分；结果转 JPEG 后通过现有 moment image 存储服务持久化。需要已有 MySQL、图片存储配置及 Pillow/requests 依赖。
 
 首次请求创建 `miniprogram_image_generation` 表，数据库账号需建表权限。任务记录在 MySQL；执行队列在进程内，每进程 2 个工作线程、最多 4 个运行/等待任务；数据库唯一索引限制每账号一个活跃任务。部署重启会中断内存队列，不自动重放有费用的模型请求；创建或查询时将该账号超过 10 分钟的活跃任务标记失败，用户可重试。多进程部署的总并发为进程数乘以 2。
 
