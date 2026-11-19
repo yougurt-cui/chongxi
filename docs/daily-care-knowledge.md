@@ -1,6 +1,6 @@
 # 日常养护知识库
 
-入口：`pipeline-review.html#multi-model` → 日常养护知识库（`daily_care`）。内置“日常养护与操作步骤”“养护计划与观察记录”两个可编辑提示词模板。
+入口：`pipeline-review.html#multi-model` → 日常养护知识库（`daily_care`）。内置“日常养护与操作步骤”“养护计划与观察记录”两个可编辑提示词模板。自定义模板未写 `{{question}}` 时，保存会在正文末尾自动补充“本次采集问题：{{question}}”，原有正文不改写；补充后仍须满足 30,000 字上限。
 
 采用现有多模型后台采集。每个模型返回后先将原始回答、模型、提示词、问题、搜索来源、用量和采集状态保存到 `chongxi_model_knowledge.knowledge_import_batch`，再自动从保存的回答解析 `care_points`，写入独立表 `daily_care_knowledge_point_detail`。解析错误写入批次的 `import_error`，不覆盖原始回答或成功采集状态；任务详情可点击“重新解析 / 入库”重试，不重新调用模型。也可调用现有 `POST /api/admin/multi-model/tasks/<task_id>/import`。
 

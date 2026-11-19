@@ -65,9 +65,19 @@ class PromptTemplatesTest(unittest.TestCase):
         with self.assertRaises(prompts.TemplateConflict):
             prompts.save_template(stale)
 
-    def test_missing_placeholder_rejected(self):
-        with self.assertRaisesRegex(ValueError, 'question'):
-            prompts.save_template(self.payload(template='没有问题占位符'))
+    def test_missing_placeholder_is_appended_without_rewriting_body(self):
+        body = '# 宠析｜宠物日常养护知识库统一蒸馏提示词 V3.0\n保留原始蒸馏指令'
+        result = prompts.save_template(self.payload(template=body))
+        saved = next(t for t in result['bases'][0]['templates'] if t['code'] == result['saved_code'])
+        self.assertEqual(saved['template'], body + '\n\n本次采集问题：{{question}}')
+        self.assertTrue(result['question_placeholder_added'])
+        again = prompts.save_template(self.payload(template=saved['template']), base_code='selection', template_code=result['saved_code'])
+        self.assertFalse(again['question_placeholder_added'])
+
+    def test_placeholder_append_cannot_exceed_limit_and_blank_is_rejected(self):
+        for body in (' ' * 10, 'a' * 30000):
+            with self.assertRaises(ValueError):
+                prompts.save_template(self.payload(template=body))
         self.assertFalse(prompts.SETTINGS_PATH.exists())
 
     def test_unknown_base_and_template_rejected(self):

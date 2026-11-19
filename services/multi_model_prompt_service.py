@@ -82,8 +82,13 @@ def save_template(payload, *, base_code=None, template_code=None):
         raise ValueError('模板名称须为1–80字')
     if not isinstance(description, str) or len(description) > 500:
         raise ValueError('模板说明不能超过500字')
-    if not isinstance(template, str) or not 1 <= len(template) <= 30000 or '{{question}}' not in template:
-        raise ValueError('模板须包含 {{question}} 且不超过30000字')
+    if not isinstance(template, str) or not template.strip() or len(template) > 30000:
+        raise ValueError('模板全文不能为空，且不能超过30000字')
+    placeholder_added = '{{question}}' not in template
+    if placeholder_added:
+        template += '\n\n本次采集问题：{{question}}'
+        if len(template) > 30000:
+            raise ValueError('自动补充 {{question}} 后超过30000字，请缩短模板或在正文中插入占位符')
     active, default = payload.get('active', True), payload.get('is_default', False)
     if not isinstance(active, bool) or not isinstance(default, bool):
         raise ValueError('启用和默认设置必须为布尔值')
@@ -125,4 +130,4 @@ def save_template(payload, *, base_code=None, template_code=None):
         finally:
             if tmp and os.path.exists(tmp):
                 os.unlink(tmp)
-    return {**updated, 'saved_code': template_code, 'saved_base': base_code}
+    return {**updated, 'saved_code': template_code, 'saved_base': base_code, 'question_placeholder_added': placeholder_added}

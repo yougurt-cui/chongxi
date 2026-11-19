@@ -1396,11 +1396,11 @@
         <label style="display:block;margin:16px 0;"><span class="field-label">所属知识库</span><select id="promptBase" aria-label="模板所属知识库"></select></label>
         <div class="template-layout">
           <div><div id="promptList" aria-label="提示词模板列表"></div><p id="promptListMessage" class="muted" role="status"></p></div>
-          <form id="promptForm" class="template-editor">
+          <form id="promptForm" class="template-editor" novalidate>
             <div class="title" id="promptEditorTitle" style="margin-bottom:16px;">选择或新增模板</div>
             <label><span class="field-label">模板名称 *</span><input id="promptTitle" type="text" required maxlength="80" placeholder="例如：肠道营养知识抽取" /></label>
             <label><span class="field-label">用途说明</span><textarea id="promptDescription" maxlength="500" rows="2" placeholder="描述这个模板适合什么问题"></textarea></label>
-            <label><span class="field-label">提示词全文 *</span><textarea id="promptContent" required maxlength="30000" rows="20" spellcheck="false" style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;" placeholder="在模板中使用 {{question}} 插入本次问题"></textarea><span class="muted">须保留 {{question}} 占位符，最多 30,000 字。</span></label>
+            <label><span class="field-label">提示词全文 *</span><textarea id="promptContent" required maxlength="30000" rows="20" spellcheck="false" style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;" placeholder="在模板中使用 {{question}} 插入本次问题"></textarea><span class="muted">使用 {{question}} 插入本次问题；未填写时，保存会自动在末尾补充。全文最多 30,000 字。</span></label>
             <div class="row-actions" style="margin:16px 0;"><label style="margin:0;"><input id="promptActive" type="checkbox" checked /> 启用</label><label style="margin:0;"><input id="promptDefault" type="checkbox" /> 设为该知识库默认模板</label></div>
             <div class="row-actions"><button id="promptSave" class="button" type="submit">保存模板</button><button id="promptCopy" class="button secondary" type="button">复制为新模板</button><span id="promptMessage" class="muted" role="status" aria-live="polite"></span></div>
           </form>
@@ -4874,9 +4874,23 @@
     multiEl('promptActive').addEventListener('change', () => { if (!multiEl('promptActive').checked) multiEl('promptDefault').checked = false; });
     multiEl('promptForm').addEventListener('submit', async event => {
       event.preventDefault();
-      if (promptSaving || !promptData) return;
-      const content = multiEl('promptContent').value;
-      if (!content.includes('{{question}}')) { multiEl('promptMessage').textContent = '请在模板中保留 {{question}} 占位符'; return; }
+      if (promptSaving) return;
+      const invalid = (message, field) => {
+        multiEl('promptMessage').textContent = message;
+        showToast(message, 'error');
+        if (field) multiEl(field).focus();
+      };
+      if (!promptData || !promptCurrentBase()) { invalid('模板列表尚未加载，请刷新模板列表后重试'); return; }
+      const title = multiEl('promptTitle').value.trim();
+      const description = multiEl('promptDescription').value;
+      let content = multiEl('promptContent').value;
+      if (!title || title.length > 80) { invalid('请填写1–80字的模板名称', 'promptTitle'); return; }
+      if (description.length > 500) { invalid('用途说明不能超过500字', 'promptDescription'); return; }
+      if (!content.trim() || Array.from(content).length > 30000) { invalid('模板全文不能为空，且不能超过30,000字', 'promptContent'); return; }
+      const placeholderAdded = !content.includes('{{question}}');
+      if (placeholderAdded) content += '\n\n本次采集问题：{{question}}';
+      if (Array.from(content).length > 30000) { invalid('自动补充 {{question}} 后超过30,000字，请缩短模板或在正文中插入占位符', 'promptContent'); return; }
+      if (multiEl('promptDefault').checked && !multiEl('promptActive').checked) { invalid('停用模板不能设为默认'); return; }
       promptSaving = true;
       for (const el of multiEl('multiTemplatesPanel').querySelectorAll('button, input, textarea, select')) el.disabled = true;
       multiEl('promptMessage').textContent = '正在保存…';
@@ -4888,9 +4902,10 @@
         promptDirty = false;
         if (payload.is_default) multiEl('multiTemplateSelect').value = '';
         editPrompt(promptData.saved_code);
-        multiEl('promptMessage').textContent = '已保存，后续采集使用新模板；历史任务不变';
+        multiEl('promptMessage').textContent = placeholderAdded || promptData.question_placeholder_added ? '已保存，已在末尾自动补充 {{question}}；历史任务不变' : '已保存，后续采集使用新模板；历史任务不变';
+        showToast('模板已保存');
         multiConfig = null;
-      } catch (error) { multiEl('promptMessage').textContent = error.message; }
+      } catch (error) { invalid(error.message); }
       finally {
         promptSaving = false;
         for (const el of multiEl('multiTemplatesPanel').querySelectorAll('button, input, textarea, select')) el.disabled = false;
