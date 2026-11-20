@@ -7,6 +7,20 @@ from services.product_portrait_summary_service import build_portrait
 
 
 class MiniProgramChatServiceTest(unittest.TestCase):
+    def test_create_conversation_without_pet_profile(self):
+        with patch.object(service, 'list_cat_profiles', return_value={'items': []}), \
+                patch.object(service, 'get_cat_profile') as get_pet, \
+                patch.object(service, 'init_chat_tables'), \
+                patch.object(service, '_connect') as connect, \
+                patch.object(service, '_save_state'):
+            result = service.create_conversation('user1', {'scene': 'pet_manager'})
+        self.assertTrue(result['ok'])
+        self.assertIsNone(result['conversation']['pet_id'])
+        get_pet.assert_not_called()
+        params = connect.return_value.__enter__.return_value.cursor.return_value.__enter__.return_value.execute.call_args.args[1]
+        self.assertEqual(params[1], 'user1')
+        self.assertIsNone(params[2])
+
     @patch.dict("os.environ", {"CHAT_MODEL_PROVIDER": "deepseek", "DEEPSEEK_API_KEY": "test-key"}, clear=False)
     def test_deepseek_chat_config(self):
         config = get_chat_model_config()

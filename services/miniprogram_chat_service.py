@@ -317,10 +317,8 @@ def create_conversation(user_id: Any, payload: dict[str, Any]) -> dict[str, Any]
     pet_id = _clean(payload.get("pet_id"), 32)
     if not pet_id:
         profiles = list_cat_profiles(user_id, limit=1).get("items") or []
-        if not profiles:
-            raise ValueError("请先创建宠物档案")
-        pet_id = profiles[0]["id"]
-    pet = get_cat_profile(user_id, pet_id)
+        pet_id = profiles[0]["id"] if profiles else None
+    pet = get_cat_profile(user_id, pet_id) if pet_id else {}
     init_chat_tables()
     conversation_id, now = uuid.uuid4().hex, _now()
     title = _clean(payload.get("title"), 255) or f"{pet.get('name') or '宠物'}的宠物管家"
