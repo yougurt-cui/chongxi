@@ -1164,6 +1164,12 @@ def import_taobao_sku_items(
     import_batch_id = datetime.now().strftime("%Y%m%d%H%M%S")
     rows, loaded_paths, stats = _iter_rows(root, import_batch_id)
     imported_rows = _upsert_rows(rows)
+    # 导入后按 SKU 粒度重建代表表（每个 SKU 仅保留销量最高一条）
+    try:
+        from services.taobao_sku_dedup_service import rebuild_sku_representatives
+        dedup_summary = rebuild_sku_representatives()
+    except Exception as dedup_error:  # 去重失败不影响主导入结果
+        dedup_summary = {"ok": False, "error": str(dedup_error)}
     archive_result = (
         _archive_files(loaded_paths, archive_root, import_batch_id)
         if archive
@@ -1177,6 +1183,7 @@ def import_taobao_sku_items(
         "import_batch_id": import_batch_id,
         "prepared_rows": len(rows),
         "imported_rows": imported_rows,
+        "sku_dedup": dedup_summary,
         **archive_result,
         **stats,
     }
