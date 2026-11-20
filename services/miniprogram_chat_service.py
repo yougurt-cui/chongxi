@@ -40,6 +40,8 @@ from services import guardian_knowledge_service as knowledge_qa
 from services import guardian_ingredient_assembly_service as ingredient_assembly
 from services import guardian_conversation_context as dialogue_context
 from services import guardian_photo_scene as photo_scene
+from services import guardian_photo_questions as photo_questions
+from services import guardian_health_conclusion as health_conclusion
 from services.miniprogram_pet_image_service import chat_photo_facts
 from services import guardian_subject_service as subjects
 from services import guardian_ingredient_guide as ingredient_guide
@@ -1823,10 +1825,18 @@ def handle_message(user_id: Any, conversation_id: Any, payload: dict[str, Any]) 
             raise ValueError('请单独选择引导问题')
         message = ingredient_guide.selected_question(guide, conversation.get('pet_id'), interaction.get('value'))
         recorded_message = message
+    photo_choice = None
+    if interaction and interaction.get('slot') == photo_questions.SLOT:
+        if attachments or message or source_id:
+            raise ValueError('请单独点击图片追问')
+        photo_choice = photo_questions.select(_connect, user_id, conversation, interaction.get('value'))
+        message = recorded_message = photo_choice[1]['question']
     previous_subject = slots.get('_external_subject')
     # The saved guide options refer to this upload; their wording (e.g. 猫粮)
     # must not switch the subject to a different animal.
     external_subject = previous_subject if guide_choice else subjects.resolve(message, conversation, previous_subject)
+    if photo_choice:
+        external_subject = photo_choice[0]['subject']
     pending = slots.pop('_subject_scope_question', None)
     subject_choice = interaction and interaction.get('slot') == SUBJECT_SCOPE_SLOT
     question_message_id = None
@@ -1942,7 +1952,9 @@ def handle_message(user_id: Any, conversation_id: Any, payload: dict[str, Any]) 
     recommendation_reply = (recommendation_followup(message, context_memory, state)
         if source_id and not (direct_scene or ambiguous or external_subject or interaction or attachments
                               or subjects.urgent_message(message)) else None)
-    if recommendation_reply is not None:
+    if photo_choice:
+        reply = photo_questions.answer(photo_choice, state)
+    elif recommendation_reply is not None:
         _pause_soft_stool(state)
         reply = recommendation_reply
     elif context_decision and not (direct_scene or ambiguous or external_subject):
@@ -2047,6 +2059,13 @@ def handle_message(user_id: Any, conversation_id: Any, payload: dict[str, Any]) 
     if scene:
         for bubble in reply.get('messages') or [reply]:
             bubble.setdefault('result', {})['scene'] = {'task': scene['task'], 'needs': scene['needs']}
+    last_bubble = (reply.get('messages') or [reply])[-1]
+    if has_photo and scene and scene['task'] in ('pet_identify','pet_knowledge','product_analysis','product_compare','unclear') and last_bubble.get('response_type') != 'risk_alert':
+        guidance = photo_questions.build(photos, conversation.get('pet_id'), external_subject)
+        if guidance:
+            last_bubble.setdefault('result', {})['photo_guidance'] = guidance
+    if message and not (ambiguous or recorded_interaction or source_id):
+        health_conclusion.attach(reply, context_memory, user_message, external=bool(external_subject))
     if not external_subject and not ambiguous:
         dialogue_context.contextual_questions(reply, message, context_memory)
     with _connect() as conn:
