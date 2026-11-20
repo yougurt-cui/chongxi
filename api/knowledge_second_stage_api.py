@@ -108,3 +108,12 @@ def experience_topics():
         )}
 
     return _run(read)
+
+
+@knowledge_second_stage_api.put("/experience-topics/<topic_key>/terms/<int:position_no>/type")
+@admin_required
+def update_experience_term_type(topic_key, position_no):
+    from services.community_experience_service import update_term_type
+    payload = request.get_json(silent=True) or {}
+    return _run(lambda: {"ok": True, "item": update_term_type(
+        topic_key, position_no, payload.get("search_term"), payload.get("term_type"))})

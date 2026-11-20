@@ -14,3 +14,9 @@
     GET /api/knowledge-second-stage/experience-topics?source_table=knowledge_point&knowledge_id=1
 
 每项含 object_scope、object_name、scenario、behavior、result_text、sources 和 terms。没有明示行为或结果时，相应字段为空。
+
+搜索词新增 `category`（种类：猫、狗、未分类）和 `term_type`（类型：症状与表现、原因与疾病、行为与习惯、做法与护理、产品与配方、结果与变化、待确认）。种类从主题的结构化物种取值；已有词和新词的类型默认“待确认”，不将猜测当作已核实分类。原 `terms` 字符串数组保持兼容，接口另返回 `term_details`，包含序号、词、种类和类型。
+
+升级已有数据库：先运行 `.venv/bin/python scripts/migrate_experience_term_classification.py` 查看物种数量；确认后加 `--apply` 创建缺失字段并根据主题回填种类。该脚本不会分类搜索意图；MySQL 的结构变更会隐式提交，执行前应备份。重新构建主题时，相同主题及搜索词的类型会保留，新词默认待确认。
+
+管理员可调用 `PUT /api/knowledge-second-stage/experience-topics/<topic_key>/terms/<position_no>/type`，JSON 包含 `search_term`（原词，用于防止覆盖已变化的词）与 `term_type`（上述类型之一）。更改与重建共用锁。

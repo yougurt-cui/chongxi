@@ -85,3 +85,14 @@ def test_cache_reused_and_invalidated_on_input_change(tmp_path, monkeypatch):
     changed[("knowledge_point", 1)]["material"]["观点"] += "，并记录变化"
     svc.prepare(changed, tmp_path, 1)
     assert len(calls) == 2
+
+
+def test_species_classification_uses_structured_scope():
+    assert svc.species_category('["cat", "ragdoll", "adult"]') == '猫'
+    assert svc.species_category('["dog", "all_dog", "adult"]') == '狗'
+    assert svc.species_category('[]') == '未分类'
+
+
+def test_term_type_rejects_invalid_values_before_database_access():
+    with pytest.raises(ValueError, match='无效搜索词类型'):
+        svc.update_term_type('a' * 64, 1, '猫软便', '未经定义')

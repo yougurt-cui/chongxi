@@ -32,6 +32,7 @@ DDL = (
        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4""",
     """CREATE TABLE IF NOT EXISTS experience_search_term (
        topic_key CHAR(64) NOT NULL, position_no TINYINT UNSIGNED NOT NULL, search_term VARCHAR(255) NOT NULL,
+       category VARCHAR(32) NOT NULL DEFAULT '未分类', term_type VARCHAR(32) NOT NULL DEFAULT '待确认',
        PRIMARY KEY(topic_key, position_no), UNIQUE KEY uq_term(topic_key,search_term),
        FOREIGN KEY(topic_key) REFERENCES experience_topic(topic_key) ON DELETE CASCADE
        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4""",
@@ -290,6 +291,28 @@ def assemble(source, extracted):
     return topics, links
 
 
+TERM_TYPES = {'症状与表现', '原因与疾病', '行为与习惯', '做法与护理',
+              '产品与配方', '结果与变化', '待确认'}
+SPECIES_CATEGORIES = {'cat': '猫', 'dog': '狗'}
+
+
+def species_category(scope):
+    values = parsed(scope, [])
+    return SPECIES_CATEGORIES.get(values[0] if isinstance(values, list) and values else None, '未分类')
+
+
+def ensure_term_classification_columns(cur):
+    """Add classification fields to existing installations without rewriting terms."""
+    cur.execute("""SELECT COLUMN_NAME FROM information_schema.COLUMNS
+                   WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='experience_search_term'
+                   AND COLUMN_NAME IN ('category','term_type')""")
+    existing = {row['COLUMN_NAME'].lower() for row in cur.fetchall()}
+    if 'category' not in existing:
+        cur.execute("ALTER TABLE experience_search_term ADD COLUMN category VARCHAR(32) NOT NULL DEFAULT '未分类'")
+    if 'term_type' not in existing:
+        cur.execute("ALTER TABLE experience_search_term ADD COLUMN term_type VARCHAR(32) NOT NULL DEFAULT '待确认'")
+
+
 def publish(conn, source, extracted):
     """Refresh atomically; concurrent builders must revalidate their source snapshot."""
     topics, links = assemble(source, extracted)
@@ -302,11 +325,16 @@ def publish(conn, source, extracted):
         try:
             for statement in DDL:
                 cur.execute(statement)
+            ensure_term_classification_columns(cur)
             conn.commit()
             if records(cur) != source:
                 raise RuntimeError(
                     "source changed during extraction; rerun with the same cache"
                 )
+            # Preserve classifications only when both topic and term are unchanged.
+            cur.execute("SELECT topic_key, search_term, category, term_type FROM experience_search_term")
+            classifications = {(r['topic_key'], r['search_term']): (r['category'], r['term_type'])
+                               for r in cur.fetchall()}
             cur.execute("DELETE FROM experience_topic_source")
             cur.execute("DELETE FROM experience_search_term")
             for key, (*fields, terms) in topics.items():
@@ -315,8 +343,10 @@ def publish(conn, source, extracted):
                     (key, *fields),
                 )
                 cur.executemany(
-                    "INSERT INTO experience_search_term VALUES (%s,%s,%s)",
-                    [(key, i, t) for i, t in enumerate(terms, 1)],
+                    "INSERT INTO experience_search_term (topic_key,position_no,search_term,category,term_type) VALUES (%s,%s,%s,%s,%s)",
+                    [(key, i, t, species_category(fields[0]),
+                      classifications.get((key, t), ('未分类', '待确认'))[1])
+                     for i, t in enumerate(terms, 1)],
                 )
             cur.executemany(
                 "INSERT INTO experience_topic_source VALUES (%s,%s,%s,%s)",
@@ -369,6 +399,7 @@ def list_topics(source_table=None, knowledge_id=None, limit=50, offset=0):
                 object_scope=dict(zip(SCOPE, parsed(r["object_scope"], []))),
                 sources=[],
                 terms=[],
+                term_details=[],
             )
         placeholders = ",".join(["%s"] * len(items))
         cur.execute(
@@ -389,4 +420,38 @@ def list_topics(source_table=None, knowledge_id=None, limit=50, offset=0):
         )
         for r in cur.fetchall():
             items[r["topic_key"]]["terms"].append(r["search_term"])
+            items[r["topic_key"]]["term_details"].append({
+                "position_no": r["position_no"], "search_term": r["search_term"],
+                "category": r.get("category", "未分类"),
+                "term_type": r.get("term_type", "待确认"),
+            })
         return list(items.values())
+
+
+def update_term_type(topic_key, position_no, search_term, term_type):
+    """Update a specific unchanged term; serialize with the index publisher."""
+    if not re.fullmatch(r'[a-f0-9]{64}', str(topic_key or '')):
+        raise ValueError('无效主题标识')
+    if type(position_no) is not int or not 1 <= position_no <= 5:
+        raise ValueError('无效搜索词序号')
+    if not isinstance(search_term, str) or not search_term.strip():
+        raise ValueError('必须提供原搜索词')
+    if not isinstance(term_type, str) or term_type not in TERM_TYPES:
+        raise ValueError('无效搜索词类型')
+    with store.connect() as conn, conn.cursor() as cur:
+        cur.execute("SELECT GET_LOCK(CONCAT('exp_topics:',LEFT(SHA2(DATABASE(),256),40)),10) AS acquired")
+        if cur.fetchone()['acquired'] != 1:
+            raise ValueError('主题正在更新，请稍后重试')
+        try:
+            cur.execute("SELECT search_term FROM experience_search_term WHERE topic_key=%s AND position_no=%s FOR UPDATE", (topic_key, position_no))
+            row = cur.fetchone()
+            if not row or row['search_term'] != search_term:
+                raise ValueError('搜索词不存在或已更新，请刷新后重试')
+            cur.execute("UPDATE experience_search_term SET term_type=%s WHERE topic_key=%s AND position_no=%s", (term_type, topic_key, position_no))
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            cur.execute("SELECT RELEASE_LOCK(CONCAT('exp_topics:',LEFT(SHA2(DATABASE(),256),40)))")
+    return {'topic_key': topic_key, 'position_no': position_no, 'search_term': search_term, 'term_type': term_type}
