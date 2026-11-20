@@ -453,4 +453,4 @@ def daily_care_knowledge_points():
     return _multi_model_result(lambda: list_points(
         page=request.args.get('page',1),query=request.args.get('q','').strip(),
         species=request.args.get('species','').strip(),category=request.args.get('category','').strip(),
-        view=request.args.get('view','source').strip()))
+        task_id=request.args.get('task_id',type=int), view=request.args.get('view','source').strip()))
