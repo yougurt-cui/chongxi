@@ -44,6 +44,19 @@ def test_invalidated_publication_does_not_claim_ready():
     assert not value['result_available'] and value['result_updating'] and value['is_processing']
 
 
+def test_detached_failed_submission_remains_failed_in_status_and_list():
+    row = {**BASE, 'recognition_status': 'failed', 'orchestrator_task_id': None, 'task_status': None,
+           'requested_run_id': None, 'published_run_id': None, 'invalidated': None}
+    conn = MagicMock(); conn.__enter__.return_value = conn
+    cur = conn.cursor.return_value.__enter__.return_value; cur.fetchone.return_value = row
+    with patch.object(service, '_connect', return_value=conn), patch.object(service, 'init_food_submission_tables'), patch('services.formula_calculation_service.enabled', return_value=True):
+        result = service.get_food_submission_status('owner', 'own')['item']
+    assert result['processing_status'] == 'failed'
+    assert not result['is_processing'] and not result['needs_refresh'] and not result['result_available']
+    serialized = service._serialize(service._sync_recognition(row, persist=False))
+    assert serialized['processing_status'] == 'failed' and serialized['status_label'] == '识别服务暂时失败'
+
+
 def test_status_requires_auth_and_ownership(monkeypatch):
     monkeypatch.setenv('CHONGXI_SESSION_SECRET', 'test-secret')
     client = create_app().test_client()

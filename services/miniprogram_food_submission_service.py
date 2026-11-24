@@ -305,6 +305,8 @@ def _sync_recognition(row: dict[str, Any], *, persist: bool = True) -> dict[str,
                 "processing_message": "已撤销此次投稿。", "result_available": False}
     task_id = row.get("orchestrator_task_id")
     if not task_id or row.get("status") != "active":
+        if not task_id and row.get("status") == "active" and row.get("recognition_status") == "failed":
+            return {**row, "processing_status": "failed", "processing_stage": "处理失败", "result_available": False}
         return row
     task = get_orchestrator_task(str(task_id))
     if not task:
@@ -606,7 +608,7 @@ def get_food_submission_status(user_id: Any, submission_id: Any) -> dict[str, An
     cancelled = row['status'] == 'cancelled' or row.get('task_status') == 'cancelled'
     rejected = row['review_status'] == 'rejected'
     task_status = ('cancelled' if cancelled else row.get('task_status') or
-                   ('failed' if row.get('orchestrator_task_id') else
+                   ('failed' if row.get('orchestrator_task_id') or row['recognition_status'] == 'failed' else
                     'done' if row['recognition_status'] == 'success' else 'created'))
     result_ready = (bool(row.get('has_result')) and not row.get('invalidated') if versioned else
                     task_status == 'done' and row['recognition_status'] == 'success')
