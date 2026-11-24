@@ -451,3 +451,21 @@ def test_context_answer_keeps_reasoning_constraints_internal():
     assert reply['result']['context_answer']['status'] == 'answered'
     assert CONCLUSION_STYLE_INSTRUCTION in model.call_args.args[0]
     assert '不把结构评分说成营养摄入量或缺乏' in model.call_args.args[0]
+
+
+def test_large_health_report_preserves_compact_product_comparison():
+    m = memory()
+    event = msg(10, '两款粮对比')
+    event['result']['health_analysis'] = {'detail': 'x' * 15000}
+    event['result']['guardian_report'] = {'feeding': {
+        'products': [{'formula_id': 351, 'label': '旧粮', 'roles': ['history']}],
+        'comparisons': [{'left_label': '旧粮', 'right_label': '新粮', 'status': 'ready',
+            'dimensions': [{'title': '脂肪负担', 'status': 'close',
+                            'left': {'score': 0.414, 'scale_max': 1},
+                            'right': {'score': 0.446}, 'delta': 0.032}]}],
+    }}
+    ctx.remember(m, event)
+    evidence = m['events'][-1]['evidence']
+    assert evidence['comparisons'][0]['dimensions'][0]['right_score'] == 0.446
+    assert evidence['products'][0]['formula_id'] == 351
+    assert 'health_analysis' not in evidence
