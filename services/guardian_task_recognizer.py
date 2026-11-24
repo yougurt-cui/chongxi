@@ -178,6 +178,19 @@ def recognize(question, memory, state, model):
                 ids = list(dict.fromkeys(p['message_id'] for p in candidates))
                 tids = list(dict.fromkeys(t for e in events if e['id'] in ids for t in e.get('topic_ids', [])))
         scope = saved_scope(question)
+        if task == 'compare' and act == 'request' and not scope:
+            # Explicitly named foods must be resolved against the catalogue,
+            # even when no product IDs are present in conversation memory.
+            from services.guardian_health_flow_service import named_request
+            query = named_request(question)
+            names = [part.strip() for part in re.split(r'\s*(?:和|与| versus | vs\.? | VS |、)\s*', query or '') if part.strip()]
+            deictic = r'这款|那款|这两款|两款|前面|上面|刚才|当前|现在|历史|以前|之前|旧粮|新粮'
+            explicit_pair = (len(names) == 2 and all(len(name) >= 2 and not re.search(deictic, name) for name in names)
+                             and bool(re.search(r'[A-Za-z0-9]|猫粮|狗粮|主粮|口粮|两款粮', question)))
+            if explicit_pair:
+                task, relation = 'business', 'new'
+                business_intent, product_query = 'food_analysis', query
+                ids, tids, pids = [], [], []
         if task == 'business' and 'dialogue_act' in value and business_intent is None:
             raise ValueError('business task requires an execution intent')
         if task == 'product_analysis' and not scope:

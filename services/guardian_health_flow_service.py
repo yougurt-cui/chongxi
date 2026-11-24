@@ -123,6 +123,7 @@ def named_request(message):
             and not re.search(r'粮|配方|食品|配料|原料|饲料', query)):
         return None
     query = re.sub(r'(?:有什么区别|有何区别|哪个更好|哪个好|哪款好|怎么样|适合它吗|适合吗)[？?。！!]*$', '', query)
+    query = re.sub(r'(?:这)?两款(?:猫粮|狗粮|粮|产品|食品)[？?。！!]*$', '', query).strip()
     return query.strip(' “”。！？?!')
 
 
@@ -136,6 +137,7 @@ def prepare_named_analysis(message, state, context, load_analysis):
     query = slots.get('food_name') or named_request(message)
     if not isinstance(query, str) or not query:
         return None
+    query = re.sub(r'(?:这)?两款(?:猫粮|狗粮|粮|产品|食品)[？?。！!]*$', '', query).strip()
     parts = [part for part in re.split(r'\s*(?:和|与| versus | vs\.? | VS |、)\s*', query) if part]
     if len(parts) > 10:
         return {'response_type': 'text', 'reply': '一次最多分析10款粮，请缩小本次分析范围。',

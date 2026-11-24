@@ -201,3 +201,28 @@ def test_product_query_cannot_invent_identity_or_become_a_diet_fact():
         assert d['action'] == action
         if action == 'new':
             assert d['facts_to_merge'] == {} and d['product_query'] == '卫仕LA20'
+
+
+@pytest.mark.parametrize('question', [
+    '帮我对比一下皇家F32和卫仕LA40',
+    '帮我分析一下皇家F32和卫仕LA40两款粮',
+])
+def test_explicit_named_comparison_routes_to_catalogue(question):
+    m = memory(); m['products'] = []; m['source_id'] = None
+    d = recognize(question, m, {}, Mock(return_value={
+        'relation': 'continue', 'task': 'compare', 'dialogue_act': 'request',
+        'source_ids': [], 'topic_ids': [], 'product_ids': [],
+    }))
+    assert d['action'] == 'new' and d['business_intent'] == 'food_analysis'
+    assert d['product_query'] == '皇家F32和卫仕LA40'
+    assert d['product_ids'] == []
+
+
+def test_named_comparison_preserves_catalogue_resolution_on_handoff():
+    from services import miniprogram_chat_service as chat
+    from services import guardian_health_flow_service as flow
+    q = '帮我分析一下皇家F32和卫仕LA40两款粮'
+    decision = {'task': 'business', 'business_intent': 'food_analysis', 'product_query': flow.named_request(q)}
+    result, _ = chat._recognize_guardian_turn(q, {'slots': {}}, decision)
+    assert result['primary_intent'] == 'food_analysis'
+    assert result['slots']['food_name'] == '皇家F32和卫仕LA40'
