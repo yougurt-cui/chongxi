@@ -358,56 +358,6 @@ def _ensure_b2b_order_analysis_compat_views(db_config: dict[str, Any]) -> None:
                     """
                 )
 
-            if not table_exists(cursor, "catfood_sku_label_wide"):
-                cursor.execute(
-                    """
-                    CREATE VIEW catfood_sku_label_wide AS
-                    SELECT
-                        w.source_id,
-                        w.product_key,
-                        w.brand,
-                        w.product_name,
-                        NULL AS importer,
-                        NULL AS ingredient_composition,
-                        NULL AS guarantee_crude_protein_value,
-                        NULL AS crude_protein_pct,
-                        NULL AS agg_crude_protein_value,
-                        NULL AS guarantee_crude_fat_value,
-                        NULL AS guarantee_crude_fiber_value,
-                        NULL AS guarantee_moisture_value,
-                        NULL AS guarantee_crude_ash_value,
-                        w.starch_burden_score AS carb_score,
-                        bc.fat_detail_tags,
-                        bc.reason_tags AS risk_types,
-                        bc.main_reason_tags,
-                        bc.support_reason_tags,
-                        w.fat_reason_tags,
-                        bc.all_reason_tags,
-                        bc.current_pool_risk_level AS black_chin_risk_level,
-                        ss.current_pool_risk_level AS soft_stool_risk_level
-                    FROM catfood_protein_fat_fiber_score_wide w
-                    LEFT JOIN (
-                        SELECT sku_id,
-                               MAX(fat_detail_tags) AS fat_detail_tags,
-                               MAX(reason_tags) AS reason_tags,
-                               MAX(main_reason_tags) AS main_reason_tags,
-                               MAX(support_reason_tags) AS support_reason_tags,
-                               MAX(all_reason_tags) AS all_reason_tags,
-                               MAX(current_pool_risk_level) AS current_pool_risk_level
-                        FROM sku_risk_score_result
-                        WHERE score_model_version LIKE 'BLACK_CHIN%'
-                        GROUP BY sku_id
-                    ) bc ON bc.sku_id = w.product_key
-                    LEFT JOIN (
-                        SELECT sku_id,
-                               MAX(current_pool_risk_level) AS current_pool_risk_level
-                        FROM sku_risk_score_result
-                        WHERE score_model_version LIKE 'SOFT_STOOL%'
-                        GROUP BY sku_id
-                    ) ss ON ss.sku_id = w.product_key
-                    """
-                )
-
             if not table_exists(cursor, "sku_process_feature_profile"):
                 cursor.execute(
                     """

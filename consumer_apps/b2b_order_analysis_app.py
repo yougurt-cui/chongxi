@@ -263,28 +263,21 @@ def load_sku_options(keyword: str = "", limit: int = 200) -> pd.DataFrame:
     sql = f"""
         SELECT
             b.sku_id,
-            COALESCE(NULLIF(b.brand, ''), w.brand) AS brand,
-            COALESCE(NULLIF(b.product_name, ''), w.product_name) AS product_name,
+            b.brand AS brand,
+            b.product_name AS product_name,
             b.confidence_score,
             b.factory_business_tags,
             b.process_structure_tags,
             b.process_attention_tags,
             b.quality_validation_tags,
-            w.importer,
-            w.ingredient_composition AS ingredient_text,
-            COALESCE(w.guarantee_crude_protein_value, w.crude_protein_pct, w.agg_crude_protein_value) AS crude_protein,
-            w.guarantee_crude_fat_value AS crude_fat,
-            w.guarantee_crude_fiber_value AS crude_fiber
+            NULL AS importer, NULL AS ingredient_text,
+            NULL AS crude_protein, NULL AS crude_fat, NULL AS crude_fiber
         FROM {B2B_TAG_TABLE} b
-        LEFT JOIN catfood_sku_label_wide w
-            ON w.product_key = b.sku_id
         WHERE (
             %s = ''
             OR b.sku_id LIKE %s
             OR b.brand LIKE %s
             OR b.product_name LIKE %s
-            OR w.brand LIKE %s
-            OR w.product_name LIKE %s
         )
         ORDER BY brand, product_name, b.sku_id
         LIMIT %s
@@ -292,7 +285,7 @@ def load_sku_options(keyword: str = "", limit: int = 200) -> pd.DataFrame:
     like = f"%{keyword}%"
     with get_conn() as conn:
         with conn.cursor() as cursor:
-            cursor.execute(sql, (keyword, like, like, like, like, like, limit))
+            cursor.execute(sql, (keyword, like, like, like, limit))
             rows = cursor.fetchall()
     return pd.DataFrame(rows)
 
@@ -308,24 +301,7 @@ def load_filter_options() -> Dict[str, List[str]]:
         with conn.cursor() as cursor:
             cursor.execute(f"SELECT factory_business_tags FROM {B2B_TAG_TABLE}")
             tag_rows = cursor.fetchall()
-            cursor.execute(
-                """
-                SELECT DISTINCT black_chin_risk_level
-                FROM catfood_sku_label_wide
-                WHERE black_chin_risk_level IS NOT NULL AND black_chin_risk_level <> ''
-                ORDER BY black_chin_risk_level
-                """
-            )
-            black_rows = cursor.fetchall()
-            cursor.execute(
-                """
-                SELECT DISTINCT soft_stool_risk_level
-                FROM catfood_sku_label_wide
-                WHERE soft_stool_risk_level IS NOT NULL AND soft_stool_risk_level <> ''
-                ORDER BY soft_stool_risk_level
-                """
-            )
-            soft_rows = cursor.fetchall()
+            black_rows, soft_rows = [], []
 
     tag_set = set()
     for row in tag_rows:
@@ -380,25 +356,7 @@ def load_nutrition_score_reference() -> Dict[str, Any]:
 
 @st.cache_data(ttl=300)
 def load_ingredient_role_reference() -> Dict[str, Dict[str, float]]:
-    role_fields = [field for field, _, _ in getattr(b2b.similarity_recall, "INGREDIENT_LABEL_ROLE_FIELDS", INGREDIENT_LABEL_ROLE_FIELDS)]
-    sql = f"""
-        SELECT product_key AS sku_id, {", ".join(role_fields)}
-        FROM catfood_sku_label_wide
-        WHERE product_key IS NOT NULL
-    """
-    with get_conn() as conn:
-        with conn.cursor() as cursor:
-            cursor.execute(sql)
-            rows = cursor.fetchall()
-
-    result: Dict[str, Dict[str, float]] = {}
-    for row in rows:
-        sku_id = str(row.get("sku_id") or "").strip()
-        if not sku_id:
-            continue
-        if hasattr(b2b.similarity_recall, "build_label_based_ingredient_vector"):
-            result[sku_id] = b2b.similarity_recall.build_label_based_ingredient_vector(row)
-    return result
+    return {}
 
 
 def split_mapping_text(value: Any) -> List[str]:

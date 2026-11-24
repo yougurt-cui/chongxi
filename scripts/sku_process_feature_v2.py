@@ -37,7 +37,7 @@ DB_CONFIG = {
     "charset": os.getenv("MYSQL_CHARSET", "utf8mb4"),
 }
 
-DEFAULT_SOURCE_TABLE = os.getenv("SKU_PROCESS_SOURCE_TABLE", "catfood_sku_label_wide")
+DEFAULT_SOURCE_TABLE = os.getenv("SKU_PROCESS_SOURCE_TABLE", "")
 DEFAULT_OUTPUT_TABLE = os.getenv("SKU_PROCESS_OUTPUT_TABLE", "sku_process_feature_profile")
 
 
@@ -700,7 +700,7 @@ def build_sku_process_profile(row, formula_mode: bool = False):
 
 def parse_args():
     parser = argparse.ArgumentParser(description="生成 SKU/配方 工艺结构画像并写入 MySQL")
-    parser.add_argument("--source-table", default=DEFAULT_SOURCE_TABLE, help="源表名，默认 catfood_sku_label_wide")
+    parser.add_argument("--source-table", default=DEFAULT_SOURCE_TABLE, help="源表名；非配方模式须显式指定")
     parser.add_argument("--output-table", default=DEFAULT_OUTPUT_TABLE, help="输出表名，默认 sku_process_feature_profile")
     parser.add_argument("--if-exists", choices=["replace", "append", "fail"], default="replace")
     parser.add_argument("--limit", type=int, default=0, help="调试用限制行数，0 表示不限制")
@@ -711,6 +711,8 @@ def parse_args():
 
 def main():
     args = parse_args()
+    if not args.formula_mode and not args.source_table:
+        raise SystemExit("非配方模式需要指定 --source-table 或 SKU_PROCESS_SOURCE_TABLE")
     engine = make_engine()
 
     # 加载原料分类表到内存

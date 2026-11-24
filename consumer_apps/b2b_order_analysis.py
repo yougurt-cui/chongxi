@@ -11,7 +11,6 @@
 
 依赖表：
 - sku_b2b_tag_result
-- catfood_sku_label_wide
 - sku_similarity_result
 - sku_symptom_compound_risk_wide
 - sku_risk_score_result
@@ -49,7 +48,13 @@ DB_CONFIG = {
 # =========================
 
 B2B_TAG_TABLE = "sku_b2b_tag_result"
-LABEL_WIDE_TABLE = os.getenv("B2B_LABEL_WIDE_TABLE", "catfood_sku_label_wide")
+# Legacy SKU label view has been retired. Keep optional label fields empty.
+_LABEL_FIELDS = ("source_id", "product_key", "brand", "product_name", "ingredient_composition",
+                 "guarantee_crude_protein_value", "guarantee_crude_fat_value", "guarantee_crude_fiber_value",
+                 "guarantee_moisture_value", "guarantee_crude_ash_value", "carb_score", "fat_reason_tags",
+                 "risk_types", "main_reason_tags", "support_reason_tags", "fat_detail_tags", "all_reason_tags",
+                 "black_chin_risk_level", "soft_stool_risk_level")
+LABEL_WIDE_TABLE = "(SELECT " + ", ".join("NULL AS " + field for field in _LABEL_FIELDS) + " WHERE 1=0)"
 SIMILARITY_TABLE = "sku_similarity_result"
 SYMPTOM_RISK_TABLE = "sku_symptom_compound_risk_wide"
 RISK_SCORE_TABLE = "sku_risk_score_result"
@@ -892,7 +897,7 @@ def fetch_feedback_for_skus(conn, sku_ids: List[str]) -> List[Dict[str, Any]]:
 
     with conn.cursor() as cursor:
         cursor.execute(sql, sku_ids)
-        rows = cursor.fetchall()
+        rows = list(cursor.fetchall())
 
     found = {row.get("sku_id") for row in rows}
     missing = [sku_id for sku_id in sku_ids if sku_id not in found]

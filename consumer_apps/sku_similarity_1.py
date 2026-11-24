@@ -1222,10 +1222,9 @@ def load_sku_features(engine) -> pd.DataFrame:
     if missing_base_cols:
         raise ValueError(f"{table} 缺少字段：{missing_base_cols}")
 
-    label_table = "catfood_sku_label_wide"
     process_table = "sku_process_feature_profile"
     b2b_table = "sku_b2b_tag_result"
-    label_cols = table_columns(engine, label_table)
+    label_cols = set()
     process_cols = table_columns(engine, process_table)
     b2b_cols = table_columns(engine, b2b_table)
 
@@ -1276,8 +1275,6 @@ def load_sku_features(engine) -> pd.DataFrame:
         FROM {quote_identifier(table)} f
         LEFT JOIN {quote_identifier(b2b_table)} b
             ON f.sku_id = b.sku_id
-        LEFT JOIN {quote_identifier(label_table)} w
-            ON f.sku_id = w.product_key
         LEFT JOIN {quote_identifier(process_table)} pf
             ON f.sku_id = pf.sku_id
         ORDER BY f.created_at DESC
