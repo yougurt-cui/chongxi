@@ -851,6 +851,7 @@ def products_by_brand():
             request.args.get("brand", ""),
             query=request.args.get("q", ""),
             limit=int(request.args.get("limit") or 50),
+            representative_images=True,
         ))
         response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
         response.headers["Pragma"] = "no-cache"
@@ -868,6 +869,7 @@ def search_products():
         response = jsonify(search_catalog_products(
             request.args.get("q", ""),
             limit=int(request.args.get("limit") or 20),
+            representative_images=True,
         ))
         response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
         return response, 200

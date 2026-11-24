@@ -128,7 +128,25 @@ def _text_match_score(query: str, candidates: list[Any]) -> tuple[float, str]:
     return round(best_score, 5), best_text
 
 
-def search_catalog_products(query: str, *, limit: int = 20) -> dict[str, Any]:
+def _use_representative_images(items: list[dict[str, Any]]) -> None:
+    """Use the highest-selling representative SKU for each formula, without fallback."""
+    formula_ids = sorted({int(item['formula_id']) for item in items if item.get('formula_id') is not None})
+    images = {}
+    if formula_ids:
+        with _connect_feature() as conn, conn.cursor() as cursor:
+            cursor.execute(
+                'SELECT formula_id, main_image_url FROM taobao_catfood_sku_representative '
+                'WHERE formula_id IN (' + ','.join(['%s'] * len(formula_ids)) + ') '
+                'ORDER BY formula_id, sold_count DESC, id ASC', formula_ids)
+            for row in cursor.fetchall():
+                images.setdefault(int(row['formula_id']), _clean(row.get('main_image_url')) or None)
+    for item in items:
+        image = images.get(int(item['formula_id'])) if item.get('formula_id') is not None else None
+        item['main_image_url'] = image
+        item['main_images'] = [image] if image else []
+
+
+def search_catalog_products(query: str, *, limit: int = 20, representative_images: bool = False) -> dict[str, Any]:
     """Interpret one free-text input and return standard product/formula candidates."""
     query = _clean(query, 255)
     if not query:
@@ -201,6 +219,8 @@ def search_catalog_products(query: str, *, limit: int = 20) -> dict[str, Any]:
         })
     suggestions.sort(key=lambda item: (-item["score"], item.get("label") or ""))
     suggestions = suggestions[:limit]
+    if representative_images:
+        _use_representative_images(suggestions)
     top_score = suggestions[0]["score"] if suggestions else 0.0
     next_score = suggestions[1]["score"] if len(suggestions) > 1 else 0.0
     return {
@@ -497,13 +517,15 @@ def get_product_ingredient_analysis(matched: dict[str, Any] | None) -> dict[str,
     }
 
 
-def list_catalog_products_by_brand(brand: str, *, query: str = "", limit: int = 50) -> dict[str, Any]:
+def list_catalog_products_by_brand(brand: str, *, query: str = "", limit: int = 50, representative_images: bool = False) -> dict[str, Any]:
     brand = _clean(brand, 255)
     query = _clean(query, 255)
     if not brand:
         raise ValueError("brand 不能为空")
     limit = max(1, min(int(limit or 50), 100))
     items = list_standard_product_candidates(brand, product=query, limit=limit)
+    if representative_images:
+        _use_representative_images(items)
     return {"ok": True, "brand": brand, "count": len(items), "items": items}
 
 

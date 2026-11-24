@@ -1,5 +1,5 @@
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from services import miniprogram_food_change_service as service
 
@@ -53,6 +53,28 @@ class MiniProgramFoodChangeServiceTest(unittest.TestCase):
     def test_search_rejects_empty_query(self):
         with self.assertRaisesRegex(ValueError, "q 不能为空"):
             service.search_catalog_products(" ")
+
+    def test_representative_images_use_formula_id_and_clear_old_fallbacks(self):
+        items = [
+            {'formula_id': 1, 'main_image_url': 'old', 'main_images': ['old']},
+            {'formula_id': 2, 'main_image_url': 'brand', 'main_images': ['brand']},
+            {'formula_id': 3, 'main_image_url': 'old', 'main_images': ['old']},
+        ]
+        conn = MagicMock()
+        cursor = conn.__enter__.return_value.cursor.return_value.__enter__.return_value
+        cursor.fetchall.return_value = [
+            {'formula_id': 1, 'main_image_url': 'https://example.com/winner.jpg'},
+            {'formula_id': 1, 'main_image_url': 'https://example.com/other.jpg'},
+            {'formula_id': 3, 'main_image_url': ''},
+        ]
+        with patch.object(service, '_connect_feature', return_value=conn):
+            service._use_representative_images(items)
+        self.assertEqual(items[0]['main_image_url'], 'https://example.com/winner.jpg')
+        self.assertEqual(items[0]['main_images'], ['https://example.com/winner.jpg'])
+        self.assertIsNone(items[1]['main_image_url'])
+        self.assertEqual(items[1]['main_images'], [])
+        self.assertIsNone(items[2]['main_image_url'])
+        self.assertIn('sold_count DESC, id ASC', cursor.execute.call_args.args[0])
 
     def test_analyze_rejects_empty_message(self):
         with self.assertRaisesRegex(ValueError, "message 不能为空"):
