@@ -422,8 +422,9 @@ def handle_question(user_id, conversation, message, state, *, report_scene=None,
         lines = [health['text']]
         from services.guardian_health_solution import plain_text as solution_text
         for group in health['groups']:
+            manifestations = [' '.join(item.split()) for item in group['manifestations']]
             lines.append(group['cause'] + '\n' + group['mechanism'] + '\n伴随表现：' +
-                         '；'.join(group['manifestations']) + '\n判断依据：' + '；'.join(group['supporting']))
+                         '；'.join(manifestations) + '\n判断依据：' + '；'.join(group['supporting']))
             if group.get('solution'):
                 lines.append(solution_text(group['solution']))
         return {'response_type': 'risk_alert' if health['status'] == 'risk_alert' else 'text',

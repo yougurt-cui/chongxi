@@ -32,7 +32,11 @@ def display_blocks(text, response_type=None):
             continue
         # Split long prose at sentence boundaries, never truncate its content.
         chunks, chunk, sentence_count = [], "", 0
-        for sentence in re.findall(r"[^。！？!?]+[。！？!?]*|[。！？!?]+", paragraph):
+        # The label and all accompanying manifestations form one display block;
+        # ordinary visual wrapping on a narrow screen remains possible.
+        sentences = ([paragraph] if paragraph.startswith('伴随表现：') else
+                     re.findall(r"[^。！？!?]+[。！？!?]*|[。！？!?]+", paragraph))
+        for sentence in sentences:
             if chunk and (len(chunk) + len(sentence) > 160 or sentence_count >= 2):
                 chunks.append(chunk)
                 chunk = ""

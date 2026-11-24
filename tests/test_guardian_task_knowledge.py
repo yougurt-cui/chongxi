@@ -148,3 +148,21 @@ def test_report_retains_switch_plan_and_marks_version_mismatch():
   r=report.attach_report({'result':{}},{'pet_profile':{'animal_type':'cat'}},subjects)['result']['guardian_report']
   assert '版本不一致' in r['summary']['text']
   assert not r['feeding']['task_nutrition']['pairs'][0]['top_changes']
+
+
+def test_vomiting_cause_answer_skips_solutions_and_joins_manifestations():
+ from services import guardian_health_solution as solution
+ from services.guardian_presentation import present_message
+ issue = dict(issue_code='VOMITING', issue_name='呕吐', high_risk_warning=False)
+ rows = [dict(id=1, batch_id=1, source_provider='qwen', source_model='test', review_status='pending')]
+ groups = [dict(cause='毛球', mechanism='刺激胃部。', manifestations=['可见毛发。\n频繁干呕', '食欲变化。'], supporting=['核对吐出物'], source_ids=[1])]
+ with patch.object(task, 'identify_issues', return_value=[issue]), patch.object(task, 'health_rows', return_value=rows), patch.object(task, 'summarize_health', return_value=groups), patch.object(solution, 'enrich') as enrich:
+  state = {'slots': {}, 'turn_count': 0}
+  reply = qa.handle_question('u', {'pet_id': None, 'profile_species': 'cat'}, '猫咪呕吐是什么原因', state)
+  enrich.assert_not_called()
+ assert 'solution' not in reply['result']['health_knowledge']['groups'][0]
+ assert '应对措施' not in reply['reply'] and '解决方案' not in reply['reply']
+ assert '伴随表现：可见毛发。 频繁干呕；食欲变化。' in reply['reply']
+ blocks = present_message({'role': 'assistant', 'content': reply['reply'], 'result': reply['result']})['result']['display_blocks']
+ lines = [''.join(segment['text'] for segment in block['segments']) for block in blocks]
+ assert '伴随表现：可见毛发。 频繁干呕；食欲变化。' in lines
