@@ -33,6 +33,7 @@ DDL = (
     """CREATE TABLE IF NOT EXISTS experience_search_term (
        topic_key CHAR(64) NOT NULL, position_no TINYINT UNSIGNED NOT NULL, search_term VARCHAR(255) NOT NULL,
        category VARCHAR(32) NOT NULL DEFAULT '未分类', term_type VARCHAR(32) NOT NULL DEFAULT '待确认',
+       health_issue VARCHAR(255) NULL COMMENT '关联的健康问题，待确认时为空',
        PRIMARY KEY(topic_key, position_no), UNIQUE KEY uq_term(topic_key,search_term),
        FOREIGN KEY(topic_key) REFERENCES experience_topic(topic_key) ON DELETE CASCADE
        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4""",
@@ -305,12 +306,14 @@ def ensure_term_classification_columns(cur):
     """Add classification fields to existing installations without rewriting terms."""
     cur.execute("""SELECT COLUMN_NAME FROM information_schema.COLUMNS
                    WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='experience_search_term'
-                   AND COLUMN_NAME IN ('category','term_type')""")
+                   AND COLUMN_NAME IN ('category','term_type','health_issue')""")
     existing = {row['COLUMN_NAME'].lower() for row in cur.fetchall()}
     if 'category' not in existing:
         cur.execute("ALTER TABLE experience_search_term ADD COLUMN category VARCHAR(32) NOT NULL DEFAULT '未分类'")
     if 'term_type' not in existing:
         cur.execute("ALTER TABLE experience_search_term ADD COLUMN term_type VARCHAR(32) NOT NULL DEFAULT '待确认'")
+    if 'health_issue' not in existing:
+        cur.execute("ALTER TABLE experience_search_term ADD COLUMN health_issue VARCHAR(255) NULL COMMENT '关联的健康问题，待确认时为空'")
 
 
 def publish(conn, source, extracted):
@@ -332,8 +335,8 @@ def publish(conn, source, extracted):
                     "source changed during extraction; rerun with the same cache"
                 )
             # Preserve classifications only when both topic and term are unchanged.
-            cur.execute("SELECT topic_key, search_term, category, term_type FROM experience_search_term")
-            classifications = {(r['topic_key'], r['search_term']): (r['category'], r['term_type'])
+            cur.execute("SELECT topic_key, search_term, category, term_type, health_issue FROM experience_search_term")
+            classifications = {(r['topic_key'], r['search_term']): (r['category'], r['term_type'], r['health_issue'])
                                for r in cur.fetchall()}
             cur.execute("DELETE FROM experience_topic_source")
             cur.execute("DELETE FROM experience_search_term")
@@ -343,9 +346,10 @@ def publish(conn, source, extracted):
                     (key, *fields),
                 )
                 cur.executemany(
-                    "INSERT INTO experience_search_term (topic_key,position_no,search_term,category,term_type) VALUES (%s,%s,%s,%s,%s)",
+                    "INSERT INTO experience_search_term (topic_key,position_no,search_term,category,term_type,health_issue) VALUES (%s,%s,%s,%s,%s,%s)",
                     [(key, i, t, species_category(fields[0]),
-                      classifications.get((key, t), ('未分类', '待确认'))[1])
+                      classifications.get((key, t), ('未分类', '待确认', None))[1],
+                      classifications.get((key, t), ('未分类', '待确认', None))[2])
                      for i, t in enumerate(terms, 1)],
                 )
             cur.executemany(
