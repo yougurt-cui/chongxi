@@ -1894,8 +1894,8 @@ def build_node_input(task: dict[str, Any], node_def: NodeDefinition) -> dict[str
             product_name_candidates: list[str] = []
             standard_brand_name = str(brand_output.get("standard_brand_name") or "").strip()
             for value in (
-                brand_output.get("ocr_brand_name"),
                 payload.get("product_name"),
+                brand_output.get("ocr_brand_name"),
                 brand_output.get("raw_product_name"),
             ):
                 candidate = str(value or "").strip()

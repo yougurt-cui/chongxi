@@ -382,13 +382,14 @@ def _initialize_standardization_db() -> None:
                   raw_product_names_json JSON NULL,
                   evidence_json JSON NULL,
                   build_batch_id CHAR(32) NOT NULL,
+                  candidate_source_id BIGINT NULL,
                   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
                   updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
                   PRIMARY KEY (product_id),
                   KEY idx_brand_id (brand_id),
                   KEY idx_display_name (display_name),
                   KEY idx_quality_review (quality_level, review_status),
-                  UNIQUE KEY uq_brand_product (brand_id, standard_product_name)
+                  UNIQUE KEY uq_candidate_source (candidate_source_id)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
                 """
             )
@@ -1332,106 +1333,11 @@ def _assign_candidate_brand(
     brand_id: int,
     standard_brand_name: str,
 ) -> int:
-    """Assign a brand and collapse a duplicate candidate without losing OCR lineage."""
-    product_id = int(product_candidate["product_id"])
-    cursor.execute(
-        """
-        SELECT *
-        FROM catfood_standard_product_candidate
-        WHERE brand_id = %s
-          AND standard_product_name = %s
-          AND product_id <> %s
-        ORDER BY
-          CASE review_status
-            WHEN 'approved' THEN 0
-            WHEN 'needs_manual_review' THEN 1
-            WHEN 'pending' THEN 2
-            ELSE 3
-          END,
-          active DESC,
-          product_id
-        LIMIT 1
-        FOR UPDATE
-        """,
-        (brand_id, product_candidate["standard_product_name"], product_id),
-    )
-    existing = cursor.fetchone()
-    if not existing:
-        cursor.execute(
-            """
-            UPDATE catfood_standard_product_candidate
-            SET brand_id = %s,
-                standard_brand_name = %s,
-                updated_at = NOW()
-            WHERE product_id = %s
-            """,
-            (brand_id, standard_brand_name, product_id),
-        )
-        return 0
-
-    list_columns = (
-        "source_ids_json",
-        "parsed_row_ids_json",
-        "raw_product_names_json",
-        "normalized_tags_json",
-        "quality_reasons_json",
-    )
-    merged_lists = {
-        column: json.dumps(
-            _merge_json_lists(existing.get(column), product_candidate.get(column)),
-            ensure_ascii=False,
-        )
-        for column in list_columns
-    }
-    evidence = _json_dict(existing.get("evidence_json"))
-    merged_ids = _merge_json_lists(evidence.get("merged_candidate_ids"), [product_id])
-    evidence["merged_candidate_ids"] = merged_ids
-
-    review_status = _preferred_value(
-        existing.get("review_status"),
-        product_candidate.get("review_status"),
-        ("approved", "needs_manual_review", "pending", "rejected"),
-    )
-    quality_level = _preferred_value(
-        existing.get("quality_level"),
-        product_candidate.get("quality_level"),
-        ("strong", "medium", "weak", "invalid"),
-    )
-    cursor.execute(
-        """
-        UPDATE catfood_standard_product_candidate
-        SET standard_brand_name = %s,
-            active = GREATEST(active, %s),
-            review_status = %s,
-            quality_level = %s,
-            source_ids_json = %s,
-            parsed_row_ids_json = %s,
-            raw_product_names_json = %s,
-            normalized_tags_json = %s,
-            quality_reasons_json = %s,
-            evidence_json = %s,
-            updated_at = NOW()
-        WHERE product_id = %s
-        """,
-        (
-            standard_brand_name,
-            int(product_candidate.get("active") or 0),
-            review_status,
-            quality_level,
-            merged_lists["source_ids_json"],
-            merged_lists["parsed_row_ids_json"],
-            merged_lists["raw_product_names_json"],
-            merged_lists["normalized_tags_json"],
-            merged_lists["quality_reasons_json"],
-            json.dumps(evidence, ensure_ascii=False),
-            int(existing["product_id"]),
-        ),
-    )
-    cursor.execute(
-        "DELETE FROM catfood_standard_product_candidate WHERE product_id = %s",
-        (product_id,),
-    )
-    return 1
+    """Assign the brand without combining independently reviewable sources."""
+    cursor.execute("""UPDATE catfood_standard_product_candidate
+        SET brand_id=%s, standard_brand_name=%s, updated_at=NOW()
+        WHERE product_id=%s""", (brand_id, standard_brand_name, int(product_candidate["product_id"])))
+    return 0
 
 
 def _merge_json_lists(*values: Any) -> list[Any]:
@@ -1534,16 +1440,12 @@ def _upsert_product_review_candidate(
     if not raw_product_name or not brand_id:
         return None
     cursor.execute(
-        f"""
-        SELECT *
-        FROM `{PRODUCT_CANDIDATE_TABLE}`
-        WHERE brand_id = %s AND standard_product_name = %s
-        LIMIT 1
-        FOR UPDATE
-        """,
-        (brand_id, raw_product_name),
+        f"SELECT * FROM `{PRODUCT_CANDIDATE_TABLE}` WHERE candidate_source_id = %s FOR UPDATE",
+        (int(mapping["source_id"]),),
     )
     existing = cursor.fetchone()
+    _, ingredients, fingerprint = _normalize_ingredients_with_noise(cursor, mapping.get("raw_ingredient_composition"))
+    fingerprint = fingerprint if ingredients else None
     lineage = _merge_product_candidate_lineage(
         existing,
         source_id=int(mapping["source_id"]),
@@ -1551,6 +1453,12 @@ def _upsert_product_review_candidate(
         raw_product_name=raw_product_name,
         image_id=_clean(mapping.get("image_id")),
     )
+    evidence = json.loads(lineage["evidence_json"])
+    old_fingerprint = _json_dict((existing or {}).get("evidence_json")).get("ingredient_fingerprint")
+    evidence["ingredient_fingerprint"] = fingerprint
+    lineage["evidence_json"] = json.dumps(evidence, ensure_ascii=False)
+    if existing and (not fingerprint or fingerprint != old_fingerprint):
+        lineage["review_status"] = "needs_manual_review"
     quality_reasons = json.dumps(
         [f"产品标准化状态为 {product_status}，需要人工确认标准产品"],
         ensure_ascii=False,
@@ -1583,11 +1491,6 @@ def _upsert_product_review_candidate(
                 product_id,
             ),
         )
-        _reject_superseded_product_candidates(
-            cursor,
-            source_id=source_id,
-            keep_product_id=product_id,
-        )
         return product_id
 
     cursor.execute(
@@ -1597,13 +1500,13 @@ def _upsert_product_review_candidate(
           display_name_rule, candidate_type, active, quality_level, review_status,
           normalized_tags_json, truncation_suspected, quality_reasons_json,
           source_ids_json, parsed_row_ids_json, raw_product_names_json,
-          evidence_json, build_batch_id
+          evidence_json, build_batch_id, candidate_source_id
         ) VALUES(
           %s, %s, %s, %s,
           'ocr_product_name', 'official_name', 0, 'medium', %s,
           JSON_ARRAY(), 0, %s,
           %s, %s, %s,
-          %s, %s
+          %s, %s, %s
         )
         """,
         (
@@ -1618,14 +1521,10 @@ def _upsert_product_review_candidate(
             lineage["raw_product_names_json"],
             lineage["evidence_json"],
             uuid.uuid4().hex,
+            source_id,
         ),
     )
     product_id = int(cursor.lastrowid)
-    _reject_superseded_product_candidates(
-        cursor,
-        source_id=source_id,
-        keep_product_id=product_id,
-    )
     return product_id
 
 
@@ -2319,9 +2218,9 @@ def standardize_product(payload: dict[str, Any]) -> dict[str, Any]:
                         WHERE brand_id = %s
                           AND standard_product_name = %s
                           AND review_status IN ('pending', 'needs_manual_review')
-                          AND active = 0
+                          AND active = 0 AND candidate_source_id = %s
                         """,
-                        (mapping["brand_id"], raw_name),
+                        (mapping["brand_id"], raw_name, source_id),
                     )
 
             name_matches: list[dict[str, Any]] = []

@@ -31,6 +31,7 @@ if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
 
 from app_config import get_mysql_config, get_qwen_config  # noqa: E402
+from services.catfood_standardization_service import normalize_ingredients  # noqa: E402
 
 
 DEFAULT_SOURCE_TABLE = "catfood_ingredient_ocr_results"
@@ -1166,6 +1167,8 @@ def build_candidate(
             "product_method": product_method,
             "ocr_excerpt": _clean_space(ocr_text)[:500],
             "context_text": build_context_text(ocr_text, product_name),
+            "ingredient_fingerprint": (normalize_ingredients(row.get("ingredient_composition"))[2]
+                                       if normalize_ingredients(row.get("ingredient_composition"))[1] else None),
         },
     )
 
@@ -1177,7 +1180,9 @@ def _candidate_key(candidate: ProductCandidate) -> str:
         or candidate.display_name
         or candidate.standard_product_name
     )
-    return f"{candidate.brand_id or candidate.standard_brand_name}|{_normalize_key(identity)}"
+    # A source is a separate review decision even if the ingredients match.
+    # This also keeps missing/unparseable ingredient lists separate.
+    return f"source:{candidate.source_ids[0]}" if len(candidate.source_ids) == 1 else f"unknown:{id(candidate)}"
 
 
 def merge_candidates(candidates: Iterable[ProductCandidate]) -> list[ProductCandidate]:
@@ -1235,6 +1240,7 @@ def fetch_rows(
             p.source_id,
             p.brand AS parsed_brand,
             p.product_name AS parsed_product_name,
+            p.ingredient_composition,
             s.ocr_text
         FROM `{parsed_table}` p
         JOIN `{source_table}` s ON s.id = p.source_id
@@ -1289,13 +1295,14 @@ def ensure_target_table(conn: pymysql.connections.Connection, table_name: str) -
               raw_product_names_json JSON NULL,
               evidence_json JSON NULL,
               build_batch_id CHAR(32) NOT NULL,
+              candidate_source_id BIGINT NULL,
               created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
               updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
               PRIMARY KEY (product_id),
               KEY idx_brand_id (brand_id),
               KEY idx_display_name (display_name),
               KEY idx_quality_review (quality_level, review_status),
-              UNIQUE KEY uq_brand_product (brand_id, standard_product_name)
+              UNIQUE KEY uq_candidate_source (candidate_source_id)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
             """
         )
@@ -1345,7 +1352,7 @@ def write_candidates(
               review_status, normalized_tags_json, truncation_suspected, reject_reason,
               model_reason, hard_filter_reason, model_name_used, model_prompt_version,
               model_raw_result_json, quality_reasons_json, source_ids_json, parsed_row_ids_json,
-              raw_product_names_json, evidence_json, build_batch_id
+              raw_product_names_json, evidence_json, build_batch_id, candidate_source_id
             ) VALUES (
               %(brand_id)s, %(standard_brand_name)s, %(standard_product_name)s, %(display_name)s,
               %(display_name_rule)s, %(display_subtitle)s, %(candidate_type)s,
@@ -1354,37 +1361,9 @@ def write_candidates(
               %(review_status)s, %(normalized_tags_json)s, %(truncation_suspected)s, %(reject_reason)s,
               %(model_reason)s, %(hard_filter_reason)s, %(model_name_used)s, %(model_prompt_version)s,
               %(model_raw_result_json)s, %(quality_reasons_json)s, %(source_ids_json)s, %(parsed_row_ids_json)s,
-              %(raw_product_names_json)s, %(evidence_json)s, %(build_batch_id)s
+              %(raw_product_names_json)s, %(evidence_json)s, %(build_batch_id)s, %(candidate_source_id)s
             )
-            ON DUPLICATE KEY UPDATE
-              display_name = VALUES(display_name),
-              display_name_rule = VALUES(display_name_rule),
-              display_subtitle = VALUES(display_subtitle),
-              candidate_type = VALUES(candidate_type),
-              model_name = VALUES(model_name),
-              series_name = VALUES(series_name),
-              function_name = VALUES(function_name),
-              process_name = VALUES(process_name),
-              flavor_or_protein = VALUES(flavor_or_protein),
-              product_type = VALUES(product_type),
-              life_stage = VALUES(life_stage),
-              quality_level = VALUES(quality_level),
-              review_status = VALUES(review_status),
-              normalized_tags_json = VALUES(normalized_tags_json),
-              truncation_suspected = VALUES(truncation_suspected),
-              reject_reason = VALUES(reject_reason),
-              model_reason = VALUES(model_reason),
-              hard_filter_reason = VALUES(hard_filter_reason),
-              model_name_used = VALUES(model_name_used),
-              model_prompt_version = VALUES(model_prompt_version),
-              model_raw_result_json = VALUES(model_raw_result_json),
-              quality_reasons_json = VALUES(quality_reasons_json),
-              source_ids_json = VALUES(source_ids_json),
-              parsed_row_ids_json = VALUES(parsed_row_ids_json),
-              raw_product_names_json = VALUES(raw_product_names_json),
-              evidence_json = VALUES(evidence_json),
-              build_batch_id = VALUES(build_batch_id),
-              updated_at = NOW()
+            ON DUPLICATE KEY UPDATE product_id = product_id
         """
         payload = []
         for item in candidates:
@@ -1420,6 +1399,7 @@ def write_candidates(
                     "raw_product_names_json": json.dumps(item.raw_product_names, ensure_ascii=False),
                     "evidence_json": json.dumps(item.evidence, ensure_ascii=False),
                     "build_batch_id": batch_id,
+                    "candidate_source_id": item.source_ids[0] if len(item.source_ids) == 1 else None,
                 }
             )
         cursor.executemany(sql, payload)

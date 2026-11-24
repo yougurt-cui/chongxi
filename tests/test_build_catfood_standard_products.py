@@ -181,3 +181,22 @@ class StandardProductExtractionTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class CandidateSourceIsolationTest(unittest.TestCase):
+    def test_same_name_different_formulas_remain_separate(self):
+        from scripts.build_catfood_standard_products import ProductCandidate, merge_candidates
+        def candidate(source, fingerprint):
+            return ProductCandidate(brand_id=217, standard_brand_name="京东京造",
+                standard_product_name="全价", display_name="全价", display_name_rule="ocr",
+                source_ids=[source], parsed_row_ids=[source],
+                evidence={"ingredient_fingerprint": fingerprint})
+        result = merge_candidates([candidate(556, "a"), candidate(557, "b")])
+        self.assertEqual({tuple(item.source_ids) for item in result}, {(556,), (557,)})
+
+    def test_missing_formula_does_not_merge_sources(self):
+        from scripts.build_catfood_standard_products import ProductCandidate, merge_candidates
+        def candidate(source):
+            return ProductCandidate(brand_id=217, standard_brand_name="京东京造",
+                standard_product_name="全价", display_name="全价", display_name_rule="ocr",
+                source_ids=[source], parsed_row_ids=[source])
+        self.assertEqual(len(merge_candidates([candidate(1), candidate(2)])), 2)

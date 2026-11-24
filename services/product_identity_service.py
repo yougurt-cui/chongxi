@@ -654,6 +654,12 @@ def review_product_candidate(
                     return {"ok": True, "item": current, "source_ids": source_ids,
                             "identity_mode": "duplicate", "reuse_product_id": int(reuse_product_id),
                             "duplicate_formula_resolutions": resolutions, "pipeline_complete": True}
+                cursor.execute(
+                    f"SELECT product_id FROM `{PRODUCT_TABLE}` WHERE brand_id=%s AND standard_product_name=%s FOR UPDATE",
+                    (brand_id, product_name),
+                )
+                if cursor.fetchone():
+                    raise ValueError("同品牌同名标准产品已存在，请核实产品和配方关系并使用可区分的产品名称")
                 candidate_for_assignment = dict(current)
                 candidate_for_assignment["standard_product_name"] = product_name
                 merged = _assign_candidate_brand(
@@ -746,6 +752,13 @@ def review_product_candidate(
                     if not normalized_alias:
                         continue
                     cursor.execute(
+                        f"SELECT product_id FROM `{PRODUCT_ALIAS_TABLE}` WHERE brand_id=%s AND normalized_alias=%s AND active=1 FOR UPDATE",
+                        (brand_id, normalized_alias),
+                    )
+                    existing_alias = cursor.fetchone()
+                    if existing_alias and int(existing_alias["product_id"]) != standard_product_id:
+                        continue
+                    cursor.execute(
                         f"""
                         INSERT INTO `{PRODUCT_ALIAS_TABLE}`(
                           product_id, brand_id, alias_name, normalized_alias, source, active
@@ -779,7 +792,7 @@ def review_product_candidate(
                 matching_source_ids = [
                     row["source_id"]
                     for row in cursor.fetchall()
-                    if normalize_name(row.get("raw_product_name")) in normalized_aliases
+                    if int(row["source_id"]) in source_ids
                 ]
                 if matching_source_ids:
                     placeholders = ", ".join(["%s"] * len(matching_source_ids))
