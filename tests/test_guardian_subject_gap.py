@@ -46,6 +46,23 @@ class SubjectGapTest(TestCase):
     def turn(self, message='', **kwargs):
         return chat.handle_message('owner', 'c', {'message': message, **kwargs})['message']
 
+    def test_vomiting_question_reaches_health_knowledge(self):
+        from services import guardian_task_knowledge as task
+        health = {'status': 'matched', 'text': '可能原因需要结合情况判断。', 'groups': [], 'sources': []}
+        with patch.object(task, 'health_answer', return_value=health) as answer:
+            reply = self.turn('猫咪呕吐是什么原因')
+        self.assertEqual('text', reply['response_type'])
+        self.assertEqual('health_knowledge', reply['result']['pipeline'])
+        self.assertIn('猫咪呕吐是什么原因', answer.call_args.args[0]['query'])
+
+    def test_vomiting_severity_and_other_red_flags(self):
+        self.assertFalse(subjects.urgent_message('猫咪呕吐是什么原因'))
+        self.assertFalse(subjects.urgent_message('猫咪今天吐了一次'))
+        for message in ('猫咪反复呕吐', '猫咪呕吐并且没精神', '猫咪便血', '猫咪呼吸困难'):
+            with self.subTest(message=message):
+                self.assertTrue(subjects.urgent_message(message))
+        self.assertFalse(subjects.urgent_message('如果猫咪反复呕吐怎么办'))
+
     def test_other_dog_followup_then_explicitly_return_to_cat(self):
         self.state.update(primary_intent='food_switch', current_step='food_goal')
         for question in ('我家有猫，小狗到家要注意什么', '那它晚上叫怎么办'):

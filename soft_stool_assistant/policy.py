@@ -82,8 +82,8 @@ def validate_extraction(value):
 
 
 def urgent_risk(slots):
-    # Keep the existing policy; mucus is collected independently from blood.
-    return bool(slots.get("vomiting") is True or slots.get("blood_in_stool") is True
+    # Vomiting alone needs context; keep other established warning signals.
+    return bool(slots.get("blood_in_stool") is True
                 or slots.get("appetite") == "poor" or slots.get("energy") == "poor")
 
 

@@ -11,6 +11,7 @@ OTHER = re.compile(r'(?:朋友|别人|邻居|同事)(?:家(?:的)?|的)(?:小|�
 PROFILE = re.compile(r'档案里|已绑定|当前(?:这|那)?只|我家(?:的)?(?:这只|那只|宠物|猫|狗|犬)')
 PERSONAL = re.compile(r'记录|提醒|它.{0,8}(?:吃的粮|口粮|体重|状态|饮食建议)|(?:以前|历史|最近).{0,5}(?:吃|喝|体重)')
 URGENT = re.compile(r'呼吸困难|无法呼吸|抽搐|昏迷|中毒|误食.{0,10}(?:药|毒|百合|巧克力)')
+FREQUENT_VOMITING = re.compile(r'(?:频繁|反复|持续|不停|一直|多次|不断).{0,6}(?:呕吐|吐)|(?:呕吐|吐).{0,6}(?:频繁|反复|持续|不停|一直|多次|不断)')
 
 
 def subject_phrase(message):
@@ -72,7 +73,9 @@ def resolve(message, conversation, previous):
 def urgent_message(message):
     from soft_stool_assistant.llm import _extract_rule_info
     from soft_stool_assistant.policy import urgent_risk
-    return bool(URGENT.search(message) or urgent_risk(_extract_rule_info(message, {})))
+    extracted = _extract_rule_info(message, {})
+    return bool(URGENT.search(message) or urgent_risk(extracted)
+                or (extracted.get('vomiting') is True and FREQUENT_VOMITING.search(message)))
 
 
 def external_boundary(message, interaction, attachments):
