@@ -92,3 +92,26 @@ def test_multiple_possible_items_are_never_guessed():
     s.constrain_singleton_refs(v,rows)
     assert v['chains'][0]['verification_refs']['supporting'][1]['index']==9
     with pytest.raises(ValueError):s.validate_summary(v,rows)
+
+
+def test_empty_array_reference_is_removed_without_losing_real_evidence():
+    rows=[row(),row(2,'deepseek')];v=value()
+    v['chains'][0]['verification_refs']['opposing']=[{'source_id':1,'index':0}]
+    v['chains'][0]['verification_refs']['supporting'][1]['index']=1
+    repaired=s.constrain_singleton_refs(v,rows)
+    s.validate_summary(repaired,rows)
+    assert repaired['chains'][0]['verification_refs']['opposing']==[]
+    assert '空数组引用移除' in repaired['notes'][-1]
+    assert s.materialize(repaired,rows)['verification']['supporting']==['【合并原因】支持1','【合并原因】支持2']
+
+
+def test_empty_reference_cannot_hide_cross_chain_or_missing_evidence():
+    rows=[row(),row(2,'deepseek')];v=value((1,))
+    v['chains'].append(value((2,))['chains'][0])
+    v['chains'][0]['verification_refs']['opposing']=[{'source_id':2,'index':0}]
+    s.constrain_singleton_refs(v,rows)
+    with pytest.raises(ValueError):s.validate_summary(v,rows)
+    v=value();v['chains'][0]['verification_refs']['supporting']=[]
+    v['chains'][0]['verification_refs']['opposing']=[{'source_id':1,'index':0}]
+    s.constrain_singleton_refs(v,rows)
+    with pytest.raises(ValueError):s.validate_summary(v,rows)

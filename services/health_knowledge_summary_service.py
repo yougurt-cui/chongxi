@@ -66,7 +66,7 @@ def values_for(row,field):
 
 
 def constrain_singleton_refs(value,rows):
-    """An out-of-range index has one unambiguous target only for a singleton array."""
+    """Repair singleton indexes and discard references to empty source arrays."""
     if not isinstance(value,dict) or not isinstance(value.get('chains'),list):return value
     byid={r['id']:r for r in rows};repairs=[]
     for chain in value['chains']:
@@ -76,12 +76,21 @@ def constrain_singleton_refs(value,rows):
         if isinstance(verification,dict):lists.extend(('verification.'+k,v) for k,v in verification.items())
         for field,refs in lists:
             if not isinstance(refs,list):continue
+            kept=[]
             for ref in refs:
+                if (isinstance(ref,dict) and set(ref)=={'source_id','index'}
+                    and type(ref['source_id']) is int and ref['source_id'] in byid
+                    and ref['source_id'] in chain['source_ids'] and type(ref['index']) is int
+                    and ref['index']>=0 and not values_for(byid[ref['source_id']],field)):
+                    repairs.append(str(ref['source_id'])+':'+field+':空数组引用移除')
+                    continue
+                kept.append(ref)
                 if not isinstance(ref,dict):continue
                 sid,index=ref.get('source_id'),ref.get('index')
                 if type(sid) is int and sid in byid and sid in chain['source_ids'] and type(index) is int and index>0 and len(values_for(byid[sid],field))==1:
                     ref['index']=0;repairs.append(str(sid)+':'+field+':'+str(index)+'→0')
-    if repairs and isinstance(value.get('notes'),list):value['notes'].append('单项原文引用下标归一：'+'；'.join(repairs))
+            refs[:]=kept
+    if repairs and isinstance(value.get('notes'),list):value['notes'].append('原文引用修复（含下标归一）：'+'；'.join(repairs))
     return value
 
 
@@ -97,7 +106,7 @@ def validate_summary(value,rows):
             if not isinstance(ref,dict) or set(ref)!={'source_id','index'}:raise ValueError('引用字段无效')
             sid,index=ref['source_id'],ref['index']
             if type(sid) is not int or sid not in allowed or type(index) is not int or not 0<=index<len(values_for(byid[sid],field)):
-                raise ValueError('从属字段引用越界或跨原因')
+                raise ValueError('从属字段引用越界或跨原因: field=%s source_id=%s index=%s' % (field,sid,index))
             covered_refs.add((sid,field,index))
     for chain in value['chains']:
         if not isinstance(chain,dict) or set(chain)!=required:raise ValueError('原因组结构无效')
