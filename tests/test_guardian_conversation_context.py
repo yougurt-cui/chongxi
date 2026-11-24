@@ -469,3 +469,23 @@ def test_large_health_report_preserves_compact_product_comparison():
     assert evidence['comparisons'][0]['dimensions'][0]['right_score'] == 0.446
     assert evidence['products'][0]['formula_id'] == 351
     assert 'health_analysis' not in evidence
+
+
+def test_reason_indicator_link_preserves_status_and_scores():
+    events = [
+        {'id': 'health', 'evidence': {'health_knowledge': {
+            'groups': [{'cause': '高脂食物摄入', 'source_ids': [17],
+                        'manifestations': ['餐后呕吐']}],
+            'sources': [{'id': 17, 'review_status': 'pending'}]}}},
+        {'id': 'comparison', 'evidence': {'comparisons': [{
+            'status': 'comparable', 'left_label': '旧粮', 'right_label': '新粮',
+            'dimensions': [{'title': '脂肪负担', 'status': 'comparable',
+                            'left_score': 0.414, 'right_score': 0.446, 'scale_max': 1}]}]}},
+    ]
+    link = ctx._reason_indicator_links(events)[0]
+    assert link['cause']['review_statuses'] == ['pending']
+    assert link['cause']['message_id'] == 'health'
+    assert link['comparison']['message_id'] == 'comparison'
+    assert (link['comparison']['left_score'], link['comparison']['right_score']) == (0.414, 0.446)
+    assert ctx._reason_indicator_links(events[:1]) == []
+    assert ctx._reason_indicator_links(events[1:]) == []
