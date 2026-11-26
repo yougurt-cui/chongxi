@@ -41,7 +41,7 @@ def create_image_generation():
     def create(user_id):
         if request.content_length and request.content_length > service.MAX_BYTES + 64 * 1024:
             raise ValueError('图片不能超过 10MB')
-        return service.create_task(user_id, request.files.get('image'), request.form.get('prompt'), request.form.get('request_id'))
+        return service.create_task(user_id, request.files.get('image'), request.form.get('prompt'), request.form.get('request_id'), request.form.get('style'))
     return _respond(create, 202)
 
 
@@ -53,4 +53,6 @@ def get_image_generation(task_id):
 @image_generation_api.get('/prompts')
 def list_image_prompts():
     # Public metadata, available before sign-in; generation still requires auth.
-    return jsonify(ok=True, items=list(PROMPTS), prompt_limit=PROMPT_LIMIT)
+    styles = service.badge.STYLES if service.badge.api_key() else {}
+    return jsonify(ok=True, items=list(PROMPTS), prompt_limit=PROMPT_LIMIT,
+                   badge_styles=[dict(id=k, name=v) for k, v in styles.items()])

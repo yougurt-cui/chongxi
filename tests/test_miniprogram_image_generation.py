@@ -173,3 +173,27 @@ def test_public_prompt_list_and_full_prompt_submission(runtime):
         fn, args = jobs.pop()
         fn(*args)
         assert calls[-1][1]['json']['prompt'] == preset['prompt']
+
+
+def test_badge_route_and_idempotency(runtime, monkeypatch):
+    client, rows, jobs, calls = runtime
+    monkeypatch.delenv('CHENGWU_API_KEY', raising=False)
+    assert client.get(URL + '/prompts').json['badge_styles'] == []
+    monkeypatch.setenv('CHENGWU_API_KEY', 'test')
+    assert len(client.get(URL + '/prompts').json['badge_styles']) == 6
+
+    def badge_request(style):
+        return client.post(URL, headers={'Authorization': 'Bearer alice'}, data={
+            'image': (BytesIO(photo()), 'cat.png'), 'style': style, 'request_id': 'r' * 16})
+    def accept(row, content):
+        rows[row['id']]['status'] = 'generating'
+        return service._public(rows[row['id']]), True
+    monkeypatch.setattr(service, '_advance_badge', accept)
+    assert badge_request('made-up').status_code == 400
+    task = badge_request('felt-relief').json['item']
+    assert task['status'] == 'generating'
+    assert badge_request('felt-relief').json['item']['id'] == task['id']
+    assert badge_request('korean-flat').status_code == 400
+    assert submit(client, prompt='felt-relief').status_code == 400
+    assert jobs[0][0] == service._finish_badge
+    assert not calls

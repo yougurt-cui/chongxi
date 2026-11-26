@@ -7,6 +7,7 @@ import logging
 import os
 import re
 import threading
+import time
 import uuid
 import warnings
 from concurrent.futures import ThreadPoolExecutor
@@ -20,6 +21,7 @@ from werkzeug.datastructures import FileStorage
 from app_config import get_ark_image_config, get_mysql_config
 from services.miniprogram_moment_image_service import upload_moment_image
 from services.miniprogram_image_prompts import PROMPT_LIMIT
+from services import chengwu_pet_badge as badge
 
 def get_image_config():
     config = get_ark_image_config()
@@ -76,6 +78,9 @@ def init_tables():
                     UNIQUE KEY one_active_task (active_user),
                     KEY user_created (user_id, created_at)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4''')
+                cursor.execute(f"""CREATE TABLE IF NOT EXISTS {TABLE}_badge (
+                    task_id CHAR(32) PRIMARY KEY, receipt VARCHAR(128) NULL, next_check DATETIME NULL
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4""")
             conn.commit()
         _schema_ready = True
 
@@ -84,8 +89,15 @@ def _expire(user_id):
     # A crashed worker cannot leave an account permanently locked.
     with _connect() as conn:
         with conn.cursor() as cursor:
-            cursor.execute(f"UPDATE {TABLE} SET status='failed',active_user=NULL,error=%s,updated_at=UTC_TIMESTAMP() WHERE user_id=%s AND status IN ('pending','generating') AND created_at < UTC_TIMESTAMP() - INTERVAL 10 MINUTE",
-                           ('生成超时，请重新尝试', user_id))
+            cursor.execute(f"UPDATE {TABLE} SET status='failed',active_user=NULL,error=%s,updated_at=UTC_TIMESTAMP() WHERE user_id=%s AND status IN ('pending','generating') AND model<>%s AND created_at < UTC_TIMESTAMP() - INTERVAL 10 MINUTE",
+                           ('生成超时，请重新尝试', user_id, badge.MODEL))
+            # Closed pages may resume a paid badge during the provider's 24-hour window.
+            cursor.execute(f"""UPDATE {TABLE} SET active_user=NULL
+                WHERE user_id=%s AND model=%s AND active_user IS NOT NULL
+                AND created_at < UTC_TIMESTAMP() - INTERVAL 10 MINUTE""", (user_id, badge.MODEL))
+            cursor.execute(f"""UPDATE {TABLE} SET status='failed',active_user=NULL,error='徽章任务已过期'
+                WHERE user_id=%s AND model=%s AND status IN ('pending','generating')
+                AND created_at < UTC_TIMESTAMP() - INTERVAL 24 HOUR""", (user_id, badge.MODEL))
         conn.commit()
 
 
@@ -102,6 +114,8 @@ def _insert(row):
         with conn.cursor() as cursor:
             cursor.execute(f"INSERT INTO {TABLE} (id,user_id,request_id,input_hash,prompt,model,status,active_user,created_at,updated_at) VALUES (%s,%s,%s,%s,%s,%s,'pending',%s,UTC_TIMESTAMP(),UTC_TIMESTAMP())",
                            (row['id'], row['user_id'], row['request_id'], row['input_hash'], row['prompt'], row['model'], row['user_id']))
+            if row['model'] == badge.MODEL:
+                cursor.execute(f'INSERT INTO {TABLE}_badge (task_id) VALUES (%s)', (row['id'],))
         conn.commit()
 
 
@@ -149,32 +163,122 @@ def validate_input(image_file, prompt, request_id):
         raise ValueError('图片无法读取，请重新选择') from exc
 
 
-def create_task(user_id, image_file, prompt, request_id):
+def _advance_badge(row, content=None):
+    submitted = False
+    if row['status'] not in ('pending', 'generating'):
+        return _public(row), submitted
+    if not badge.api_key():
+        raise ConfigurationError('徽章转绘尚未配置')
+    task_id = row['id']
+    # Serialize calls per task. Persist the receipt and retry clock across restarts.
+    with _connect() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(f"""SELECT receipt, next_check > UTC_TIMESTAMP() AS waiting
+                FROM {TABLE}_badge WHERE task_id=%s FOR UPDATE""", (task_id,))
+            job = cursor.fetchone()
+            cursor.execute(f'SELECT * FROM {TABLE} WHERE id=%s', (task_id,))
+            row = cursor.fetchone()
+            if row['status'] not in ('pending', 'generating'):
+                return _public(row), submitted
+            receipt = job['receipt']
+            if job['waiting'] or (not receipt and content is None):
+                if not receipt and content is not None:
+                    raise BusyError('徽章服务暂忙，请稍后重试')
+                return _public(row), submitted
+            delay = 3
+            try:
+                if not receipt:
+                    receipt, delay = badge.submit(content, row['prompt'], task_id)
+                    submitted = True
+                    row['status'] = 'generating'
+                else:
+                    png = badge.poll(receipt)
+                    image = FileStorage(stream=png, filename=f'guzi-{task_id}.png', content_type='image/png')
+                    saved = upload_moment_image(image, user_id=row['user_id'])
+                    row.update(status='succeeded', image_url=saved['item']['url'])
+            except badge.BadgeFailed as exc:
+                row.update(status='failed', error=str(exc))
+            except badge.RetryLater as exc:
+                delay = exc.delay
+            except (requests.RequestException, ValueError):
+                # Reuse the operation ID after an ambiguous submission response.
+                delay = 5
+            cursor.execute(f"""UPDATE {TABLE}_badge SET receipt=%s,
+                next_check=DATE_ADD(UTC_TIMESTAMP(), INTERVAL %s SECOND) WHERE task_id=%s""",
+                           (receipt, delay, task_id))
+            cursor.execute(f"""UPDATE {TABLE} SET status=%s,image_url=%s,error=%s,
+                active_user=IF(%s IN ('succeeded','failed'),NULL,active_user),
+                updated_at=UTC_TIMESTAMP() WHERE id=%s""",
+                           (row['status'], row.get('image_url'), row.get('error'), row['status'], task_id))
+        conn.commit()
+    if not receipt and row['status'] != 'failed':
+        raise BusyError('徽章服务暂忙，请稍后重试')
+    return _public(row), submitted
+
+
+def _finish_badge(user_id, task_id):
+    # Continue collecting the image if the user closes the page. A later GET
+    # can resume from the saved receipt if this worker is interrupted.
+    try:
+        deadline = time.monotonic() + 570
+        while time.monotonic() < deadline:
+            time.sleep(3)
+            row = _find(user_id, task_id=task_id)
+            if not row:
+                break
+            task, _ = _advance_badge(row)
+            if task['status'] in ('succeeded', 'failed'):
+                break
+    except Exception:
+        logger.warning('Badge collection interrupted: task=%s', task_id)
+    finally:
+        _slots.release()
+
+
+def create_task(user_id, image_file, prompt, request_id, style=None):
+    if style is not None:
+        if style not in badge.STYLES or prompt:
+            raise ValueError('徽章转绘请选择一种预设风格')
+        prompt = style
     content, prompt, request_id = validate_input(image_file, prompt, request_id)
-    config = get_image_config()
+    config = {'api_key': badge.api_key(), 'model': badge.MODEL} if style else get_image_config()
     if not config['api_key']:
         raise ConfigurationError('生图服务尚未配置')
     init_tables()
     _expire(user_id)
     digest = hashlib.sha256(content + b'\0' + prompt.encode('utf-8')).hexdigest()
-    previous = _find(user_id, request_id=request_id)
-    if previous:
-        if previous['input_hash'] != digest:
-            raise ValueError('同一 request_id 不能用于不同照片或描述')
-        return _public(previous)
+    if style:
+        digest = hashlib.sha256(('badge:' + digest).encode()).hexdigest()
+    row = _find(user_id, request_id=request_id)
+    if row:
+        if row['input_hash'] != digest:
+            raise ValueError('同一 request_id 不能用于不同照片、风格或描述')
+        if not style or row['status'] != 'pending':
+            return _public(row)
     if not _slots.acquire(blocking=False):
         raise BusyError('生成任务较多，请稍后再试')
-    row = dict(id=uuid.uuid4().hex, user_id=user_id, request_id=request_id,
-               input_hash=digest, prompt=prompt, model=config['model'], status='pending')
     try:
-        try:
-            _insert(row)
-        except pymysql.IntegrityError:
-            previous = _find(user_id, request_id=request_id)
-            if previous and previous['input_hash'] == digest:
+        if row is None:
+            row = dict(id=uuid.uuid4().hex, user_id=user_id, request_id=request_id,
+                       input_hash=digest, prompt=prompt, model=config['model'], status='pending')
+            try:
+                _insert(row)
+            except pymysql.IntegrityError:
+                row = _find(user_id, request_id=request_id)
+                if row is None:
+                    raise BusyError('已有头像正在生成，请稍后重试')
+                if row['input_hash'] != digest:
+                    raise ValueError('同一 request_id 不能用于不同照片、风格或描述')
+                if not style:
+                    _slots.release()
+                    return _public(row)
+        if style:
+            result, submitted = _advance_badge(row, content)
+            if submitted:
+                _executor.submit(_finish_badge, user_id, row['id'])
+            else:
                 _slots.release()
-                return _public(previous)
-            raise BusyError('已有头像正在生成，请稍后重试')
+            return result
         try:
             _executor.submit(_run, row, content, config)
         except Exception:
@@ -194,6 +298,9 @@ def get_task(user_id, task_id):
     row = _find(user_id, task_id=task_id)
     if not row:
         raise LookupError('任务不存在')
+    if row['model'] == badge.MODEL:
+        task, _ = _advance_badge(row)
+        return task
     return _public(row)
 
 
